@@ -6,6 +6,7 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QEnterEvent>
+#include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QInputDialog>
@@ -88,6 +89,16 @@ void apply_max_width(QWidget* widget) {
   if (max_width > 0) {
     widget->setMaximumWidth(max_width);
   }
+}
+
+// A proportional line height is drawn with the extra leading *below* the text,
+// so the last line of a paragraph leaves a larger trailing gap than the leading
+// above the first line of the next paragraph. A code block is a solid frame, so
+// the paragraph before it looks well spaced while the paragraph after it looks
+// cramped. Padding the block by that same extra leading restores the balance.
+int code_block_bottom_gap() {
+  const int line_spacing = QFontMetrics(chat_font()).lineSpacing();
+  return line_spacing * std::max(0, line_height_other() - 100) / 100;
 }
 
 // Renders Markdown into rich text for the assistant label. Code blocks get a
@@ -406,7 +417,9 @@ void MessageBubble::rebuild_blocks(const std::vector<Segment>& segments) {
   }
   blocks_.clear();
 
-  for (const Segment& segment : segments) {
+  for (std::size_t i = 0; i < segments.size(); ++i) {
+    const Segment& segment = segments[i];
+
     if (!segment.code) {
       QLabel* label = make_label(this, Qt::RichText);
       label->setMinimumSize(0, 0);
@@ -436,8 +449,20 @@ void MessageBubble::rebuild_blocks(const std::vector<Segment>& segments) {
     label->setText(segment.text);
     frame_layout->addWidget(label);
 
-    body_layout_->addWidget(frame);
-    blocks_.push_back(Block{true, frame, label});
+    // The frame lives inside a container so the extra gap below can be removed
+    // and rebuilt together with the block. No gap is added after the last block,
+    // where it would only pad the bottom of the message.
+    const int bottom_gap = i + 1 < segments.size() ? code_block_bottom_gap() : 0;
+    auto* container = new QWidget(this);
+    container->setMinimumSize(0, 0);
+    container->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+    auto* container_layout = new QVBoxLayout(container);
+    container_layout->setContentsMargins(0, 0, 0, bottom_gap);
+    container_layout->setSpacing(0);
+    container_layout->addWidget(frame);
+
+    body_layout_->addWidget(container);
+    blocks_.push_back(Block{true, container, label});
   }
 }
 
