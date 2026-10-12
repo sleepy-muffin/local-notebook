@@ -78,9 +78,11 @@ const QFont &mono_font();
 // Reading rhythm of message text, from the active theme's metrics.
 // line_height_other()/line_height_self() are percentages (100 is normal single
 // spacing); paragraph_spacing() is the gap after each paragraph in pixels.
+// list_paragraph_spacing() is the gap after each list item (defaults to 0).
 int line_height_other();
 int line_height_self();
 int paragraph_spacing();
+int list_paragraph_spacing();
 
 // Effective maximum width of a message body in pixels. 0 means the width is
 // unlimited (the transcript margin is the only bound).

@@ -23,6 +23,10 @@ struct ThemeMetrics {
   int line_height_self = 135;
   int paragraph_spacing = 10;
 
+  // Gap after list items, in pixels. List items read better when they sit
+  // flush, so this defaults to 0 while prose keeps paragraph_spacing.
+  int list_paragraph_spacing = 0;
+
   // Maximum width of a message body in pixels; 0 means unlimited.
   int message_max_width = 640;
 };
