@@ -145,7 +145,7 @@ The file has two top-level sections:
   `bubble_radius`, `message_max_width`, `message_spacing`, `page_margin`,
   `composer_height`, `title_font_size`, `session_item_height` (the height of a row
   in the session list) and the chat-text knobs `line_height_other`,
-  `line_height_self` and `paragraph_spacing`.
+  `line_height_self`, `paragraph_spacing` and `list_paragraph_spacing`.
 
 The same metrics can be overridden per installation under the `metrics` section
 of `local-notebook.json`; when that section is present it takes precedence over
@@ -246,13 +246,15 @@ section of `local-notebook.json`) and are applied by `ConversationView` through
 | --- | --- | --- |
 | `line_height_other` | assistant line height as a percentage (`100` is normal single spacing) | `160` |
 | `line_height_self` | user-message line height as a percentage | `135` |
-| `paragraph_spacing` | gap left after each paragraph, in pixels | `10` |
+| `paragraph_spacing` | gap left after each prose paragraph, in pixels | `10` |
+| `list_paragraph_spacing` | gap left after each list item, in pixels | `0` |
 
 The assistant line height is applied to assistant blocks, while user messages use
 `line_height_self`. The paragraph gap is added only after prose paragraphs
 and never after the final one (code blocks stay tight and the closing edge is
-flush). Both line heights are clamped to at least `100` to avoid clipping lines;
-`paragraph_spacing` may be `0`.
+flush). List items use `list_paragraph_spacing` instead, so a list stays tight by
+default. Both line heights are clamped to at least `100` to avoid clipping lines;
+the spacing knobs may be `0`.
 
 ### Message width
 

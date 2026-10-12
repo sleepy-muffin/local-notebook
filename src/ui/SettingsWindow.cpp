@@ -390,6 +390,8 @@ QWidget* SettingsWindow::build_metrics_page() {
              &ThemeMetrics::line_height_self, 100, 300);
   add_metric(text_form, text_group, QStringLiteral("Paragraph spacing"),
              &ThemeMetrics::paragraph_spacing, 0, 60);
+  add_metric(text_form, text_group, QStringLiteral("List paragraph spacing"),
+             &ThemeMetrics::list_paragraph_spacing, 0, 60);
   layout->addWidget(text_group);
 
   return content;

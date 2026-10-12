@@ -241,6 +241,8 @@ lnb::general::general(std::string_view path)
           std::max(100, read_int("line_height_self", metrics.line_height_self));
       metrics.paragraph_spacing =
           std::max(0, read_int("paragraph_spacing", metrics.paragraph_spacing));
+      metrics.list_paragraph_spacing =
+          std::max(0, read_int("list_paragraph_spacing", metrics.list_paragraph_spacing));
       metrics.message_max_width =
           std::max(0, read_int("message_max_width", metrics.message_max_width));
 
@@ -305,6 +307,7 @@ void lnb::general::save() const {
     metrics["line_height_other"] = m.line_height_other;
     metrics["line_height_self"] = m.line_height_self;
     metrics["paragraph_spacing"] = m.paragraph_spacing;
+    metrics["list_paragraph_spacing"] = m.list_paragraph_spacing;
     metrics["message_max_width"] = m.message_max_width;
     root["metrics"] = metrics;
   }

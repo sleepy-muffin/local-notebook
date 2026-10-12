@@ -23,6 +23,7 @@
 #include <QTextCursor>
 #include <QTextDocument>
 #include <QTextFragment>
+#include <QTextList>
 #include <QSize>
 #include <QSizePolicy>
 #include <QTimer>
@@ -108,13 +109,20 @@ QString render_markdown(const QString& markdown) {
     // lines; give each of them the code background.
     const bool code_block = block.blockFormat().nonBreakableLines();
     const bool last_block = block == last;
+    // List items belong to a QTextList; they get their own, usually tighter,
+    // paragraph gap so a list does not read as widely spaced as prose.
+    const bool list_block = block.textList() != nullptr;
 
     QTextBlockFormat format = block.blockFormat();
     format.setLineHeight(line_height_other(), QTextBlockFormat::ProportionalHeight);
     // Space only *between* paragraphs: keeping the first and last edges flush
     // balances the gaps at the top and bottom of the message.
     format.setTopMargin(0);
-    format.setBottomMargin((code_block || last_block) ? 0 : paragraph_spacing());
+    format.setBottomMargin(
+        (code_block || last_block) ? 0
+                                   : (list_block ? list_paragraph_spacing()
+                                                 : paragraph_spacing())
+    );
 
     if (code_block) {
       format.setBackground(code_background);

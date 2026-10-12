@@ -110,6 +110,8 @@ ThemeMetrics parse_metrics(const QJsonObject& metrics, ThemeMetrics result) {
       std::max(100, read_int("line_height_self", result.line_height_self));
   result.paragraph_spacing =
       std::max(0, read_int("paragraph_spacing", result.paragraph_spacing));
+  result.list_paragraph_spacing =
+      std::max(0, read_int("list_paragraph_spacing", result.list_paragraph_spacing));
 
   // A maximum width of 0 means unlimited.
   result.message_max_width = std::max(0, read_int("message_max_width", result.message_max_width));
@@ -541,6 +543,10 @@ int line_height_other() {
 
 int paragraph_spacing() {
   return state().theme.metrics.paragraph_spacing;
+}
+
+int list_paragraph_spacing() {
+  return state().theme.metrics.list_paragraph_spacing;
 }
 
 int line_height_self() {

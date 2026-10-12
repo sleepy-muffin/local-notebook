@@ -237,6 +237,7 @@
     "session_item_height": 36,
     "line_height_other": 160,
     "line_height_self": 135,
-    "paragraph_spacing": 10
+    "paragraph_spacing": 10,
+    "list_paragraph_spacing": 0
   }
 }
