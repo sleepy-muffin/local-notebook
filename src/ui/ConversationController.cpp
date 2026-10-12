@@ -79,11 +79,18 @@ void ConversationController::send(const std::string& text) {
        proxy,
        shared_directory]() mutable {
         try {
-        auto payload = lnb::prepare_payload(*state, session_id, self_id, model);
-        if (!payload) throw std::runtime_error("Unable to prepare the request payload");
+          // Fold older turns into the session memory before building the
+          // payload, so the request always carries
+          // custom instructions + memory summary + recent messages.
+          lnb::maybe_summarize(
+              *state, session_id, self_id, *task, stop_token, model, api_url, api_key, proxy
+          );
+
+          auto payload = lnb::prepare_payload(*state, session_id, self_id, model);
+          if (!payload) throw std::runtime_error("Unable to prepare the request payload");
           lnb::generate_reply(
               std::move(*payload), *task, stop_token, api_url, api_key, proxy, shared_directory,
-              state->uni_config_->max_tool_rounds_, state->uni_config_->max_tool_calls_
+              *state->uni_config_
           );
 
           task->complete();

@@ -20,11 +20,13 @@ public:
   session(uint32_t id, std::string title, std::string custom_instructions, std::string api_url,
           std::string authentication_token, std::string model, std::optional<std::string> proxy,
           std::optional<std::string> shared_directory, std::string memory_summary = {},
-          std::optional<std::string> last_message_at = std::nullopt);
+          std::optional<std::string> last_message_at = std::nullopt,
+          uint32_t memory_watermark = 0);
   session(std::string title, std::string custom_instructions, std::string api_url,
           std::string authentication_token, std::string model, std::optional<std::string> proxy,
           std::optional<std::string> shared_directory, std::string memory_summary = {},
-          std::optional<std::string> last_message_at = std::nullopt);
+          std::optional<std::string> last_message_at = std::nullopt,
+          uint32_t memory_watermark = 0);
 
   uint32_t id_;
   std::string title_;
@@ -35,6 +37,12 @@ public:
   std::optional<std::string> proxy_;
   std::optional<std::string> shared_directory_;
   std::string memory_summary_;
+
+  // Highest message id already folded into memory_summary_. Messages with an id
+  // above it are still sent verbatim, so a message is never both summarised and
+  // repeated in the recent window.
+  uint32_t memory_watermark_ = 0;
+
   std::optional<std::string> last_message_at_;
 };
 
@@ -74,7 +82,7 @@ class db {
 public:
   explicit db(std::string_view path); ~db(); void init();
   uint32_t insert_session(const session& ses); void update_session(const session& ses); void remove_session(uint32_t session_id);
-  void update_session_memory(uint32_t session_id, const std::string& summary);
+  void update_session_memory(uint32_t session_id, const std::string& summary, uint32_t watermark);
   std::optional<session> get_session_by_id(uint32_t session_id); session_snapshot get_all_sessions();
   uint32_t insert_message(uint32_t sender_id, uint32_t reader_id, const std::string& content);
   void update_message(uint32_t message_id, const std::string& content); bool remove_message_by_id(uint32_t message_id);

@@ -18,7 +18,6 @@
 #include <mmc/log.hpp>
 #include <mmc/str.hpp>
 
-#include <deque>
 #include <format>
 #include <map>
 #include <string_view>
@@ -29,6 +28,12 @@
 
 namespace lnb {
 namespace {
+
+// Upper bound on how many summarisation passes one turn may trigger. Each pass
+// folds a prefix of the not-yet-summarised transcript and advances the
+// watermark, so the loop terminates well before this in practice; the cap is a
+// guard against a pathological model that never returns usable text.
+constexpr int kMaxSummaryRounds = 8;
 
 // Points the access manager at the session's SOCKS5 proxy, if one is set.
 void configure_proxy(
@@ -398,10 +403,20 @@ std::optional<QJsonObject> prepare_payload(
       QJsonObject{{"role", "system"}, {"content", QString::fromStdString(system_prompt)}}
   );
 
-  const auto selected = context::select_recent(
-      messages, self_id, system_prompt, session_info.memory_summary_, cfg);
-  for (const auto& item : selected.messages) {
-    payload_messages.append(item);
+  // The summary is already part of `system_prompt` above, so it is counted
+  // exactly once: `plan_window` receives the prompt cost and the watermark,
+  // then keeps the newest messages that are not yet folded into the summary.
+  const std::size_t system_tokens = context::prompt_tokens(system_prompt);
+  const context::Window window = context::plan_window(
+      messages, system_tokens, session_info.memory_watermark_, context::request_budget(cfg)
+  );
+
+  for (std::size_t i = window.start; i < messages.size(); ++i) {
+    const message& m = messages[i];
+    payload_messages.append(QJsonObject{
+        {"role", m.sender_id == self_id ? "user" : "assistant"},
+        {"content", QString::fromStdString(m.content)},
+    });
   }
 
   return QJsonObject{
@@ -551,16 +566,149 @@ ChatCompletionResult send_message_llama_once(
   return result;
 }
 
+void maybe_summarize(
+    ApplicationState& app_state, uint32_t session_id, uint32_t self_id,
+    GenerationTask& task, std::stop_token stop_token, const std::string& model,
+    const std::string& api_url, const std::string& api_key,
+    const std::optional<std::string>& proxy
+) {
+  const auto& cfg = *app_state.uni_config_;
+
+  try {
+    const auto session_opt = app_state.uni_db_->get_session_by_id(session_id);
+
+    if (!session_opt.has_value()) {
+      return;
+    }
+
+    const auto messages = app_state.uni_db_->get_messages_for_session(session_id, self_id);
+
+    // Nothing to summarise until there is an actual exchange.
+    if (messages.size() < 2) {
+      return;
+    }
+
+    std::string summary = session_opt->memory_summary_;
+    uint32_t watermark = session_opt->memory_watermark_;
+
+    const std::size_t budget = context::request_budget(cfg);
+
+    for (int round = 0; round < kMaxSummaryRounds; ++round) {
+      if (stop_token.stop_requested()) {
+        throw std::runtime_error("Generation cancelled");
+      }
+
+      // The summary is part of the system prompt, so it has to be counted when
+      // planning the verbatim window. Use the current summary so the plan and
+      // the request that follows agree.
+      std::string system_prompt = session_opt->custom_instructions_;
+
+      if (!summary.empty()) {
+        if (!system_prompt.empty()) {
+          system_prompt += "\n\n";
+        }
+
+        system_prompt += "[CONVERSATION MEMORY]\n";
+        system_prompt += summary;
+      }
+
+      if (system_prompt.empty()) {
+        system_prompt = "You are a helpful assistant.";
+      }
+
+      const std::size_t system_tokens = context::prompt_tokens(system_prompt);
+
+      // The first message not yet covered by the summary. Everything from here
+      // on must reach the model verbatim.
+      std::size_t first_unsummarised = messages.size();
+
+      for (std::size_t i = 0; i < messages.size(); ++i) {
+        if (messages[i].id > watermark) {
+          first_unsummarised = i;
+          break;
+        }
+      }
+
+      if (first_unsummarised == messages.size()) {
+        break; // the whole transcript is already folded
+      }
+
+      // Fold when the transcript crosses the soft trigger, or when the hard
+      // request budget would otherwise silently drop unsummarised messages.
+      const std::size_t hard_start =
+          context::plan_window(messages, system_tokens, watermark, budget).start;
+      const bool over_trigger =
+          context::should_summarize(messages, system_tokens, watermark, cfg);
+      const bool would_drop_unsummarised = hard_start > first_unsummarised;
+
+      if (!over_trigger && !would_drop_unsummarised) {
+        break;
+      }
+
+      // Keep the newest `summary_keep_tokens_` verbatim and fold what precedes
+      // it. The newest message is never a candidate, so it always stays live.
+      // The keep window must stay inside the real request budget: otherwise
+      // messages between the two windows would be dropped without being folded.
+      const std::size_t keep_budget =
+          cfg.summary_keep_tokens_ < budget ? cfg.summary_keep_tokens_ : budget;
+      const context::Window keep = context::plan_window(
+          messages, system_tokens, watermark, keep_budget
+      );
+      const auto candidates = context::summary_candidates(
+          messages, keep.start, watermark, context::summarization_budget(cfg)
+      );
+
+      if (candidates.empty()) {
+        break;
+      }
+
+      task.set_status("Summarizing conversation...");
+
+      const QJsonObject request = context::summary_request(
+          model, summary, candidates, self_id, cfg.summary_token_budget_
+      );
+
+      // A silent, throwaway task: the summariser's text is internal and must
+      // not be streamed into the visible transcript. The outer stop token is
+      // forwarded so cancelling the turn also cancels summarisation.
+      GenerationTask silent_task;
+      silent_task.start();
+
+      const ChatCompletionResult result = send_message_llama_once(
+          request, silent_task, stop_token, api_url, api_key, proxy
+      );
+
+      const auto trimmed = mmc::str::trim(result.text);
+
+      if (!trimmed.has_value() || trimmed->empty()) {
+        break;
+      }
+
+      summary = *trimmed;
+      watermark = candidates.back()->id;
+      app_state.uni_db_->update_session_memory(session_id, summary, watermark);
+    }
+  } catch (const std::exception& error) {
+    // Cancellation must propagate; any other failure is best-effort and must
+    // not fail the user's turn.
+    if (stop_token.stop_requested()) {
+      throw;
+    }
+
+    mmc::log::info("maybe_summarize: skipped for session {}: {}", session_id, error.what());
+  }
+}
+
 ChatCompletionResult generate_reply(
     QJsonObject payload, GenerationTask& task, std::stop_token stop_token,
     const std::string& api_url, const std::string& api_key,
     const std::optional<std::string>& proxy,
     const std::optional<std::string>& shared_directory,
-    int max_tool_rounds,
-    int max_tool_calls
+    const general& cfg
 ) {
-  const int max_rounds = max_tool_rounds;
-  const int max_calls = max_tool_calls;
+  const int max_rounds = cfg.max_tool_rounds_;
+  const int max_calls = cfg.max_tool_calls_;
+  const std::size_t context_budget = context::request_budget(cfg);
   int total_calls = 0;
 
   ChatCompletionResult result;
@@ -604,6 +752,12 @@ ChatCompletionResult generate_reply(
         output = external_tools::execute_local_tool(call, *shared_directory);
       }
 
+      // Bound each tool result so the in-turn loop cannot grow the context
+      // without limit across rounds.
+      output = QString::fromStdString(
+          context::clamp_tokens(output.toStdString(), cfg.tool_output_max_tokens_)
+      );
+
       messages.append(QJsonObject{
           {"role", "tool"},
           {"tool_call_id", call.id},
@@ -611,6 +765,10 @@ ChatCompletionResult generate_reply(
       });
     }
 
+    // Safety net: as rounds accumulate, keep the running payload inside the
+    // request budget by dropping the oldest turns (never the system prompt and
+    // never orphaning a tool result).
+    context::trim_to_budget(messages, context_budget);
     payload.insert("messages", messages);
   }
 

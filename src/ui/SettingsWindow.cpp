@@ -313,6 +313,7 @@ QWidget* SettingsWindow::build_config_page() {
   add_token(QStringLiteral("Safety margin (tokens)"), &lnb::general::context_safety_margin_tokens_);
   add_token(QStringLiteral("Summary trigger (tokens)"), &lnb::general::summary_trigger_tokens_);
   add_token(QStringLiteral("Summary budget (tokens)"), &lnb::general::summary_token_budget_);
+  add_token(QStringLiteral("Summary keep (tokens)"), &lnb::general::summary_keep_tokens_);
 
   auto add_count = [&](const QString& label, int lnb::general::*member) {
     auto* box = spin(budget, cfg->*member, 1, 1000);
@@ -323,6 +324,7 @@ QWidget* SettingsWindow::build_config_page() {
 
   add_count(QStringLiteral("Max tool rounds"), &lnb::general::max_tool_rounds_);
   add_count(QStringLiteral("Max tool calls"), &lnb::general::max_tool_calls_);
+  add_token(QStringLiteral("Tool output cap (tokens)"), &lnb::general::tool_output_max_tokens_);
 
   layout->addWidget(budget);
 

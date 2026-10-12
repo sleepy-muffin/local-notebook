@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS session (
   model                TEXT NOT NULL DEFAULT '',
   proxy                TEXT DEFAULT NULL,
   shared_directory     TEXT DEFAULT NULL,
-  memory_summary       TEXT NOT NULL DEFAULT ''
+  memory_summary       TEXT NOT NULL DEFAULT '',
+  memory_watermark     INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS lorebook (
@@ -62,12 +63,16 @@ constexpr std::string_view SQL_SESSION_MIGRATE_ADD_MEMORY = R"sql(
 ALTER TABLE session ADD COLUMN memory_summary TEXT NOT NULL DEFAULT ''
 )sql";
 
+constexpr std::string_view SQL_SESSION_MIGRATE_ADD_MEMORY_WATERMARK = R"sql(
+ALTER TABLE session ADD COLUMN memory_watermark INTEGER NOT NULL DEFAULT 0
+)sql";
+
 constexpr std::string_view SQL_SESSION_SELECT =
-    "SELECT s.id, s.title, s.custom_instructions, s.api_url, s.authentication_token, s.model, s.proxy, s.shared_directory, s.memory_summary, MAX(m.created_at) FROM session s LEFT JOIN message m ON m.sender_id = s.id OR m.reader_id = s.id GROUP BY s.id ORDER BY MAX(m.created_at) IS NULL, MAX(m.created_at) DESC, s.id";
+    "SELECT s.id, s.title, s.custom_instructions, s.api_url, s.authentication_token, s.model, s.proxy, s.shared_directory, s.memory_summary, s.memory_watermark, MAX(m.created_at) FROM session s LEFT JOIN message m ON m.sender_id = s.id OR m.reader_id = s.id GROUP BY s.id ORDER BY MAX(m.created_at) IS NULL, MAX(m.created_at) DESC, s.id";
 constexpr std::string_view SQL_SESSION_INSERT =
-    "INSERT INTO session (title, custom_instructions, api_url, authentication_token, model, proxy, shared_directory, memory_summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+    "INSERT INTO session (title, custom_instructions, api_url, authentication_token, model, proxy, shared_directory, memory_summary, memory_watermark) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
 constexpr std::string_view SQL_SESSION_UPDATE =
-    "UPDATE session SET title = ?, custom_instructions = ?, api_url = ?, authentication_token = ?, model = ?, proxy = ?, shared_directory = ?, memory_summary = ? WHERE id = ?";
+    "UPDATE session SET title = ?, custom_instructions = ?, api_url = ?, authentication_token = ?, model = ?, proxy = ?, shared_directory = ?, memory_summary = ?, memory_watermark = ? WHERE id = ?";
 constexpr std::string_view SQL_SESSION_DELETE = "DELETE FROM session WHERE id = ?";
 constexpr std::string_view SQL_MESSAGE_INSERT =
     "INSERT INTO message (sender_id, reader_id, content) VALUES (?, ?, ?)";
@@ -163,8 +168,14 @@ lnb::general::general(std::string_view path)
     if (general.contains("summary_token_budget")) {
       summary_token_budget_ = static_cast<std::size_t>(std::max(128, general.value("summary_token_budget").toInt(static_cast<int>(summary_token_budget_))));
     }
+    if (general.contains("summary_keep_tokens")) {
+      summary_keep_tokens_ = static_cast<std::size_t>(std::max(256, general.value("summary_keep_tokens").toInt(static_cast<int>(summary_keep_tokens_))));
+    }
     if (general.contains("max_tool_rounds")) {
       max_tool_rounds_ = std::max(1, general.value("max_tool_rounds").toInt(max_tool_rounds_));
+    }
+    if (general.contains("tool_output_max_tokens")) {
+      tool_output_max_tokens_ = static_cast<std::size_t>(std::max(128, general.value("tool_output_max_tokens").toInt(static_cast<int>(tool_output_max_tokens_))));
     }
     if (general.contains("rendered_message_limit")) {
       rendered_message_limit_ =
@@ -285,8 +296,10 @@ void lnb::general::save() const {
       static_cast<double>(context_safety_margin_tokens_);
   general["summary_trigger_tokens"] = static_cast<double>(summary_trigger_tokens_);
   general["summary_token_budget"] = static_cast<double>(summary_token_budget_);
+  general["summary_keep_tokens"] = static_cast<double>(summary_keep_tokens_);
   general["max_tool_rounds"] = max_tool_rounds_;
   general["max_tool_calls"] = max_tool_calls_;
+  general["tool_output_max_tokens"] = static_cast<double>(tool_output_max_tokens_);
   general["rendered_message_limit"] = rendered_message_limit_;
   general["history_page_size"] = history_page_size_;
 
@@ -335,7 +348,8 @@ lnb::session::session(
   std::string authentication_token, std::string model, std::optional<std::string> proxy,
   std::optional<std::string> shared_directory,
   std::string memory_summary,
-  std::optional<std::string> last_message_at
+  std::optional<std::string> last_message_at,
+  uint32_t memory_watermark
 )
   : id_(id),
     title_(std::move(title)),
@@ -346,6 +360,7 @@ lnb::session::session(
     proxy_(std::move(proxy)),
     shared_directory_(std::move(shared_directory)),
     memory_summary_(std::move(memory_summary)),
+    memory_watermark_(memory_watermark),
     last_message_at_(std::move(last_message_at)) {
 }
 
@@ -354,12 +369,13 @@ lnb::session::session(
   std::string authentication_token, std::string model, std::optional<std::string> proxy,
   std::optional<std::string> shared_directory,
   std::string memory_summary,
-  std::optional<std::string> last_message_at
+  std::optional<std::string> last_message_at,
+  uint32_t memory_watermark
 )
   : session(
     0, std::move(title), std::move(custom_instructions), std::move(api_url),
     std::move(authentication_token), std::move(model), std::move(proxy), std::move(shared_directory),
-    std::move(memory_summary), std::move(last_message_at)
+    std::move(memory_summary), std::move(last_message_at), memory_watermark
   ) {
 }
 
@@ -612,6 +628,12 @@ void lnb::sqlite_interface::migrate() {
     ).execute();
   }
 
+  if (!column_exists("session", "memory_watermark")) {
+    prepare(
+      SQL_SESSION_MIGRATE_ADD_MEMORY_WATERMARK
+    ).execute();
+  }
+
   // matches the current schema (and the SQL that queries it).
   if (column_exists("lorebook", "peer_id") &&
       !column_exists("lorebook", "session_id")) {
@@ -635,7 +657,7 @@ void lnb::db::update_session(const session& ses) {
   auto stmt = sql_.prepare(SQL_SESSION_UPDATE);
   stmt.bind(
     ses.title_, ses.custom_instructions_, ses.api_url_, ses.authentication_token_, ses.model_,
-    ses.proxy_, ses.shared_directory_, ses.memory_summary_, ses.id_
+    ses.proxy_, ses.shared_directory_, ses.memory_summary_, ses.memory_watermark_, ses.id_
   );
   stmt.execute();
 }
@@ -644,7 +666,7 @@ uint32_t lnb::db::insert_session(const session& ses) {
   auto stmt = sql_.prepare(SQL_SESSION_INSERT);
   stmt.bind(
     ses.title_, ses.custom_instructions_, ses.api_url_, ses.authentication_token_, ses.model_,
-    ses.proxy_, ses.shared_directory_, ses.memory_summary_
+    ses.proxy_, ses.shared_directory_, ses.memory_summary_, ses.memory_watermark_
   );
   const uint32_t id = stmt.execute_with_last_row_id();
   return id;
@@ -671,7 +693,8 @@ lnb::session_snapshot lnb::db::get_all_sessions() {
       stmt.column_text_opt(6),
       stmt.column_text_opt(7),
       stmt.column_text(8),
-      stmt.column_text_opt(9)
+      stmt.column_text_opt(10),
+      stmt.column_uint32(9)
     );
   }
 
@@ -688,9 +711,13 @@ std::optional<lnb::session> lnb::db::get_session_by_id(uint32_t session_id) {
   return std::nullopt;
 }
 
-void lnb::db::update_session_memory(uint32_t session_id, const std::string& summary) {
-  auto stmt = sql_.prepare("UPDATE session SET memory_summary = ? WHERE id = ?");
-  stmt.bind(summary, session_id);
+void lnb::db::update_session_memory(
+  uint32_t session_id, const std::string& summary, uint32_t watermark
+) {
+  auto stmt = sql_.prepare(
+      "UPDATE session SET memory_summary = ?, memory_watermark = ? WHERE id = ?"
+  );
+  stmt.bind(summary, watermark, session_id);
   stmt.execute();
 }
 

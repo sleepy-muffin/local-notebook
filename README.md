@@ -58,10 +58,12 @@ defaults):
     "model_context_tokens": 128000,
     "response_token_budget": 12000,
     "context_safety_margin_tokens": 4000,
-    "summary_trigger_tokens": 95000,
+    "summary_trigger_tokens": 80000,
     "summary_token_budget": 4000,
+    "summary_keep_tokens": 20000,
     "max_tool_rounds": 8,
     "max_tool_calls": 32,
+    "tool_output_max_tokens": 2000,
     "rendered_message_limit": 50,
     "history_page_size": 50
   }
@@ -70,8 +72,36 @@ defaults):
 
 The payload builder reserves response and safety tokens, retains the newest
 messages that fit, and keeps custom instructions separate from the persisted
-session memory summary. Tool rounds and total tool calls are independently
-bounded.
+session memory summary. Tool rounds, total tool calls and the size of each tool
+result are independently bounded, so the in-turn tool loop can never grow the
+context without limit.
+
+### Conversation memory (automatic summarisation)
+
+A long conversation cannot fit in the model context, so the oldest turns are
+folded into a per-session **memory summary** before each request:
+
+- `summary_trigger_tokens` is the soft threshold. Once the part of the
+  conversation that actually reaches the model (system prompt + not-yet-folded
+  messages) reaches it, the oldest turns are summarised.
+- `summary_keep_tokens` is how much of the newest transcript is always kept
+  **verbatim**; only messages older than that window are folded.
+- `summary_token_budget` caps the length of the generated summary.
+
+The summary is produced by an internal (non-tool) LLM call: the model is asked
+to merge the older turns into the existing memory and return only the updated
+text. It runs on the worker thread before the real request, is best-effort (a
+failure is logged and the turn continues), and is never shown in the chat. The
+result is stored on the session (`memory_summary`) together with a
+`memory_watermark` — the highest message id already folded — so a message is
+never both summarised and repeated verbatim, and each pass only has to look at
+the not-yet-summarised tail.
+
+Every request is therefore `custom instructions + memory summary + the recent
+verbatim window`. Because the summary lives in the system prompt, it is counted
+exactly once. The same budgeting rules (in `context_manager.*`) also bound the
+in-turn tool loop: each tool result is capped at `tool_output_max_tokens`, and
+the running payload is trimmed back to the request budget between rounds.
 
 `rendered_message_limit` bounds how many of the newest messages the transcript
 renders at once; older messages stay loaded in memory but out of the widget tree
@@ -117,6 +147,14 @@ themes/theme.json       Bundled theme definitions (embedded into the binary).
   by the application. The SSE response is decoded by a small `SseStream`
   helper. Cancellation is observed from inside the request's Qt event loop: a
   timer polls the stop token and aborts the reply.
+- **`context_manager.*`** is the context-budgeting layer. It is pure logic (no
+  I/O): it estimates message/prompt token costs, plans the verbatim window,
+  decides when to summarise, builds the internal summarisation request, clamps a
+  tool result to a token budget, and trims a payload back to budget without
+  orphaning a tool result. Keeping these rules here (rather than inside
+  `generate_reply`) keeps the network loop small and the budgeting testable.
+  `external.cpp`'s `maybe_summarize()` uses it to fold older turns into the
+  session memory before a request is built.
 - **`external_tools.*`** implement the two local tools (`search_code`,
   `read_file`) against the session's shared directory. Tool failures are
   returned to the model as text so it can correct its arguments.
@@ -322,9 +360,12 @@ These behaviours were chosen deliberately:
   database only when generation completes successfully with non-empty content.
 - **Tool calls are executed inline.** `generate_reply()` executes the requested
   local tools against the session's `shared_directory`, feeds the results back,
-  and repeats (capped at 8 rounds). The chat shows at most one transient,
-  human-readable status title (for example, `Reading files...`) while a tool is
-  running; tool arguments and results are never shown or persisted.
+  and repeats (capped by `max_tool_rounds` / `max_tool_calls`). Each tool result
+  is clamped to `tool_output_max_tokens`, and the running payload is trimmed
+  back to the request budget between rounds, so the loop cannot overflow the
+  context window. The chat shows at most one transient, human-readable status
+  title (for example, `Reading files...`) while a tool is running; tool
+  arguments and results are never shown or persisted.
 - **Assistant replies render light Markdown.** The reply Markdown is split into
   prose and fenced-code segments (`MessageBubble::parse_segments`). Each prose
   segment is imported into a `QTextDocument` (no extra dependency) and shown as a

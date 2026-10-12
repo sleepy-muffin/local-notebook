@@ -105,8 +105,18 @@ struct general {
   std::size_t summary_trigger_tokens_ = 80000;
   std::size_t summary_token_budget_ = 4000;
 
+  // How much of the most recent transcript is kept verbatim when older messages
+  // are folded into the session memory summary. Everything older is compressed
+  // into the summary, so a request is always
+  // custom instructions + memory summary + this recent window.
+  std::size_t summary_keep_tokens_ = 20000;
+
   int max_tool_rounds_ = 8;
   int max_tool_calls_ = 32;
+
+  // Upper bound on a single tool result, in tokens. This bounds how much the
+  // in-turn tool loop can add to the context between rounds.
+  std::size_t tool_output_max_tokens_ = 2000;
 
   // Transcript rendering window. Only the most recent messages are rendered at
   // once; older messages are revealed a page at a time on demand, so a very

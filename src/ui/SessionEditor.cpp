@@ -25,7 +25,7 @@ SessionEditor::SessionEditor(
       session_(std::move(session))
 {
   setWindowTitle(session_ ? "Edit Session" : "Add Session");
-  resize(650, 550);
+  resize(650, 680);
 
   create_layout();
 
@@ -75,6 +75,18 @@ void SessionEditor::create_layout() {
     instructions_edit_ = new QPlainTextEdit(this);
     instructions_edit_->setTabChangesFocus(false);
     main_layout->addWidget(instructions_edit_, 1);
+
+    main_layout->addWidget(new QLabel("Conversation Memory:", this));
+
+    // The generated summary can grow long, so it lives in a self-scrolling,
+    // editable plain-text field: it can be inspected and corrected in place.
+    memory_edit_ = new QPlainTextEdit(this);
+    memory_edit_->setTabChangesFocus(false);
+    memory_edit_->setPlaceholderText(
+        "Automatically maintained summary of older turns. Edit to correct it, "
+        "or clear it to rebuild it from the whole transcript."
+    );
+    main_layout->addWidget(memory_edit_, 1);
 
     auto* button_layout = new QHBoxLayout();
     button_layout->addStretch();
@@ -157,6 +169,13 @@ void SessionEditor::load_session() {
           static_cast<qsizetype>(session_->custom_instructions_.size())
       )
   );
+
+  memory_edit_->setPlainText(
+      QString::fromUtf8(
+          session_->memory_summary_.data(),
+          static_cast<qsizetype>(session_->memory_summary_.size())
+      )
+  );
 }
 
 void SessionEditor::save_session() {
@@ -181,6 +200,8 @@ void SessionEditor::save_session() {
       shared_directory_edit_->text().toStdString();
   const std::string instructions =
       instructions_edit_->toPlainText().toStdString();
+  const std::string memory =
+      memory_edit_->toPlainText().toStdString();
 
   const auto optional_string = [](const std::string& value)
       -> std::optional<std::string> {
@@ -191,6 +212,16 @@ void SessionEditor::save_session() {
     return value;
   };
 
+  // Keep the watermark that records how much of the transcript the memory
+  // already covers, so editing the text does not make older turns reappear.
+  // Clearing the memory, however, must re-admit the whole transcript: with an
+  // empty summary and a high watermark those turns would otherwise be lost.
+  uint32_t memory_watermark = session_ ? session_->memory_watermark_ : 0;
+
+  if (memory.empty()) {
+    memory_watermark = 0;
+  }
+
   lnb::session updated_session{
     session_ ? session_->id_ : 0,
     title_value,
@@ -199,8 +230,11 @@ void SessionEditor::save_session() {
     authentication_token,
     model,
     optional_string(proxy),
-    optional_string(shared_directory)
-};
+    optional_string(shared_directory),
+    memory,
+    session_ ? session_->last_message_at_ : std::nullopt,
+    memory_watermark
+  };
 
   try {
     if (session_) {

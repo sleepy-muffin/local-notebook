@@ -32,6 +32,7 @@ private:
   QLineEdit* shared_directory_edit_ = nullptr;
 
   QPlainTextEdit* instructions_edit_ = nullptr;
+  QPlainTextEdit* memory_edit_ = nullptr;
 
   void create_layout();
   void load_session();
