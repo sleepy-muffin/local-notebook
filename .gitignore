@@ -1,0 +1,14 @@
+# CMake / compiler output
+/build/
+/build-*/
+CMakePresets.json
+compile_commands.json
+
+# Local IDE metadata
+.idea/
+.zed/
+.cache/
+
+# Runtime state and local database
+/run/
+/external/

@@ -1,0 +1,242 @@
+{
+  "themes": {
+    "Catppuccin Mocha": {
+      "dark": true,
+      "colors": {
+        "window": [17, 17, 27, 1.0],
+        "surface": [24, 24, 37, 1.0],
+        "base": [30, 30, 46, 1.0],
+
+        "text": [205, 214, 244, 1.0],
+        "text_muted": [166, 173, 200, 1.0],
+
+        "accent": [245, 194, 231, 1.0],
+        "accent_hover": [242, 205, 205, 1.0],
+        "accent_active": [235, 160, 172, 1.0],
+        "accent_text": [17, 17, 27, 1.0],
+
+        "bubble_user": [49, 50, 68, 1.0],
+        "bubble_user_text": [205, 214, 244, 1.0],
+        "bubble_assistant": [49, 50, 68, 1.0],
+        "bubble_assistant_text": [205, 214, 244, 1.0],
+        "bubble_assistant_code": [24, 24, 37, 1.0],
+
+        "border": [69, 71, 90, 1.0],
+
+        "danger": [243, 139, 168, 1.0],
+        "danger_text": [17, 17, 27, 1.0]
+      }
+    },
+
+    "Catppuccin Macchiato": {
+      "dark": true,
+      "colors": {
+        "window": [24, 25, 38, 1.0],
+        "surface": [30, 32, 48, 1.0],
+        "base": [36, 39, 58, 1.0],
+
+        "text": [202, 211, 245, 1.0],
+        "text_muted": [165, 173, 203, 1.0],
+
+        "accent": [245, 189, 230, 1.0],
+        "accent_hover": [240, 198, 198, 1.0],
+        "accent_active": [238, 153, 160, 1.0],
+        "accent_text": [24, 25, 38, 1.0],
+
+        "bubble_user": [54, 58, 79, 1.0],
+        "bubble_user_text": [202, 211, 245, 1.0],
+        "bubble_assistant": [54, 58, 79, 1.0],
+        "bubble_assistant_text": [202, 211, 245, 1.0],
+        "bubble_assistant_code": [30, 32, 48, 1.0],
+
+        "border": [73, 77, 100, 1.0],
+
+        "danger": [237, 135, 150, 1.0],
+        "danger_text": [24, 25, 38, 1.0]
+      }
+    },
+
+    "Catppuccin Frappe": {
+      "dark": true,
+      "colors": {
+        "window": [35, 38, 52, 1.0],
+        "surface": [41, 44, 60, 1.0],
+        "base": [48, 52, 70, 1.0],
+
+        "text": [198, 208, 245, 1.0],
+        "text_muted": [165, 173, 206, 1.0],
+
+        "accent": [244, 184, 228, 1.0],
+        "accent_hover": [238, 190, 190, 1.0],
+        "accent_active": [234, 150, 156, 1.0],
+        "accent_text": [35, 38, 52, 1.0],
+
+        "bubble_user": [65, 69, 89, 1.0],
+        "bubble_user_text": [198, 208, 245, 1.0],
+        "bubble_assistant": [65, 69, 89, 1.0],
+        "bubble_assistant_text": [198, 208, 245, 1.0],
+        "bubble_assistant_code": [41, 44, 60, 1.0],
+
+        "border": [81, 87, 109, 1.0],
+
+        "danger": [231, 130, 132, 1.0],
+        "danger_text": [35, 38, 52, 1.0]
+      }
+    },
+
+    "Catppuccin Latte": {
+      "dark": false,
+      "colors": {
+        "window": [220, 224, 232, 1.0],
+        "surface": [230, 233, 239, 1.0],
+        "base": [239, 241, 245, 1.0],
+
+        "text": [76, 79, 105, 1.0],
+        "text_muted": [108, 111, 133, 1.0],
+
+        "accent": [234, 118, 203, 1.0],
+        "accent_hover": [221, 120, 120, 1.0],
+        "accent_active": [230, 69, 83, 1.0],
+        "accent_text": [255, 255, 255, 1.0],
+
+        "bubble_user": [204, 208, 218, 1.0],
+        "bubble_user_text": [76, 79, 105, 1.0],
+        "bubble_assistant": [204, 208, 218, 1.0],
+        "bubble_assistant_text": [76, 79, 105, 1.0],
+        "bubble_assistant_code": [220, 223, 230, 1.0],
+
+        "border": [188, 192, 204, 1.0],
+
+        "danger": [210, 15, 57, 1.0],
+        "danger_text": [255, 255, 255, 1.0]
+      }
+    },
+
+    "Catppuccin Mocha (Translucent)": {
+      "dark": true,
+      "colors": {
+        "window": [17, 17, 27, 1.0],
+        "surface": [24, 24, 37, 0.25],
+        "base": [30, 30, 46, 0.38],
+
+        "text": [205, 214, 244, 1.0],
+        "text_muted": [166, 173, 200, 0.85],
+
+        "accent": [245, 194, 231, 1.0],
+        "accent_hover": [242, 205, 205, 1.0],
+        "accent_active": [235, 160, 172, 1.0],
+        "accent_text": [17, 17, 27, 1.0],
+
+        "bubble_user": [49, 50, 68, 0.5],
+        "bubble_user_text": [205, 214, 244, 1.0],
+        "bubble_assistant": [49, 50, 68, 0.5],
+        "bubble_assistant_text": [205, 214, 244, 1.0],
+        "bubble_assistant_code": [24, 24, 37, 0.55],
+
+        "border": [69, 71, 90, 0.35],
+
+        "danger": [243, 139, 168, 1.0],
+        "danger_text": [17, 17, 27, 1.0]
+      }
+    },
+
+    "Catppuccin Macchiato (Translucent)": {
+      "dark": true,
+      "colors": {
+        "window": [24, 25, 38, 1.0],
+        "surface": [30, 32, 48, 0.25],
+        "base": [36, 39, 58, 0.35],
+
+        "text": [202, 211, 245, 1.0],
+        "text_muted": [165, 173, 203, 0.85],
+
+        "accent": [245, 189, 230, 1.0],
+        "accent_hover": [240, 198, 198, 1.0],
+        "accent_active": [238, 153, 160, 1.0],
+        "accent_text": [24, 25, 38, 1.0],
+
+        "bubble_user": [54, 58, 79, 0.5],
+        "bubble_user_text": [202, 211, 245, 1.0],
+        "bubble_assistant": [54, 58, 79, 0.5],
+        "bubble_assistant_text": [202, 211, 245, 1.0],
+        "bubble_assistant_code": [30, 32, 48, 0.55],
+
+        "border": [73, 77, 100, 0.35],
+
+        "danger": [237, 135, 150, 1.0],
+        "danger_text": [24, 25, 38, 1.0]
+      }
+    },
+
+    "Catppuccin Frappe (Translucent)": {
+      "dark": true,
+      "colors": {
+        "window": [35, 38, 52, 1.0],
+        "surface": [41, 44, 60, 0.25],
+        "base": [48, 52, 70, 0.38],
+
+        "text": [198, 208, 245, 1.0],
+        "text_muted": [165, 173, 206, 0.85],
+
+        "accent": [244, 184, 228, 1.0],
+        "accent_hover": [238, 190, 190, 1.0],
+        "accent_active": [234, 150, 156, 1.0],
+        "accent_text": [35, 38, 52, 1.0],
+
+        "bubble_user": [65, 69, 89, 0.5],
+        "bubble_user_text": [198, 208, 245, 1.0],
+        "bubble_assistant": [65, 69, 89, 0.5],
+        "bubble_assistant_text": [198, 208, 245, 1.0],
+        "bubble_assistant_code": [41, 44, 60, 0.55],
+
+        "border": [81, 87, 109, 0.35],
+
+        "danger": [231, 130, 132, 1.0],
+        "danger_text": [35, 38, 52, 1.0]
+      }
+    },
+
+    "Catppuccin Latte (Translucent)": {
+      "dark": false,
+      "colors": {
+        "window": [220, 224, 232, 0.85],
+        "surface": [230, 233, 239, 0.25],
+        "base": [239, 241, 245, 0.38],
+
+        "text": [76, 79, 105, 1.0],
+        "text_muted": [108, 111, 133, 0.85],
+
+        "accent": [234, 118, 203, 1.0],
+        "accent_hover": [221, 120, 120, 1.0],
+        "accent_active": [230, 69, 83, 1.0],
+        "accent_text": [255, 255, 255, 1.0],
+
+        "bubble_user": [204, 208, 218, 0.5],
+        "bubble_user_text": [76, 79, 105, 1.0],
+        "bubble_assistant": [204, 208, 218, 0.5],
+        "bubble_assistant_text": [76, 79, 105, 1.0],
+        "bubble_assistant_code": [220, 223, 230, 0.55],
+
+        "border": [188, 192, 204, 0.35],
+
+        "danger": [210, 15, 57, 1.0],
+        "danger_text": [255, 255, 255, 1.0]
+      }
+    }
+  },
+
+  "default_metrics": {
+    "nav_width": 68,
+    "sidebar_width": 280,
+    "bubble_radius": 16,
+    "message_max_width": 640,
+    "message_spacing": 12,
+    "page_margin": 14,
+    "composer_height": 76,
+    "title_font_size": 15,
+    "session_item_height": 36,
+    "line_height_other": 160,
+    "line_height_self": 135,
+    "paragraph_spacing": 10
+  }
+}
