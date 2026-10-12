@@ -34,9 +34,15 @@ std::size_t request_budget(const general& cfg) {
   return cfg.model_context_tokens_ > reserved ? cfg.model_context_tokens_ - reserved : 256;
 }
 
+std::size_t summary_request_max_tokens(const general& cfg) {
+  return cfg.summary_token_budget_ + cfg.summary_reasoning_headroom_tokens_;
+}
+
 std::size_t summarization_budget(const general& cfg) {
+  // Reserve the whole completion (memory plus reasoning) and the safety margin:
+  // the input transcript and everything the model generates share one context.
   const std::size_t reserved =
-      cfg.summary_token_budget_ + cfg.context_safety_margin_tokens_;
+      summary_request_max_tokens(cfg) + cfg.context_safety_margin_tokens_;
   return cfg.model_context_tokens_ > reserved ? cfg.model_context_tokens_ - reserved : 256;
 }
 

@@ -156,6 +156,12 @@ private:
   void clear_transcript();
   void flush_streaming_text();
   void scroll_to_bottom();
+
+  // Jumps the scrollbar straight to the current maximum without touching the
+  // stick-to-bottom state. Used by the rangeChanged handler to follow content as
+  // it grows.
+  void pin_to_bottom();
+
   void submit();
 
   // Keeps the transcript column centred when the pane is wider than the
@@ -184,6 +190,11 @@ private:
   // valueChanged handler does not mistake a programmatic jump for a request to
   // load more history.
   bool updating_ = false;
+
+  // True while the reader is parked at the bottom of the transcript. New content
+  // is followed only while this holds; scrolling up suspends it until the reader
+  // returns to the bottom, which is the conventional "stick to bottom" feel.
+  bool stick_to_bottom_ = true;
 
   // Cached left/right inset of the transcript layout; -1 until first computed.
   int content_side_margin_ = -1;

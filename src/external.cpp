@@ -566,29 +566,36 @@ ChatCompletionResult send_message_llama_once(
   return result;
 }
 
-void maybe_summarize(
+namespace {
+
+// Core folding pass shared by the automatic and manual entry points. `force`
+// folds regardless of the soft trigger and keeps only the newest message live,
+// which is what a manual "Summarize now" needs. A manual request also surfaces
+// every failure; an automatic one stays best-effort.
+std::string fold_memory(
     ApplicationState& app_state, uint32_t session_id, uint32_t self_id,
     GenerationTask& task, std::stop_token stop_token, const std::string& model,
     const std::string& api_url, const std::string& api_key,
-    const std::optional<std::string>& proxy
+    const std::optional<std::string>& proxy, bool force
 ) {
   const auto& cfg = *app_state.uni_config_;
+  std::string summary;
 
   try {
     const auto session_opt = app_state.uni_db_->get_session_by_id(session_id);
 
     if (!session_opt.has_value()) {
-      return;
+      return {};
     }
 
     const auto messages = app_state.uni_db_->get_messages_for_session(session_id, self_id);
 
     // Nothing to summarise until there is an actual exchange.
     if (messages.size() < 2) {
-      return;
+      return session_opt->memory_summary_;
     }
 
-    std::string summary = session_opt->memory_summary_;
+    summary = session_opt->memory_summary_;
     uint32_t watermark = session_opt->memory_watermark_;
 
     const std::size_t budget = context::request_budget(cfg);
@@ -633,24 +640,39 @@ void maybe_summarize(
         break; // the whole transcript is already folded
       }
 
-      // Fold when the transcript crosses the soft trigger, or when the hard
-      // request budget would otherwise silently drop unsummarised messages.
-      const std::size_t hard_start =
-          context::plan_window(messages, system_tokens, watermark, budget).start;
-      const bool over_trigger =
-          context::should_summarize(messages, system_tokens, watermark, cfg);
-      const bool would_drop_unsummarised = hard_start > first_unsummarised;
+      // A manual request folds unconditionally; the automatic one folds when the
+      // transcript crosses the soft trigger, or when the hard request budget
+      // would otherwise silently drop unsummarised messages.
+      bool over_trigger = false;
 
-      if (!over_trigger && !would_drop_unsummarised) {
-        break;
+      if (!force) {
+        const std::size_t hard_start =
+            context::plan_window(messages, system_tokens, watermark, budget).start;
+        over_trigger =
+            context::should_summarize(messages, system_tokens, watermark, cfg);
+        const bool would_drop_unsummarised = hard_start > first_unsummarised;
+
+        if (!over_trigger && !would_drop_unsummarised) {
+          break;
+        }
       }
 
       // Keep the newest `summary_keep_tokens_` verbatim and fold what precedes
       // it. The newest message is never a candidate, so it always stays live.
       // The keep window must stay inside the real request budget: otherwise
       // messages between the two windows would be dropped without being folded.
-      const std::size_t keep_budget =
-          cfg.summary_keep_tokens_ < budget ? cfg.summary_keep_tokens_ : budget;
+      // A manual request keeps nothing extra: only the newest message survives.
+      std::size_t keep_budget = force
+          ? 0
+          : (cfg.summary_keep_tokens_ < budget ? cfg.summary_keep_tokens_ : budget);
+
+      // The trigger wins over a larger keep window: once the transcript crosses
+      // the soft trigger, only that much stays verbatim. Otherwise a keep window
+      // larger than the whole transcript protects every message and the trigger
+      // can never fold anything.
+      if (over_trigger && keep_budget > cfg.summary_trigger_tokens_) {
+        keep_budget = cfg.summary_trigger_tokens_;
+      }
       const context::Window keep = context::plan_window(
           messages, system_tokens, watermark, keep_budget
       );
@@ -665,7 +687,7 @@ void maybe_summarize(
       task.set_status("Summarizing conversation...");
 
       const QJsonObject request = context::summary_request(
-          model, summary, candidates, self_id, cfg.summary_token_budget_
+          model, summary, candidates, self_id, context::summary_request_max_tokens(cfg)
       );
 
       // A silent, throwaway task: the summariser's text is internal and must
@@ -681,6 +703,19 @@ void maybe_summarize(
       const auto trimmed = mmc::str::trim(result.text);
 
       if (!trimmed.has_value() || trimmed->empty()) {
+        // An empty completion almost always means the model spent its whole
+        // budget on hidden reasoning and never emitted the memory. A manual
+        // request must say so instead of reporting "nothing to fold".
+        if (force) {
+          const std::string reason =
+              result.finish_reason.empty() ? "unknown" : result.finish_reason;
+
+          throw std::runtime_error(
+              "The summariser returned no text (finish_reason=" + reason +
+              "). Increase summary_reasoning_headroom_tokens for a reasoning model."
+          );
+        }
+
         break;
       }
 
@@ -689,14 +724,43 @@ void maybe_summarize(
       app_state.uni_db_->update_session_memory(session_id, summary, watermark);
     }
   } catch (const std::exception& error) {
-    // Cancellation must propagate; any other failure is best-effort and must
-    // not fail the user's turn.
-    if (stop_token.stop_requested()) {
+    // Cancellation must propagate. A manual request also surfaces every failure
+    // so the UI can report it; an automatic one is best-effort and only logged,
+    // because it must never fail the user's turn.
+    if (stop_token.stop_requested() || force) {
       throw;
     }
 
     mmc::log::info("maybe_summarize: skipped for session {}: {}", session_id, error.what());
   }
+
+  return summary;
+}
+
+} // namespace
+
+void maybe_summarize(
+    ApplicationState& app_state, uint32_t session_id, uint32_t self_id,
+    GenerationTask& task, std::stop_token stop_token, const std::string& model,
+    const std::string& api_url, const std::string& api_key,
+    const std::optional<std::string>& proxy
+) {
+  fold_memory(
+      app_state, session_id, self_id, task, stop_token, model, api_url, api_key,
+      proxy, false
+  );
+}
+
+std::string summarize_session_now(
+    ApplicationState& app_state, uint32_t session_id, uint32_t self_id,
+    GenerationTask& task, std::stop_token stop_token, const std::string& model,
+    const std::string& api_url, const std::string& api_key,
+    const std::optional<std::string>& proxy
+) {
+  return fold_memory(
+      app_state, session_id, self_id, task, stop_token, model, api_url, api_key,
+      proxy, true
+  );
 }
 
 ChatCompletionResult generate_reply(

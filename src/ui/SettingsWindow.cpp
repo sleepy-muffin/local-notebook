@@ -314,6 +314,10 @@ QWidget* SettingsWindow::build_config_page() {
   add_token(QStringLiteral("Summary trigger (tokens)"), &lnb::general::summary_trigger_tokens_);
   add_token(QStringLiteral("Summary budget (tokens)"), &lnb::general::summary_token_budget_);
   add_token(QStringLiteral("Summary keep (tokens)"), &lnb::general::summary_keep_tokens_);
+  add_token(
+      QStringLiteral("Summary reasoning headroom (tokens)"),
+      &lnb::general::summary_reasoning_headroom_tokens_
+  );
 
   auto add_count = [&](const QString& label, int lnb::general::*member) {
     auto* box = spin(budget, cfg->*member, 1, 1000);

@@ -27,11 +27,14 @@ struct color4 {
   float b;
   float a;
 
-  template <typename T> T get() const { return {r, g, b, a}; }
+  template<typename T>
+  T get() const {
+    return {r, g, b, a};
+  }
 };
 
-inline lnb::color4 load_color(const QJsonObject &json, std::string_view name,
-                              lnb::color4 fallback) {
+inline lnb::color4
+load_color(const QJsonObject &json, std::string_view name, lnb::color4 fallback) {
   const QJsonValue value =
       json.value(QString::fromUtf8(name.data(), static_cast<qsizetype>(name.size())));
 
@@ -102,14 +105,29 @@ struct general {
   std::size_t model_context_tokens_ = 128000;
   std::size_t response_token_budget_ = 12000;
   std::size_t context_safety_margin_tokens_ = 4000;
-  std::size_t summary_trigger_tokens_ = 80000;
-  std::size_t summary_token_budget_ = 4000;
+
 
   // How much of the most recent transcript is kept verbatim when older messages
   // are folded into the session memory summary. Everything older is compressed
   // into the summary, so a request is always
-  // custom instructions + memory summary + this recent window.
+  // custom instructions + memory summary + this recent window. When the soft
+  // trigger fires first, it caps this window: otherwise a keep window larger
+  // than the transcript would protect every message and nothing would fold.
   std::size_t summary_keep_tokens_ = 20000;
+
+  // Target size, in tokens, of the generated memory summary.
+  std::size_t summary_token_budget_ = 4000;
+
+  // Extra completion tokens granted to the internal summarisation request for
+  // the model's hidden reasoning. Reasoning models bill their reasoning stream
+  // to the completion budget, so without this headroom a small summary budget
+  // is consumed by reasoning and the request ends with no visible text
+  // (finish_reason "length").
+  std::size_t summary_reasoning_headroom_tokens_ = 12000;
+
+  // Soft threshold: older turns are folded once the unsummarised request exceeds
+  // this many tokens.
+  std::size_t summary_trigger_tokens_ = 80000;
 
   int max_tool_rounds_ = 8;
   int max_tool_calls_ = 32;
@@ -151,4 +169,4 @@ private:
   std::atomic_bool shutting_down_ = false;
 };
 
-} // namespace lpf
+} // namespace lnb

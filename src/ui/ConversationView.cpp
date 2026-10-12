@@ -60,6 +60,11 @@ constexpr int kConversationSidePadding = 28;
 // not re-parsed on every poll tick.
 constexpr int kStreamRenderMs = 50;
 
+// How close (in pixels) the scrollbar must be to the maximum for the reader to
+// count as "at the bottom". Absorbs sub-pixel layout rounding so the transcript
+// keeps following content while parked at the bottom.
+constexpr int kStickToBottomSlack = 4;
+
 // The generic family Qt's Markdown importer assigns to code spans and blocks.
 const QString kMonospaceFamily = QStringLiteral("monospace");
 
@@ -640,18 +645,38 @@ ConversationView::ConversationView(lnb::ApplicationState& state, QWidget* parent
   );
 
   // Reaching the top of the transcript pulls in the next page automatically;
-  // the button stays as an explicit, keyboard-reachable alternative.
+  // the button stays as an explicit, keyboard-reachable alternative. The same
+  // handler tracks whether the reader is parked at the bottom: auto-scroll only
+  // follows new content while they are, and resumes once they scroll back down.
+  auto* scrollbar = scroll_->verticalScrollBar();
+
   connect(
-      scroll_->verticalScrollBar(),
+      scrollbar,
       &QScrollBar::valueChanged,
       this,
-      [this](int value) {
+      [this, scrollbar](int value) {
+        stick_to_bottom_ = value >= scrollbar->maximum() - kStickToBottomSlack;
+
         if (updating_ || value > 0) {
           return;
         }
 
         if (rendered_count_ < messages_.size()) {
           load_older();
+        }
+      }
+  );
+
+  // Following the range instead of a timer is what keeps the follow smooth: the
+  // range only changes once the layout has settled, so the view tracks the true
+  // bottom instead of jumping to a stale maximum while Markdown reflows.
+  connect(
+      scrollbar,
+      &QScrollBar::rangeChanged,
+      this,
+      [this](int, int) {
+        if (stick_to_bottom_ && !updating_) {
+          pin_to_bottom();
         }
       }
   );
@@ -814,6 +839,11 @@ void ConversationView::load_older() {
 
   updating_ = true;
 
+  // Paging through history means the reader has left the live bottom, so stop
+  // following new content. The deferred scroll restore recomputes the flag from
+  // the final position, so landing back at the bottom re-arms it.
+  stick_to_bottom_ = false;
+
   const std::size_t remaining = messages_.size() - rendered_count_;
   const std::size_t page = static_cast<std::size_t>(
       std::max(1, state_.uni_config_->history_page_size_)
@@ -915,7 +945,9 @@ void ConversationView::flush_streaming_text() {
 
   has_pending_stream_ = false;
   streaming_row_->bubble()->set_text(pending_stream_text_);
-  scroll_to_bottom();
+  // No explicit scroll here: growing the bubble changes the scrollbar range,
+  // which the rangeChanged handler turns into a smooth follow when the reader is
+  // at the bottom. Scrolling here too would fight that and cause the jitter.
 }
 
 void ConversationView::show_error(const QString& text) {
@@ -1083,16 +1115,24 @@ void ConversationView::clear_transcript() {
 }
 
 void ConversationView::scroll_to_bottom() {
-  // Defer until the layout has processed the new content, so the scrollbar
-  // range already covers it.
+  // Force-follow new content (session load, error bubble) even if the reader had
+  // scrolled away, then pin once the layout has processed the change.
+  stick_to_bottom_ = true;
+
   QTimer::singleShot(
       0,
       this,
       [this]() {
-        auto* bar = scroll_->verticalScrollBar();
-        bar->setValue(bar->maximum());
+        if (stick_to_bottom_) {
+          pin_to_bottom();
+        }
       }
   );
+}
+
+void ConversationView::pin_to_bottom() {
+  auto* bar = scroll_->verticalScrollBar();
+  bar->setValue(bar->maximum());
 }
 
 void ConversationView::update_content_margins() {

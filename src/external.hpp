@@ -46,6 +46,18 @@ void maybe_summarize(
     const std::optional<std::string>& proxy
 );
 
+// Folds the whole transcript into the session's persisted memory on demand,
+// ignoring both the soft trigger and the verbatim keep window (only the newest
+// message stays live). Unlike maybe_summarize it propagates every failure so a
+// caller can report it, and returns the resulting memory (unchanged when there
+// was nothing to fold).
+std::string summarize_session_now(
+    ApplicationState& app_state, uint32_t session_id, uint32_t self_id,
+    GenerationTask& task, std::stop_token stop_token, const std::string& model,
+    const std::string& api_url, const std::string& api_key,
+    const std::optional<std::string>& proxy
+);
+
 // Performs one streaming chat-completions request. Assistant text is streamed
 // into `task` as it arrives. Throws std::runtime_error on failure; a stop
 // request surfaces as the message "Generation cancelled".

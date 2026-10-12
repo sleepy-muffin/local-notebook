@@ -27,8 +27,17 @@ std::size_t prompt_tokens(const std::string& text);
 // reserved response budget and the safety margin. Never below 256.
 std::size_t request_budget(const general& cfg);
 
+// Completion token cap for the internal summarisation request. It covers both
+// the rewritten memory (`summary_token_budget_`) and the model's hidden
+// reasoning (`summary_reasoning_headroom_tokens_`), because reasoning models
+// charge their reasoning stream to the completion budget: without headroom a
+// small summary budget is spent entirely on reasoning and the request finishes
+// with no visible text.
+std::size_t summary_request_max_tokens(const general& cfg);
+
 // Token budget for the transcript sent to the summariser: the model context
-// minus the summary output budget and the safety margin. Never below 256.
+// minus the summariser's full completion budget and the safety margin. Never
+// below 256.
 std::size_t summarization_budget(const general& cfg);
 
 // The verbatim window chosen for a request.

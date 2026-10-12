@@ -171,6 +171,9 @@ lnb::general::general(std::string_view path)
     if (general.contains("summary_keep_tokens")) {
       summary_keep_tokens_ = static_cast<std::size_t>(std::max(256, general.value("summary_keep_tokens").toInt(static_cast<int>(summary_keep_tokens_))));
     }
+    if (general.contains("summary_reasoning_headroom_tokens")) {
+      summary_reasoning_headroom_tokens_ = static_cast<std::size_t>(std::max(0, general.value("summary_reasoning_headroom_tokens").toInt(static_cast<int>(summary_reasoning_headroom_tokens_))));
+    }
     if (general.contains("max_tool_rounds")) {
       max_tool_rounds_ = std::max(1, general.value("max_tool_rounds").toInt(max_tool_rounds_));
     }
@@ -297,6 +300,8 @@ void lnb::general::save() const {
   general["summary_trigger_tokens"] = static_cast<double>(summary_trigger_tokens_);
   general["summary_token_budget"] = static_cast<double>(summary_token_budget_);
   general["summary_keep_tokens"] = static_cast<double>(summary_keep_tokens_);
+  general["summary_reasoning_headroom_tokens"] =
+      static_cast<double>(summary_reasoning_headroom_tokens_);
   general["max_tool_rounds"] = max_tool_rounds_;
   general["max_tool_calls"] = max_tool_calls_;
   general["tool_output_max_tokens"] = static_cast<double>(tool_output_max_tokens_);
