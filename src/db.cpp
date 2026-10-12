@@ -166,6 +166,14 @@ lnb::general::general(std::string_view path)
     if (general.contains("max_tool_rounds")) {
       max_tool_rounds_ = std::max(1, general.value("max_tool_rounds").toInt(max_tool_rounds_));
     }
+    if (general.contains("rendered_message_limit")) {
+      rendered_message_limit_ =
+          std::max(1, general.value("rendered_message_limit").toInt(rendered_message_limit_));
+    }
+    if (general.contains("history_page_size")) {
+      history_page_size_ =
+          std::max(1, general.value("history_page_size").toInt(history_page_size_));
+    }
     if (general.contains("enter_with_modifier")) {
       enter_with_modifier_ = general.value("enter_with_modifier").toBool(enter_with_modifier_);
     }
@@ -277,6 +285,8 @@ void lnb::general::save() const {
   general["summary_token_budget"] = static_cast<double>(summary_token_budget_);
   general["max_tool_rounds"] = max_tool_rounds_;
   general["max_tool_calls"] = max_tool_calls_;
+  general["rendered_message_limit"] = rendered_message_limit_;
+  general["history_page_size"] = history_page_size_;
 
   QJsonObject root;
   root["general"] = general;

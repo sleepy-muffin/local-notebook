@@ -309,8 +309,14 @@ QString build_stylesheet(const Theme& theme, bool background) {
   sheet += "QFrame#CodeBlock { background-color: " + rgba(c.bubble_assistant_code) +
       "; border-radius: 8px; }\n";
 
+  // The composer bar shares the transcript canvas colour, so the bottom strip
+  // reads as part of the conversation flow instead of a separate panel.
+  sheet += "QWidget#ComposerBar { background-color: " + rgba(canvas) + "; }\n";
+
   // ---- Composer input ----
-  sheet += "QPlainTextEdit#Composer { background-color: " + rgba(field) + "; border: 1px solid " +
+  // The field uses the user-bubble colour so the composer reads as "your" input
+  // and stands slightly apart from the transcript canvas behind it.
+  sheet += "QPlainTextEdit#Composer { background-color: " + rgba(c.bubble_user) + "; border: 1px solid " +
       rgba(c.border) +
       "; border-radius: 14px; padding: 8px 12px; selection-background-color: " + rgba(c.accent) +
       "; selection-color: " + rgba(c.accent_text) + "; }\n";

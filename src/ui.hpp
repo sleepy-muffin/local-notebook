@@ -108,6 +108,13 @@ struct general {
   int max_tool_rounds_ = 8;
   int max_tool_calls_ = 32;
 
+  // Transcript rendering window. Only the most recent messages are rendered at
+  // once; older messages are revealed a page at a time on demand, so a very
+  // long conversation stays responsive. This only bounds rendering: the full
+  // history is still loaded from the database and sent to the model.
+  int rendered_message_limit_ = 20; // newest messages rendered at once
+  int history_page_size_ = 20; // messages revealed per "load earlier"
+
   // Optional override of the theme's layout metrics. When set, these values are
   // persisted under the "metrics" section of local-notebook.json and override
   // the values loaded from theme.json; when unset the theme's defaults apply.

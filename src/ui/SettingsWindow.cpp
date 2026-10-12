@@ -326,6 +326,23 @@ QWidget* SettingsWindow::build_config_page() {
 
   layout->addWidget(budget);
 
+  // ---- Transcript rendering ----
+  auto* transcript = new QGroupBox(QStringLiteral("Transcript rendering"), content);
+  auto* transcript_form = group_form(transcript);
+
+  auto add_window = [&](const QString& label, int lnb::general::*member) {
+    auto* box = spin(transcript, cfg->*member, 1, 1000000);
+    box->setSingleStep(10);
+    transcript_form->addRow(label, box);
+    config_writers_.push_back([cfg, box, member]() { cfg->*member = box->value(); });
+    connect(box, &QSpinBox::valueChanged, this, [this](int) { write_config(); });
+  };
+
+  add_window(QStringLiteral("Rendered messages"), &lnb::general::rendered_message_limit_);
+  add_window(QStringLiteral("Load page size"), &lnb::general::history_page_size_);
+
+  layout->addWidget(transcript);
+
   return content;
 }
 

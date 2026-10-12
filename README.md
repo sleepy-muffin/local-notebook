@@ -61,7 +61,9 @@ defaults):
     "summary_trigger_tokens": 95000,
     "summary_token_budget": 4000,
     "max_tool_rounds": 8,
-    "max_tool_calls": 32
+    "max_tool_calls": 32,
+    "rendered_message_limit": 50,
+    "history_page_size": 50
   }
 }
 ```
@@ -70,6 +72,12 @@ The payload builder reserves response and safety tokens, retains the newest
 messages that fit, and keeps custom instructions separate from the persisted
 session memory summary. Tool rounds and total tool calls are independently
 bounded.
+
+`rendered_message_limit` bounds how many of the newest messages the transcript
+renders at once; older messages stay loaded in memory but out of the widget tree
+until the reader reveals them, either by scrolling to the top or with the **Load
+earlier messages** button. `history_page_size` is how many are revealed per
+step. Both only affect rendering: the full history is still sent to the model.
 
 Configuration is persisted: the Settings window's **Apply** button writes
 `local-notebook.json` back (via `lnb::general::save()`), and the file is also

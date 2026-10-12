@@ -6,6 +6,7 @@
 #include <QStyle>
 #include <QWidget>
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -135,6 +136,22 @@ protected:
 
 private:
   MessageRow* add_row(MessageBubble::Role role, uint32_t message_id, bool editable);
+
+  // Builds a row without inserting it into the layout, so callers can place it
+  // at an arbitrary index (used when prepending older messages).
+  MessageRow* make_row(MessageBubble::Role role, uint32_t message_id, bool editable);
+
+  // Creates the row for messages_[index] and inserts it at layout_index.
+  void render_message_at(std::size_t index, int layout_index);
+
+  // Reveals one more page of older messages above the current window, keeping
+  // the reader anchored on the message they were looking at.
+  void load_older();
+
+  // Shows or hides the "Load earlier messages" affordance and keeps its count
+  // in sync with the number of messages still hidden above the window.
+  void update_load_older_visibility();
+
   void prompt_edit(uint32_t message_id, const QString& current);
   void clear_transcript();
   void flush_streaming_text();
@@ -151,6 +168,22 @@ private:
   QScrollArea* scroll_ = nullptr;
   QWidget* transcript_ = nullptr;
   QVBoxLayout* transcript_layout_ = nullptr;
+
+  // Full history for the session plus the trailing window currently rendered.
+  // messages_ is authoritative (loaded once per reload); rendered_count_ counts
+  // how many of its most recent entries are actually in the widget tree.
+  std::vector<lnb::message> messages_;
+  uint32_t self_id_ = 0;
+  std::size_t rendered_count_ = 0;
+
+  // Reveals the next page of older messages; hidden while the whole history is
+  // already rendered.
+  QPushButton* load_older_ = nullptr;
+
+  // True while the transcript is being rebuilt or paged, so the scrollbar's
+  // valueChanged handler does not mistake a programmatic jump for a request to
+  // load more history.
+  bool updating_ = false;
 
   // Cached left/right inset of the transcript layout; -1 until first computed.
   int content_side_margin_ = -1;

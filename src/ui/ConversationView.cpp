@@ -3,6 +3,8 @@
 #include "theme.hpp"
 
 #include <QCursor>
+#include <QApplication>
+#include <QClipboard>
 #include <QEnterEvent>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -27,6 +29,8 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <qnamespace.h>
+
+#include <algorithm>
 
 namespace ui {
 
@@ -233,10 +237,16 @@ void MessageBubble::apply_style() {
   QColor foreground;
   int radius = current.metrics.bubble_radius;
 
+  // Only the user bubble gets a hairline outline (like the composer field); the
+  // assistant and error bubbles stay borderless.
+  QString border_rule;
+
   switch (role_) {
     case Role::User:
       background = current.colors.bubble_user;
       foreground = current.colors.bubble_user_text;
+      border_rule = QStringLiteral("border:1px solid %1;")
+                        .arg(css_color(current.colors.border));
       break;
     case Role::Assistant:
       // background = current.colors.bubble_assistant;
@@ -254,10 +264,11 @@ void MessageBubble::apply_style() {
   // descendant code blocks (which are QFrames with their own look).
   setStyleSheet(
       QString(
-          "QFrame#MessageBubble{background-color:%1;border-radius:%2px;}"
-          "QFrame#MessageBubble QLabel{color:%3;background:transparent;}"
+          "QFrame#MessageBubble{background-color:%1;%2border-radius:%3px;}"
+          "QFrame#MessageBubble QLabel{color:%4;background:transparent;}"
       )
           .arg(css_color(background))
+          .arg(border_rule)
           .arg(radius)
           .arg(css_color(foreground))
   );
@@ -580,6 +591,38 @@ ConversationView::ConversationView(lnb::ApplicationState& state, QWidget* parent
   // large empty gap below the last message whenever a conversation is short.
   transcript_layout_->addStretch(1);
 
+  // Reveals older messages on demand. It is inserted directly after the leading
+  // stretch, so it stays pinned above every rendered row; it is hidden while the
+  // whole history is already on screen.
+  load_older_ = new QPushButton(QStringLiteral("Load earlier messages"), transcript_);
+  load_older_->setObjectName(QStringLiteral("Secondary"));
+  load_older_->setVisible(false);
+  transcript_layout_->insertWidget(1, load_older_, 0, Qt::AlignHCenter);
+
+  connect(
+      load_older_,
+      &QPushButton::clicked,
+      this,
+      [this]() { load_older(); }
+  );
+
+  // Reaching the top of the transcript pulls in the next page automatically;
+  // the button stays as an explicit, keyboard-reachable alternative.
+  connect(
+      scroll_->verticalScrollBar(),
+      &QScrollBar::valueChanged,
+      this,
+      [this](int value) {
+        if (updating_ || value > 0) {
+          return;
+        }
+
+        if (rendered_count_ < messages_.size()) {
+          load_older();
+        }
+      }
+  );
+
   scroll_->setWidget(transcript_);
 
   // The transcript column is re-inset whenever the viewport is resized so it
@@ -684,26 +727,120 @@ void ConversationView::set_messages(
     const std::vector<lnb::message>& messages,
     uint32_t self_id
 ) {
+  updating_ = true;
   clear_transcript();
 
-  for (const auto& message: messages) {
-    const bool from_self = message.sender_id == self_id;
+  messages_ = messages;
+  self_id_ = self_id;
 
-    auto* row = add_row(
-        from_self ? MessageBubble::Role::User : MessageBubble::Role::Assistant,
-        message.id,
-        from_self
-    );
+  // Render only the tail window. The rest stays in memory but out of the widget
+  // tree, so the per-reload cost (widget creation plus Markdown rendering) is
+  // bounded no matter how long the conversation grows.
+  const std::size_t limit = static_cast<std::size_t>(
+      std::max(1, state_.uni_config_->rendered_message_limit_)
+  );
+  rendered_count_ = std::min(limit, messages_.size());
 
-    row->bubble()->set_text(
-        QString::fromUtf8(
-            message.content.data(),
-            static_cast<qsizetype>(message.content.size())
-        )
-    );
+  const std::size_t start = messages_.size() - rendered_count_;
+
+  // Layout index 0 is the leading stretch and index 1 is the load-older button,
+  // so the rendered rows start at index 2.
+  for (std::size_t k = 0; k < rendered_count_; ++k) {
+    render_message_at(start + k, 2 + static_cast<int>(k));
   }
 
+  update_load_older_visibility();
   scroll_to_bottom();
+  updating_ = false;
+}
+
+void ConversationView::render_message_at(std::size_t index, int layout_index) {
+  const lnb::message& message = messages_[index];
+  const bool from_self = message.sender_id == self_id_;
+
+  auto* row = make_row(
+      from_self ? MessageBubble::Role::User : MessageBubble::Role::Assistant,
+      message.id,
+      from_self
+  );
+
+  row->bubble()->set_text(
+      QString::fromUtf8(
+          message.content.data(),
+          static_cast<qsizetype>(message.content.size())
+      )
+  );
+
+  transcript_layout_->insertWidget(layout_index, row);
+}
+
+void ConversationView::load_older() {
+  if (rendered_count_ >= messages_.size()) {
+    return;
+  }
+
+  updating_ = true;
+
+  const std::size_t remaining = messages_.size() - rendered_count_;
+  const std::size_t page = static_cast<std::size_t>(
+      std::max(1, state_.uni_config_->history_page_size_)
+  );
+  const std::size_t additional = std::min(page, remaining);
+
+  // The newly revealed rows are the block immediately above the current window.
+  // Inserting them (oldest first) at the top of the rendered rows keeps the
+  // transcript chronological.
+  const std::size_t start = remaining - additional;
+
+  auto* bar = scroll_->verticalScrollBar();
+  const int old_value = bar->value();
+
+  // Anchor on the current first row: after prepending, its position shifts down
+  // by exactly the height that was added, so offsetting the scrollbar by the
+  // same amount keeps the reader on the same message.
+  QWidget* anchor = nullptr;
+
+  if (auto* item = transcript_layout_->itemAt(2)) {
+    anchor = item->widget();
+  }
+
+  const int anchor_before = anchor != nullptr ? anchor->y() : 0;
+
+  for (std::size_t k = 0; k < additional; ++k) {
+    render_message_at(start + k, 2 + static_cast<int>(k));
+  }
+
+  rendered_count_ += additional;
+  update_load_older_visibility();
+
+  if (anchor == nullptr) {
+    updating_ = false;
+    return;
+  }
+
+  // Defer until the layout has processed the new rows so anchor->y() reflects
+  // the final position.
+  QTimer::singleShot(0, this, [this, anchor, anchor_before, old_value]() {
+    auto* deferred_bar = scroll_->verticalScrollBar();
+    deferred_bar->setValue(old_value + (anchor->y() - anchor_before));
+  });
+
+  updating_ = false;
+}
+
+void ConversationView::update_load_older_visibility() {
+  if (load_older_ == nullptr) {
+    return;
+  }
+
+  const std::size_t hidden = messages_.size() - rendered_count_;
+  load_older_->setVisible(hidden > 0);
+
+  if (hidden > 0) {
+    load_older_->setText(
+        QStringLiteral("Load earlier messages (%1)").arg(hidden)
+    );
+  }
 }
 
 void ConversationView::set_streaming_text(const QString& text) {
@@ -791,7 +928,7 @@ bool ConversationView::eventFilter(QObject* watched, QEvent* event) {
   return QWidget::eventFilter(watched, event);
 }
 
-MessageRow* ConversationView::add_row(
+MessageRow* ConversationView::make_row(
     MessageBubble::Role role,
     uint32_t message_id,
     bool editable
@@ -801,6 +938,25 @@ MessageRow* ConversationView::add_row(
   // Only stored messages (id != 0) get actions; the streaming and error rows
   // stay passive.
   if (message_id != 0) {
+    // Assistant replies can be copied verbatim: bubble()->text() returns the raw
+    // Markdown source, not the rendered rich text.
+    if (role == MessageBubble::Role::Assistant) {
+      auto* copy = row->add_action(
+          QStringLiteral("edit-copy"),
+          QStyle::SP_DialogSaveButton,
+          QStringLiteral("Copy message")
+      );
+
+      connect(
+          copy,
+          &QToolButton::clicked,
+          this,
+          [row]() {
+            QApplication::clipboard()->setText(row->bubble()->text());
+          }
+      );
+    }
+
     if (editable) {
       auto* edit = row->add_action(
           QStringLiteral("document-edit"),
@@ -836,6 +992,15 @@ MessageRow* ConversationView::add_row(
     );
   }
 
+  return row;
+}
+
+MessageRow* ConversationView::add_row(
+    MessageBubble::Role role,
+    uint32_t message_id,
+    bool editable
+) {
+  auto* row = make_row(role, message_id, editable);
   transcript_layout_->addWidget(row);
 
   return row;
@@ -871,8 +1036,13 @@ void ConversationView::clear_transcript() {
     auto* item = transcript_layout_->itemAt(i);
 
     // The leading stretch (a spacer item, not a widget) must be kept so the
-    // transcript stays bottom-aligned after a reload.
+    // transcript stays bottom-aligned after a reload, and the load-older button
+    // is a permanent fixture that is only shown or hidden.
     if (auto* widget = item->widget()) {
+      if (widget == load_older_) {
+        continue;
+      }
+
       transcript_layout_->takeAt(i);
       widget->deleteLater();
     }
