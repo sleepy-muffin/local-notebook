@@ -30,10 +30,34 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
+#include <cstddef>
 #include <utility>
 #include <vector>
 
 namespace ui {
+namespace {
+
+// Formats a token pair the way editor agent panels do: compact numbers so the
+// label stays short ("12.4k / 128k").
+QString format_tokens(std::size_t used, std::size_t limit) {
+  auto compact = [](std::size_t value) -> QString {
+    if (value < 1000) {
+      return QString::number(value);
+    }
+
+    const double thousands = static_cast<double>(value) / 1000.0;
+
+    if (value % 1000 == 0 || value >= 100000) {
+      return QStringLiteral("%1k").arg(qRound(thousands));
+    }
+
+    return QStringLiteral("%1k").arg(thousands, 0, 'f', 1);
+  };
+
+  return compact(used) + QStringLiteral(" / ") + compact(limit);
+}
+
+} // namespace
 
 MainWindow::MainWindow(
     lnb::ApplicationState& state,
@@ -41,7 +65,7 @@ MainWindow::MainWindow(
 )
     : QMainWindow(parent),
       state_(state) {
-  setWindowTitle("local-notebook - Main Window");
+  setWindowTitle("Local Notebook");
   resize(1000, 680);
 
   create_layout();
@@ -163,7 +187,8 @@ void MainWindow::create_layout() {
 
 QWidget* MainWindow::create_conversation_container(
     ConversationView* view,
-    const lnb::session& session
+    const lnb::session& session,
+    QLabel** context_label_out
 ) {
   auto* container = new QWidget(workspace_);
   container->setObjectName(QStringLiteral("ConversationContainer"));
@@ -195,6 +220,9 @@ QWidget* MainWindow::create_conversation_container(
       header
   );
   timestamp->setObjectName(QStringLiteral("ConversationTimestamp"));
+  auto* context = new QLabel(QString(), header);
+  context->setObjectName(QStringLiteral("ConversationContext"));
+  context->setToolTip(QStringLiteral("Context tokens used by the next request"));
   auto* header_row = new QHBoxLayout();
   header_row->setContentsMargins(0, 0, 0, 0);
   header_row->setSpacing(0);
@@ -204,9 +232,15 @@ QWidget* MainWindow::create_conversation_container(
   subtitle_column->addWidget(subtitle);
   header_row->addLayout(subtitle_column);
   header_row->addStretch(1);
+  header_row->addWidget(context);
+  header_row->addSpacing(12);
   header_row->addWidget(timestamp);
   header_layout->addWidget(title);
   header_layout->addLayout(header_row);
+
+  if (context_label_out != nullptr) {
+    *context_label_out = context;
+  }
 
   layout->addWidget(header);
   layout->addWidget(view, 1);
@@ -495,7 +529,8 @@ void MainWindow::open_conversation(uint32_t session_id) {
     }
 
     auto* view = new ConversationView(state_, workspace_);
-    auto* container = create_conversation_container(view, *session);
+    QLabel* context_label = nullptr;
+    auto* container = create_conversation_container(view, *session, &context_label);
     auto controller = std::make_unique<ConversationController>(
         state_,
         *session,
@@ -503,6 +538,15 @@ void MainWindow::open_conversation(uint32_t session_id) {
     );
 
     ConversationController* raw_controller = controller.get();
+
+    controller->set_on_context_usage(
+        [context_label](std::size_t used, std::size_t limit) {
+          context_label->setText(format_tokens(used, limit));
+          context_label->setToolTip(
+              QStringLiteral("%1 / %2 tokens").arg(used).arg(limit)
+          );
+        }
+    );
 
     view->set_on_send(
         [raw_controller](std::string text) {
@@ -532,7 +576,7 @@ void MainWindow::open_conversation(uint32_t session_id) {
 
     it = conversations_.emplace(
         session_id,
-        ConversationEntry{*session, view, container, std::move(controller)}
+        ConversationEntry{*session, view, container, context_label, std::move(controller)}
     ).first;
   }
 

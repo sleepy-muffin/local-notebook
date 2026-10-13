@@ -15,9 +15,9 @@ namespace ui {
 
 // A separate, non-modal settings window: a left navigation rail with four pages
 // (Configuration, Appearance, Account and About). The Configuration and
-// Appearance pages edit the in-memory configuration and theme metrics; Apply
-// re-applies the theme at runtime. Account shows the current session and About
-// shows program information.
+// Appearance pages edit the in-memory configuration and theme metrics; Save
+// persists them, re-applies the theme at runtime, and closes the window. Account
+// shows the current session and About shows program information.
 class SettingsWindow : public QDialog {
 public:
   explicit SettingsWindow(lnb::ApplicationState& state, QWidget* parent = nullptr);
@@ -36,8 +36,9 @@ private:
   void write_config();
   void write_metrics();
 
-  // Applies the edited configuration and metrics to the running application.
-  void apply();
+  // Applies the edited configuration and metrics, persists them, and closes the
+  // window. The runtime re-style is deferred so the dialog closes immediately.
+  void save();
 
   lnb::ApplicationState& state_;
 

@@ -2,6 +2,7 @@
 
 #include <QJsonObject>
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <stop_token>
@@ -14,7 +15,7 @@
 namespace lnb {
 
 struct ApplicationState;
-struct general;
+struct generation_settings;
 
 // The outcome of one streaming request. `assistant_message` is the exact
 // assistant message (role/content/optional tool_calls) that has to be echoed
@@ -32,6 +33,21 @@ struct ChatCompletionResult {
 std::optional<QJsonObject> prepare_payload(
     ApplicationState& app_state, uint32_t session_id, uint32_t self_id,
     const std::string& model
+);
+
+// How much of the model's context window the next request would occupy, in
+// estimated tokens. `used_tokens` covers the system prompt (custom
+// instructions + memory + lorebook) plus the verbatim message window that
+// prepare_payload() would send; `limit_tokens` is the session's advertised
+// model context size. Used by the UI to show context usage the way an editor's
+// agent panel does.
+struct ContextUsage {
+  std::size_t used_tokens = 0;
+  std::size_t limit_tokens = 0;
+};
+
+ContextUsage context_usage(
+    ApplicationState& app_state, uint32_t session_id, uint32_t self_id
 );
 
 // Folds the oldest part of the transcript into the session's persisted memory
@@ -77,7 +93,7 @@ ChatCompletionResult generate_reply(
     const std::string& api_url, const std::string& api_key,
     const std::optional<std::string>& proxy,
     const std::optional<std::string>& shared_directory,
-    const general& cfg
+    const generation_settings& cfg
 );
 
 } // namespace lnb

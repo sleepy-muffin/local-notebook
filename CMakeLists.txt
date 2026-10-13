@@ -23,6 +23,8 @@ add_executable(${PROJECT_NAME}
         src/external.hpp
         src/external.cpp
         src/context_manager.cpp
+        src/proxy.hpp
+        src/proxy.cpp
         src/launcher.cpp
         src/ui/Logon.cpp
         src/ui/Logon.hpp

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -15,6 +16,49 @@
 #include "mmc/common.hpp"
 
 namespace lnb {
+
+// Per-session generation tuning. These used to live in the global config, but
+// every value here depends on the model/server a session talks to (a local
+// server with a small window next to a hosted model with a huge one), so they
+// belong to the session and travel with it in the database.
+//
+// Field names deliberately mirror the old `general` members (trailing
+// underscore included) so the context manager reads them unchanged.
+struct generation_settings {
+  // Advertised context window of the session's model, in tokens.
+  std::size_t model_context_tokens_ = 128000;
+
+  // Tokens reserved for the assistant's answer on a normal request.
+  std::size_t response_token_budget_ = 12000;
+
+  // Slack kept between the prompt and the model's hard context limit.
+  std::size_t context_safety_margin_tokens_ = 4000;
+
+  // How much of the newest transcript is kept verbatim when older turns are
+  // folded into the memory summary.
+  std::size_t summary_keep_tokens_ = 20000;
+
+  // Target size, in tokens, of the generated memory summary.
+  std::size_t summary_token_budget_ = 4000;
+
+  // Extra completion tokens granted to the internal summarisation request for
+  // the model's hidden reasoning, so a small summary budget is not spent
+  // entirely on reasoning.
+  std::size_t summary_reasoning_headroom_tokens_ = 12000;
+
+  // Soft threshold: older turns are folded once the unsummarised request
+  // exceeds this many tokens.
+  std::size_t summary_trigger_tokens_ = 80000;
+
+  // Bounds on one assistant turn's tool loop: how many rounds may request
+  // tools, how many tool calls those rounds may total, and how large a single
+  // tool result may be. `max_tool_rounds_` alone is insufficient because one
+  // round may carry many calls.
+  int max_tool_rounds_ = 8;
+  int max_tool_calls_ = 32;
+  std::size_t tool_output_max_tokens_ = 2000;
+};
+
 class session {
 public:
   session(uint32_t id, std::string title, std::string custom_instructions, std::string api_url,
@@ -42,6 +86,11 @@ public:
   // above it are still sent verbatim, so a message is never both summarised and
   // repeated in the recent window.
   uint32_t memory_watermark_ = 0;
+
+  // Request/summarisation/tool budgets for this session. Defaulted so a session
+  // created without explicit tuning still gets production-sane values; the
+  // database loader overwrites it with the stored row.
+  generation_settings generation_;
 
   std::optional<std::string> last_message_at_;
 };

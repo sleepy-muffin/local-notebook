@@ -28,6 +28,9 @@ public:
         std::string display;
         std::string operation_status;
         std::string error;
+        // A non-fatal notice to show after a completed turn (for example, the
+        // reply was cut off). Never persisted.
+        std::string warning;
     };
 
     GenerationTask() = default;
@@ -87,6 +90,20 @@ public:
         return true;
     }
 
+    // Records a non-fatal notice about a turn that still completes successfully
+    // (e.g. the reply was cut off). The UI shows it after the reply, like a
+    // generation error, but the reply itself is kept.
+    bool set_warning(std::string warning) {
+        std::lock_guard lock(mutex_);
+
+        if (status_ != Status::RUNNING) {
+            return false;
+        }
+
+        warning_ = std::move(warning);
+        return true;
+    }
+
     bool cancel() {
         {
             std::lock_guard lock(mutex_);
@@ -99,6 +116,7 @@ public:
             content_.clear();
             display_.clear();
             error_.clear();
+            warning_.clear();
         }
 
         stop_source_.request_stop();
@@ -117,6 +135,7 @@ public:
             content_.clear();
             display_.clear();
             error_ = std::move(error);
+            warning_.clear();
         }
 
         stop_source_.request_stop();
@@ -131,7 +150,8 @@ public:
             content_,
             display_,
             operation_status_,
-            error_
+            error_,
+            warning_
         };
     }
 
@@ -156,6 +176,7 @@ private:
     std::string display_;
     std::string operation_status_;
     std::string error_;
+    std::string warning_;
 };
 
 }

@@ -100,41 +100,10 @@ struct general {
   std::string mono_font_ = {};
   int mono_font_size_ = 11;
 
-  // Generation/context budgets. These are intentionally configurable because
-  // the advertised context window differs between local model servers.
-  std::size_t model_context_tokens_ = 128000;
-  std::size_t response_token_budget_ = 12000;
-  std::size_t context_safety_margin_tokens_ = 4000;
-
-
-  // How much of the most recent transcript is kept verbatim when older messages
-  // are folded into the session memory summary. Everything older is compressed
-  // into the summary, so a request is always
-  // custom instructions + memory summary + this recent window. When the soft
-  // trigger fires first, it caps this window: otherwise a keep window larger
-  // than the transcript would protect every message and nothing would fold.
-  std::size_t summary_keep_tokens_ = 20000;
-
-  // Target size, in tokens, of the generated memory summary.
-  std::size_t summary_token_budget_ = 4000;
-
-  // Extra completion tokens granted to the internal summarisation request for
-  // the model's hidden reasoning. Reasoning models bill their reasoning stream
-  // to the completion budget, so without this headroom a small summary budget
-  // is consumed by reasoning and the request ends with no visible text
-  // (finish_reason "length").
-  std::size_t summary_reasoning_headroom_tokens_ = 12000;
-
-  // Soft threshold: older turns are folded once the unsummarised request exceeds
-  // this many tokens.
-  std::size_t summary_trigger_tokens_ = 80000;
-
-  int max_tool_rounds_ = 8;
-  int max_tool_calls_ = 32;
-
-  // Upper bound on a single tool result, in tokens. This bounds how much the
-  // in-turn tool loop can add to the context between rounds.
-  std::size_t tool_output_max_tokens_ = 2000;
+  // Generation/context/summarisation budgets and tool-loop limits are now
+  // session-bound and live in `lnb::generation_settings` (see db.hpp): each
+  // session targets its own model, so the budgets travel with the session in
+  // the database instead of being global.
 
   // Transcript rendering window. Only the most recent messages are rendered at
   // once; older messages are revealed a page at a time on demand, so a very

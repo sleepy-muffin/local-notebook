@@ -38,7 +38,7 @@ Logon::Logon(
     state_(state),
     on_login_(std::move(on_login)) {
 
-  setWindowTitle("local-notebook - Login");
+  setWindowTitle("Local Notebook Login");
   resize(940, 580);
   setMinimumSize(760, 460);
 

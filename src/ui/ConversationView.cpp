@@ -509,9 +509,21 @@ MessageRow::MessageRow(MessageBubble::Role role, QWidget* parent)
   action_layout->setContentsMargins(0, 0, 0, 0);
   action_layout->setSpacing(4);
 
-  // A single stretch keeps the buttons on the bubble's side: it leads for user
-  // messages (buttons right-aligned) and trails for the others (left-aligned).
-  action_layout->addStretch(1);
+  // A single stretch keeps the id + buttons group on the bubble's side: it leads
+  // for user messages (group right-aligned) and trails for the others
+  // (left-aligned). The id label is created here so add_action can insert the
+  // buttons next to it in either arrangement.
+  message_id_label_ = new QLabel(actions_);
+  message_id_label_->setObjectName(QStringLiteral("MessageId"));
+  message_id_label_->setVisible(false);
+
+  if (role_ == MessageBubble::Role::User) {
+    action_layout->addStretch(1);
+    action_layout->addWidget(message_id_label_);
+  } else {
+    action_layout->addWidget(message_id_label_);
+    action_layout->addStretch(1);
+  }
 
   column_layout->addWidget(actions_);
 
@@ -567,6 +579,22 @@ void MessageRow::set_actions_visible(bool visible) {
        actions_->findChildren<QToolButton*>(Qt::FindDirectChildrenOnly)) {
     button->setVisible(visible);
   }
+
+  if (message_id_label_ != nullptr) {
+    message_id_label_->setVisible(visible);
+  }
+}
+
+void MessageRow::set_message_id(uint32_t id) {
+  message_id_ = id;
+
+  if (message_id_label_ == nullptr) {
+    return;
+  }
+
+  message_id_label_->setText(
+      id == 0 ? QString{} : QStringLiteral("#%1").arg(id)
+  );
 }
 
 void MessageRow::enterEvent(QEnterEvent* event) {
@@ -999,6 +1027,7 @@ MessageRow* ConversationView::make_row(
     bool editable
 ) {
   auto* row = new MessageRow(role, transcript_);
+  row->set_message_id(message_id);
 
   // Only stored messages (id != 0) get actions; the streaming and error rows
   // stay passive.

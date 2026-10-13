@@ -17,6 +17,7 @@
 #include <QScrollArea>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -134,10 +135,10 @@ SettingsWindow::SettingsWindow(lnb::ApplicationState& state, QWidget* parent)
   footer->setSpacing(8);
   footer->addStretch(1);
 
-  auto* apply_button = new QPushButton(QStringLiteral("Apply"), this);
+  auto* save_button = new QPushButton(QStringLiteral("Save"), this);
   auto* close_button = new QPushButton(QStringLiteral("Close"), this);
   close_button->setObjectName(QStringLiteral("Secondary"));
-  footer->addWidget(apply_button);
+  footer->addWidget(save_button);
   footer->addWidget(close_button);
 
   auto* divider = new QFrame(this);
@@ -158,7 +159,7 @@ SettingsWindow::SettingsWindow(lnb::ApplicationState& state, QWidget* parent)
       }
   );
 
-  connect(apply_button, &QPushButton::clicked, this, [this]() { apply(); });
+  connect(save_button, &QPushButton::clicked, this, [this]() { save(); });
   connect(close_button, &QPushButton::clicked, this, [this]() { close(); });
 
   nav_->setCurrentRow(0);
@@ -293,44 +294,6 @@ QWidget* SettingsWindow::build_config_page() {
   add_font_size(QStringLiteral("Monospace size"), &lnb::general::mono_font_size_);
 
   layout->addWidget(fonts);
-
-  // ---- Generation budget ----
-  auto* budget = new QGroupBox(QStringLiteral("Generation budget"), content);
-  auto* budget_form = group_form(budget);
-
-  auto add_token = [&](const QString& label, std::size_t lnb::general::*member) {
-    auto* box = spin(budget, static_cast<int>(cfg->*member), 0, 2000000);
-    box->setSingleStep(256);
-    budget_form->addRow(label, box);
-    config_writers_.push_back([cfg, box, member]() {
-      cfg->*member = static_cast<std::size_t>(box->value());
-    });
-    connect(box, &QSpinBox::valueChanged, this, [this](int) { write_config(); });
-  };
-
-  add_token(QStringLiteral("Model context (tokens)"), &lnb::general::model_context_tokens_);
-  add_token(QStringLiteral("Response budget (tokens)"), &lnb::general::response_token_budget_);
-  add_token(QStringLiteral("Safety margin (tokens)"), &lnb::general::context_safety_margin_tokens_);
-  add_token(QStringLiteral("Summary trigger (tokens)"), &lnb::general::summary_trigger_tokens_);
-  add_token(QStringLiteral("Summary budget (tokens)"), &lnb::general::summary_token_budget_);
-  add_token(QStringLiteral("Summary keep (tokens)"), &lnb::general::summary_keep_tokens_);
-  add_token(
-      QStringLiteral("Summary reasoning headroom (tokens)"),
-      &lnb::general::summary_reasoning_headroom_tokens_
-  );
-
-  auto add_count = [&](const QString& label, int lnb::general::*member) {
-    auto* box = spin(budget, cfg->*member, 1, 1000);
-    budget_form->addRow(label, box);
-    config_writers_.push_back([cfg, box, member]() { cfg->*member = box->value(); });
-    connect(box, &QSpinBox::valueChanged, this, [this](int) { write_config(); });
-  };
-
-  add_count(QStringLiteral("Max tool rounds"), &lnb::general::max_tool_rounds_);
-  add_count(QStringLiteral("Max tool calls"), &lnb::general::max_tool_calls_);
-  add_token(QStringLiteral("Tool output cap (tokens)"), &lnb::general::tool_output_max_tokens_);
-
-  layout->addWidget(budget);
 
   // ---- Transcript rendering ----
   auto* transcript = new QGroupBox(QStringLiteral("Transcript rendering"), content);
@@ -567,7 +530,7 @@ void SettingsWindow::write_metrics() {
   }
 }
 
-void SettingsWindow::apply() {
+void SettingsWindow::save() {
   // Push every edited widget value back into the in-memory configuration.
   write_config();
   write_metrics();
@@ -575,6 +538,7 @@ void SettingsWindow::apply() {
   auto* app = qobject_cast<QApplication*>(QApplication::instance());
 
   if (app == nullptr || state_.uni_config_ == nullptr) {
+    close();
     return;
   }
 
@@ -582,11 +546,23 @@ void SettingsWindow::apply() {
   // theme.json, so the override survives the reload and is persisted below.
   state_.uni_config_->metrics_ = ui::theme().metrics;
 
-  // Re-reads theme.json (theme name, palette) and re-applies fonts.
-  ui::apply_theme(*app, *state_.uni_config_);
-
-  // Persist the configuration (general settings and metric overrides).
+  // Persist now: the file write is cheap and must not be lost even if the
+  // deferred restyle below never runs (for example, the app is closing).
   state_.uni_config_->save();
+
+  // Dismiss the dialog before re-styling. Re-applying the theme re-polishes
+  // every widget in the application, which is comparatively expensive, so the
+  // restyle is deferred to the next event-loop turn: the window disappears and
+  // the click feels immediate instead of freezing mid-press.
+  close();
+
+  lnb::ApplicationState* state = &state_;
+
+  QTimer::singleShot(0, app, [app, state]() {
+    if (state->uni_config_ != nullptr) {
+      ui::apply_theme(*app, *state->uni_config_);
+    }
+  });
 }
 
 } // namespace ui

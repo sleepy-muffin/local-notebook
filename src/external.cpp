@@ -1,5 +1,6 @@
 #include "external.hpp"
 #include "context_manager.hpp"
+#include "proxy.hpp"
 #include "ui.hpp"
 
 #include <QByteArray>
@@ -34,34 +35,6 @@ namespace {
 // watermark, so the loop terminates well before this in practice; the cap is a
 // guard against a pathological model that never returns usable text.
 constexpr int kMaxSummaryRounds = 8;
-
-// Points the access manager at the session's SOCKS5 proxy, if one is set.
-void configure_proxy(
-    QNetworkAccessManager& manager, const std::optional<std::string>& proxy
-) {
-  if (!proxy.has_value() || proxy->empty()) {
-    return;
-  }
-
-  const auto parts = mmc::str::split(*proxy, ':');
-
-  if (parts.size() != 2 || parts[0].empty() || parts[1].empty()) {
-    throw std::runtime_error("Invalid SOCKS5 proxy address: " + *proxy);
-  }
-
-  const int port = std::stoi(parts[1]);
-
-  if (port <= 0 || port > 65535) {
-    throw std::runtime_error("Invalid SOCKS5 proxy port: " + *proxy);
-  }
-
-  QNetworkProxy network_proxy;
-  network_proxy.setType(QNetworkProxy::Socks5Proxy);
-  network_proxy.setHostName(QString::fromStdString(parts[0]));
-  network_proxy.setPort(static_cast<quint16>(port));
-
-  manager.setProxy(network_proxy);
-}
 
 // Incrementally decodes an OpenAI-compatible Server-Sent Events stream.
 //
@@ -259,7 +232,8 @@ QJsonArray make_repository_tools() {
       {"name", "list_directory"},
       {"description",
        "List files and subdirectories immediately inside a directory in the "
-       "configured shared directory. Directories end with /."},
+       "configured shared directory. Directories end with /. Call it with no "
+       "arguments to list the shared directory itself."},
       {"parameters",
        QJsonObject{
            {"type", "object"},
@@ -267,24 +241,24 @@ QJsonArray make_repository_tools() {
             QJsonObject{{"path",
                          QJsonObject{
                              {"type", "string"},
-                             {"description", "Directory-relative path; use . for the shared directory"}}}}},
-           {"required", QJsonArray{"path"}},
+                             {"description", "Directory to list: either a path relative to the shared directory or an absolute path inside it. Omit to list the shared directory."}}}}},
+           {"required", QJsonArray{}},
            {"additionalProperties", false}}},
   };
 
   const QJsonObject search_function{
       {"name", "search_code"},
       {"description",
-       "Search source code in the configured local directories. Returns matching file paths, line numbers, and surrounding context."},
+       "Search text files in the configured shared directory. Returns matching file paths, line numbers, and surrounding context. Matching is case-insensitive unless the query contains an uppercase letter; binary files are skipped."},
       {"parameters",
        QJsonObject{
            {"type", "object"},
            {"properties",
             QJsonObject{
                 {"query", QJsonObject{{"type", "string"}, {"description", "Symbol name or text to search for"}}},
-                {"path", QJsonObject{{"type", "string"}, {"description", "Directory-relative search path"}}}
+                {"path", QJsonObject{{"type", "string"}, {"description", "Directory to search: a path relative to the shared directory or an absolute path inside it. Defaults to the shared directory."}}}
             }},
-           {"required", QJsonArray{"query", "path"}},
+           {"required", QJsonArray{"query"}},
            {"additionalProperties", false}
        }}
   };
@@ -303,10 +277,45 @@ QJsonArray make_repository_tools() {
                 {"path",
                  QJsonObject{
                      {"type", "string"},
-                     {"description", "Repository-relative file path"}}},
+                     {"description", "File to read: a path relative to the shared directory or an absolute path inside it"}}},
                 {"start_line", QJsonObject{{"type", "integer"}}},
                 {"end_line", QJsonObject{{"type", "integer"}}}}},
            {"required", QJsonArray{"path", "start_line", "end_line"}},
+           {"additionalProperties", false}}},
+  };
+
+  const QJsonObject fetch_function{
+      {"name", "fetch_url"},
+      {"description",
+       "Fetch an http/https URL and return its visible text. Use it to read a "
+       "web page referenced by the user. HTML is converted to plain text."},
+      {"parameters",
+       QJsonObject{
+           {"type", "object"},
+           {"properties",
+            QJsonObject{{"url",
+                         QJsonObject{
+                             {"type", "string"},
+                             {"description", "Absolute http:// or https:// URL to fetch"}}}}},
+           {"required", QJsonArray{"url"}},
+           {"additionalProperties", false}}},
+  };
+
+  const QJsonObject web_search_function{
+      {"name", "web_search"},
+      {"description",
+       "Search the web and return the top results with their titles, URLs and "
+       "snippets. Use it to find sources online; then use fetch_url to read a "
+       "result in full."},
+      {"parameters",
+       QJsonObject{
+           {"type", "object"},
+           {"properties",
+            QJsonObject{{"query",
+                         QJsonObject{
+                             {"type", "string"},
+                             {"description", "Search terms"}}}}},
+           {"required", QJsonArray{"query"}},
            {"additionalProperties", false}}},
   };
 
@@ -314,39 +323,19 @@ QJsonArray make_repository_tools() {
       QJsonObject{{"type", "function"}, {"function", list_function}},
       QJsonObject{{"type", "function"}, {"function", search_function}},
       QJsonObject{{"type", "function"}, {"function", read_function}},
+      QJsonObject{{"type", "function"}, {"function", fetch_function}},
+      QJsonObject{{"type", "function"}, {"function", web_search_function}},
   };
 }
 
-} // namespace
-
-std::optional<QJsonObject> prepare_payload(
-    ApplicationState& app_state, uint32_t session_id, uint32_t self_id,
-    const std::string& model
+// Assembles the system prompt from the session's custom instructions, its
+// persisted memory summary and any lorebook entries whose keyword occurs in the
+// transcript. Shared by prepare_payload() and context_usage() so the cost the UI
+// reports always matches the prompt actually sent.
+std::string build_system_prompt(
+    const session& session_info, const std::vector<message>& messages,
+    const std::vector<lore_row>& lore_entries
 ) {
-  const auto& cfg = *app_state.uni_config_;
-  const size_t response_budget = cfg.response_token_budget_;
-
-  auto messages = app_state.uni_db_->get_messages_for_session(session_id, self_id);
-  auto lore_entries = app_state.uni_db_->get_lorebook_for_session(session_id);
-
-  std::optional<session> session_info_opt = app_state.uni_db_->get_session_by_id(session_id);
-
-  // A missing session is a normal, recoverable condition: the caller shows an
-  // error bubble instead of aborting the whole event handler.
-  if (!session_info_opt.has_value()) {
-    mmc::log::info("prepare_payload: session {} does not exist", session_id);
-    return std::nullopt;
-  }
-
-  const session& session_info = *session_info_opt;
-
-  if (session_info.custom_instructions_.empty()) {
-    mmc::log::info(
-        "Session {} has no custom instructions; using a generic system prompt",
-        session_id
-    );
-  }
-
   std::string context_text;
   context_text.reserve(messages.size() * 64);
 
@@ -398,6 +387,44 @@ std::optional<QJsonObject> prepare_payload(
     system_prompt = "You are a helpful assistant.";
   }
 
+  return system_prompt;
+}
+
+} // namespace
+
+std::optional<QJsonObject> prepare_payload(
+    ApplicationState& app_state, uint32_t session_id, uint32_t self_id,
+    const std::string& model
+) {
+  auto messages = app_state.uni_db_->get_messages_for_session(session_id, self_id);
+  auto lore_entries = app_state.uni_db_->get_lorebook_for_session(session_id);
+
+  std::optional<session> session_info_opt = app_state.uni_db_->get_session_by_id(session_id);
+
+  // A missing session is a normal, recoverable condition: the caller shows an
+  // error bubble instead of aborting the whole event handler.
+  if (!session_info_opt.has_value()) {
+    mmc::log::info("prepare_payload: session {} does not exist", session_id);
+    return std::nullopt;
+  }
+
+  const session& session_info = *session_info_opt;
+
+  // Budgets are session-bound: each session may target a different model, so
+  // the context window and response reserve travel with the session.
+  const generation_settings& cfg = session_info.generation_;
+  const size_t response_budget = cfg.response_token_budget_;
+
+  if (session_info.custom_instructions_.empty()) {
+    mmc::log::info(
+        "Session {} has no custom instructions; using a generic system prompt",
+        session_id
+    );
+  }
+
+  const std::string system_prompt =
+      build_system_prompt(session_info, messages, lore_entries);
+
   QJsonArray payload_messages;
   payload_messages.append(
       QJsonObject{{"role", "system"}, {"content", QString::fromStdString(system_prompt)}}
@@ -426,6 +453,38 @@ std::optional<QJsonObject> prepare_payload(
       {"max_tokens", static_cast<int>(response_budget)},
       {"stream", true},
   };
+}
+
+ContextUsage context_usage(
+    ApplicationState& app_state, uint32_t session_id, uint32_t self_id
+) {
+  ContextUsage usage;
+
+  auto session_info_opt = app_state.uni_db_->get_session_by_id(session_id);
+
+  if (!session_info_opt.has_value()) {
+    return usage;
+  }
+
+  const session& session_info = *session_info_opt;
+  const auto messages = app_state.uni_db_->get_messages_for_session(session_id, self_id);
+  const auto lore_entries = app_state.uni_db_->get_lorebook_for_session(session_id);
+
+  const std::string system_prompt =
+      build_system_prompt(session_info, messages, lore_entries);
+  const std::size_t system_tokens = context::prompt_tokens(system_prompt);
+
+  // Mirrors prepare_payload(): the same prompt cost, watermark and budget pick
+  // the same verbatim window, so the reported usage matches the sent request.
+  const context::Window window = context::plan_window(
+      messages, system_tokens, session_info.memory_watermark_,
+      context::request_budget(session_info.generation_)
+  );
+
+  usage.used_tokens = system_tokens + window.tokens;
+  usage.limit_tokens = session_info.generation_.model_context_tokens_;
+
+  return usage;
 }
 
 ChatCompletionResult send_message_llama_once(
@@ -575,10 +634,9 @@ namespace {
 std::string fold_memory(
     ApplicationState& app_state, uint32_t session_id, uint32_t self_id,
     GenerationTask& task, std::stop_token stop_token, const std::string& model,
-    const std::string& api_url, const std::string& api_key,
+    const std::string api_url, const std::string& api_key,
     const std::optional<std::string>& proxy, bool force
 ) {
-  const auto& cfg = *app_state.uni_config_;
   std::string summary;
 
   try {
@@ -587,6 +645,9 @@ std::string fold_memory(
     if (!session_opt.has_value()) {
       return {};
     }
+
+    // Budgets are session-bound: read them from the row being summarised.
+    const generation_settings& cfg = session_opt->generation_;
 
     const auto messages = app_state.uni_db_->get_messages_for_session(session_id, self_id);
 
@@ -768,7 +829,7 @@ ChatCompletionResult generate_reply(
     const std::string& api_url, const std::string& api_key,
     const std::optional<std::string>& proxy,
     const std::optional<std::string>& shared_directory,
-    const general& cfg
+    const generation_settings& cfg
 ) {
   const int max_rounds = cfg.max_tool_rounds_;
   const int max_calls = cfg.max_tool_calls_;
@@ -782,10 +843,27 @@ ChatCompletionResult generate_reply(
       throw std::runtime_error("Generation cancelled");
     }
 
+    mmc::log::info("generate_reply round={}", round);
+
     result = send_message_llama_once(payload, task, stop_token, api_url, api_key, proxy);
 
     if (result.tool_calls.empty()) {
       return result;
+    }
+
+    // Every round streams its narration onto the same task, so the persisted
+    // reply is the concatenation of all rounds. Without a separator the end of
+    // one round runs straight into the start of the next ("...done.Here's...").
+    // Start a fresh paragraph once the round has finished a sentence; otherwise
+    // fall back to a soft break, which renders as a single space, so a round
+    // that stopped mid-sentence is never split apart.
+    const auto round_text = mmc::str::trim(result.text);
+
+    if (round_text.has_value() && !round_text->empty()) {
+      const char last = round_text->back();
+      const bool ends_sentence = last == '.' || last == '!' || last == '?' ||
+          last == ':' || last == ';';
+      task.append_content(ends_sentence ? "\n\n" : "\n");
     }
 
     QJsonArray messages = payload.value("messages").toArray();
@@ -805,21 +883,41 @@ ChatCompletionResult generate_reply(
               ? "Reading files..."
               : call.name == QStringLiteral("search_code")
                   ? "Searching code..."
-                  : "Using tools..."
+                  : call.name == QStringLiteral("list_directory")
+                      ? "Listing files..."
+                      : call.name == QStringLiteral("fetch_url")
+                          ? "Fetching page..."
+                          : call.name == QStringLiteral("web_search")
+                              ? "Searching the web..."
+                              : "Using tools..."
       );
 
-      QString output;
+      // Filesystem tools need a shared directory; network tools do not, so the
+      // gate lives inside execute_local_tool instead of around the call.
+      //
+      // Log the call and its result at info level so a failing search can be
+      // diagnosed from stdout: the exact arguments the model sent (and the
+      // resolved size of what came back) are otherwise invisible, since tool
+      // calls and results are not persisted.
+      mmc::log::debug(
+          "generate_reply: tool call: name={} id={} args={}", call.name.toStdString(),
+          call.id.toStdString(),
+          call.arguments.left(400).toStdString()
+      );
 
-      if (!shared_directory.has_value() || shared_directory->empty()) {
-        output = "Tool error: this session has no shared directory configured";
-      } else {
-        output = external_tools::execute_local_tool(call, *shared_directory);
-      }
+      QString output = external_tools::execute_local_tool(
+          call, shared_directory, proxy
+      );
 
       // Bound each tool result so the in-turn loop cannot grow the context
       // without limit across rounds.
       output = QString::fromStdString(
           context::clamp_tokens(output.toStdString(), cfg.tool_output_max_tokens_)
+      );
+
+      mmc::log::debug(
+          "generate_reply: tool result: name={} -> {} chars", call.name.toStdString(),
+          output.size()
       );
 
       messages.append(QJsonObject{

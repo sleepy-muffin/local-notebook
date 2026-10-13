@@ -90,6 +90,10 @@ public:
 
   void set_actions_visible(bool visible);
 
+  // Records the stored message id and shows it (as "#<id>") alongside the
+  // hover actions. Ids of 0 (streaming/error rows) leave the label empty.
+  void set_message_id(uint32_t id);
+
 protected:
   void enterEvent(QEnterEvent* event) override;
   void leaveEvent(QEvent* event) override;
@@ -98,6 +102,8 @@ private:
   MessageBubble::Role role_;
   MessageBubble* bubble_ = nullptr;
   QWidget* actions_ = nullptr;
+  QLabel* message_id_label_ = nullptr;
+  uint32_t message_id_ = 0;
   bool actions_visible_ = false;
 };
 

@@ -12,6 +12,19 @@
 
 namespace ui {
 
+namespace {
+
+// Shown when a reply stops because the model hit the session's response cap.
+// It is worded for the reader: the raw finish_reason ("length") is never
+// surfaced, and the reply itself is kept rather than dropped.
+constexpr char kTruncatedReplyWarning[] =
+    "The reply was cut off before it finished: the model reached the maximum "
+    "response size allowed for this session. Raise \"Response budget "
+    "(tokens)\" in the session settings, or send a follow-up asking it to "
+    "continue.";
+
+} // namespace
+
 ConversationController::ConversationController(
     lnb::ApplicationState& state,
     lnb::session session_info,
@@ -31,11 +44,43 @@ ConversationController::~ConversationController() {
   }
 }
 
+void ConversationController::set_session_info(lnb::session session_info) {
+  session_info_ = std::move(session_info);
+  refresh_context_usage();
+}
+
+void ConversationController::set_on_context_usage(ContextUsageHandler handler) {
+  on_context_usage_ = std::move(handler);
+
+  if (on_context_usage_) {
+    on_context_usage_(context_used_, context_limit_);
+  }
+}
+
+void ConversationController::refresh_context_usage() {
+  try {
+    const lnb::ContextUsage usage =
+        lnb::context_usage(state_, session_info_.id_, state_.self_id_);
+
+    context_used_ = usage.used_tokens;
+    context_limit_ = usage.limit_tokens;
+  } catch (const std::exception&) {
+    // A transient database error must not break the header; fall back to zero.
+    context_used_ = 0;
+    context_limit_ = 0;
+  }
+
+  if (on_context_usage_) {
+    on_context_usage_(context_used_, context_limit_);
+  }
+}
+
 void ConversationController::reload() {
   const auto messages =
       state_.uni_db_->get_messages_for_session(session_info_.id_, state_.self_id_);
 
   view_->set_messages(messages, state_.self_id_);
+  refresh_context_usage();
 }
 
 void ConversationController::send(const std::string& text) {
@@ -67,6 +112,10 @@ void ConversationController::send(const std::string& text) {
   const auto proxy = session_info_.proxy_;
   const auto shared_directory = session_info_.shared_directory_;
 
+  // Snapshot the session's generation budgets alongside the other request
+  // parameters, so a settings change mid-turn cannot alter an in-flight turn.
+  const auto generation = session_info_.generation_;
+
   state_.multi_executor_->push(
       [task,
        stop_token,
@@ -77,7 +126,8 @@ void ConversationController::send(const std::string& text) {
        api_url,
        api_key,
        proxy,
-       shared_directory]() mutable {
+       shared_directory,
+       generation]() mutable {
         try {
           // Fold older turns into the session memory before building the
           // payload, so the request always carries
@@ -88,10 +138,17 @@ void ConversationController::send(const std::string& text) {
 
           auto payload = lnb::prepare_payload(*state, session_id, self_id, model);
           if (!payload) throw std::runtime_error("Unable to prepare the request payload");
-          lnb::generate_reply(
+          const lnb::ChatCompletionResult reply = lnb::generate_reply(
               std::move(*payload), *task, stop_token, api_url, api_key, proxy, shared_directory,
-              *state->uni_config_
+              generation
           );
+
+          // The reply is complete enough to keep, but the model stopped at the
+          // response cap. Flag it so the UI explains the cut-off after the
+          // reply instead of silently showing a truncated answer.
+          if (reply.finish_reason == "length") {
+            task->set_warning(kTruncatedReplyWarning);
+          }
 
           task->complete();
         } catch (const std::exception& error) {
@@ -176,6 +233,11 @@ void ConversationController::poll() {
       static_cast<qsizetype>(snapshot.error.size())
   );
 
+  const QString warning = QString::fromUtf8(
+      snapshot.warning.data(),
+      static_cast<qsizetype>(snapshot.warning.size())
+  );
+
   // Only completed turns are persisted. A cancelled turn is deliberately
   // dropped: reload() below also removes the partial output from the screen.
   if (completed && !snapshot.content.empty()) {
@@ -191,6 +253,10 @@ void ConversationController::poll() {
 
   if (failed) {
     view_->show_error(error);
+  } else if (completed && !warning.isEmpty()) {
+    // A truncated-but-completed turn: the reply above stands, and this notice
+    // explains why it ends abruptly.
+    view_->show_error(warning);
   }
 }
 

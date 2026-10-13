@@ -1,10 +1,22 @@
 #include "external_tools.hpp"
+#include "proxy.hpp"
 
+#include <mmc/str.hpp>
+
+#include <QEventLoop>
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QJsonValue>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QRegularExpression>
+#include <QUrl>
+#include <QUrlQuery>
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <fstream>
 #include <sstream>
 #include <vector>
@@ -16,18 +28,18 @@ fs::path checked_repo_path(
 ) {
   const fs::path root = fs::canonical(root_str);
 
-  fs::path input(relative);
-  if (input.is_absolute()) {
-    throw std::runtime_error("Absolute paths are not allowed");
-  }
-
-  const fs::path candidate = fs::canonical(root / input);
+  // Models routinely pass the shared directory verbatim, so accept absolute
+  // paths too and let the containment check below decide whether they are
+  // allowed. A relative path is resolved against the root as before.
+  const fs::path input(relative);
+  const fs::path candidate =
+      fs::canonical(input.is_absolute() ? input : root / input);
 
   // fs::canonical() resolves symlinks, so verify the final path still lives
   // inside the root before handing it back.
   const fs::path rel = candidate.lexically_relative(root);
   if (rel.empty() || rel.is_absolute() || *rel.begin() == "..") {
-    throw std::runtime_error("Path escapes the repository");
+    throw std::runtime_error("Path is outside the shared directory");
   }
 
   return candidate;
@@ -45,14 +57,21 @@ int json_int_or(const QJsonObject& obj, const QString& key, int fallback) {
   return value.isDouble() ? value.toInt(fallback) : fallback;
 }
 
-bool is_source_file(const fs::path& path) {
-  static const std::vector<std::string> extensions = {
-      ".h", ".hpp", ".c", ".cc", ".cpp", ".cxx",
-      ".cu", ".cuh", ".py", ".inl", ".mm"
-  };
+bool is_binary_file(const fs::path& path) {
+  // A file counts as binary when a NUL byte appears in its first block. This is
+  // the same convention git and ripgrep use, and it lets search_code cover
+  // every text language without maintaining an extension whitelist.
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    return true;
+  }
 
-  const std::string ext = path.extension().string();
-  return std::find(extensions.begin(), extensions.end(), ext) != extensions.end();
+  std::array<char, 8192> buffer{};
+  in.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+  const std::streamsize count = in.gcount();
+
+  return std::find(buffer.begin(), buffer.begin() + count, '\0') !=
+      buffer.begin() + count;
 }
 
 std::string read_file_range(const fs::path& file, int start_line, int end_line) {
@@ -139,8 +158,19 @@ std::string search_code(
     throw std::runtime_error("Search path is not a directory");
   }
 
+  // Smart case: a query without uppercase letters matches case-insensitively,
+  // mirroring ripgrep/Zed. This only ever adds matches; an all-lowercase query
+  // that the model would otherwise miss now succeeds.
+  const bool case_sensitive = std::any_of(
+      query.begin(), query.end(),
+      [](unsigned char c) { return std::isupper(c) != 0; }
+  );
+  const std::string needle =
+      case_sensitive ? query : mmc::str::to_lower(query);
+
   std::ostringstream out;
   int matches = 0;
+  int files_scanned = 0;
   constexpr int MAX_MATCHES = 30;
   constexpr int CONTEXT_LINES = 2;
 
@@ -156,13 +186,19 @@ std::string search_code(
         continue;
       }
 
-      if (!it->is_regular_file() || !is_source_file(it->path())) {
+      if (!it->is_regular_file()) {
         continue;
       }
 
       if (it->file_size() > 2 * 1024 * 1024) {
         continue;
       }
+
+      if (is_binary_file(it->path())) {
+        continue;
+      }
+
+      ++files_scanned;
 
       std::ifstream in(it->path());
       if (!in) continue;
@@ -175,7 +211,9 @@ std::string search_code(
       }
 
       for (std::size_t i = 0; i < lines.size() && matches < MAX_MATCHES; ++i) {
-        if (lines[i].find(query) == std::string::npos) {
+        const std::string haystack =
+            case_sensitive ? lines[i] : mmc::str::to_lower(lines[i]);
+        if (haystack.find(needle) == std::string::npos) {
           continue;
         }
 
@@ -200,7 +238,15 @@ std::string search_code(
   }
 
   if (matches == 0) {
-    return "No matches found.";
+    // Report the resolved directory and how much was scanned so the model can
+    // discover the real search root and retry instead of assuming the tool is
+    // broken. Binary files are skipped by design.
+    std::ostringstream message;
+    message << "No matches for \"" << query << "\" in \""
+            << directory.generic_string() << "\" (" << files_scanned
+            << " text files scanned). Binary files are skipped; try a "
+               "different term or a broader path.";
+    return message.str();
   }
 
   if (matches == MAX_MATCHES) {
@@ -210,7 +256,322 @@ std::string search_code(
   return out.str();
 }
 
-QString execute_local_tool(const ToolCall& call, const std::string& root_path) {
+// ------------------------------ network tools ------------------------------
+//
+// The model can reach the network through two best-effort tools. Requests go
+// through the session proxy when one is configured (see proxy.hpp). The
+// implementation mirrors the streaming client: a QNetworkAccessManager driven by
+// a nested QEventLoop on the calling worker thread, so a tool call blocks only
+// that thread and stays bounded by the transfer timeout.
+
+constexpr int kFetchBodyLimit = 512 * 1024; // bytes read from one response
+constexpr int kFetchTextLimit = 8000; // characters returned to the model
+
+namespace {
+
+// Decodes the HTML entities that occur in ordinary page text. Numeric
+// references are decoded before `&amp;` so a literal "&amp;#39;" is preserved.
+QString decode_entities(const QString& input) {
+  QString text = input;
+  text.replace(QStringLiteral("&nbsp;"), QStringLiteral(" "));
+  text.replace(QStringLiteral("&lt;"), QStringLiteral("<"));
+  text.replace(QStringLiteral("&gt;"), QStringLiteral(">"));
+  text.replace(QStringLiteral("&quot;"), QStringLiteral("\""));
+  text.replace(QStringLiteral("&#39;"), QStringLiteral("'"));
+  text.replace(QStringLiteral("&apos;"), QStringLiteral("'"));
+
+  static const QRegularExpression numeric(QStringLiteral("&#(x?[0-9A-Fa-f]+);"));
+
+  QString decoded;
+  decoded.reserve(text.size());
+
+  qsizetype last = 0;
+  auto it = numeric.globalMatch(text);
+
+  while (it.hasNext()) {
+    const QRegularExpressionMatch match = it.next();
+    const QString body = match.captured(1);
+
+    bool ok = false;
+    const uint code = (body.startsWith('x') || body.startsWith('X'))
+        ? body.mid(1).toUInt(&ok, 16)
+        : body.toUInt(&ok, 10);
+
+    if (!ok || code == 0 || code > 0x10FFFF) {
+      continue;
+    }
+
+    decoded += text.mid(last, match.capturedStart() - last);
+
+    if (code <= 0xFFFF) {
+      decoded += QChar(static_cast<char16_t>(code));
+    } else {
+      const char32_t point = code;
+      decoded += QString::fromUcs4(&point, 1);
+    }
+
+    last = match.capturedEnd();
+  }
+
+  decoded += text.mid(last);
+  decoded.replace(QStringLiteral("&amp;"), QStringLiteral("&"));
+
+  return decoded;
+}
+
+// Reduces an HTML fragment to readable text: drops script/style bodies, strips
+// the remaining tags and decodes entities.
+QString html_to_text(const QString& html) {
+  QString text = html;
+
+  static const QRegularExpression script(
+      QStringLiteral("<script\\b[^>]*>.*?</script>"),
+      QRegularExpression::DotMatchesEverythingOption |
+          QRegularExpression::CaseInsensitiveOption
+  );
+  static const QRegularExpression style(
+      QStringLiteral("<style\\b[^>]*>.*?</style>"),
+      QRegularExpression::DotMatchesEverythingOption |
+          QRegularExpression::CaseInsensitiveOption
+  );
+  static const QRegularExpression tag(QStringLiteral("<[^>]*>"));
+
+  text.remove(script);
+  text.remove(style);
+  text.replace(tag, QStringLiteral(" "));
+
+  return decode_entities(text).trimmed();
+}
+
+// Reads a `name="value"` attribute from a tag's attribute string.
+QString attribute(const QString& attributes, const QString& name) {
+  static const QRegularExpression quoted(
+      QStringLiteral("\\b([a-zA-Z:_-]+)\\s*=\\s*\"([^\"]*)\"")
+  );
+
+  auto it = quoted.globalMatch(attributes);
+
+  while (it.hasNext()) {
+    const QRegularExpressionMatch match = it.next();
+
+    if (match.captured(1).compare(name, Qt::CaseInsensitive) == 0) {
+      return match.captured(2);
+    }
+  }
+
+  return {};
+}
+
+// One element carrying a class marker (DuckDuckGo result link or snippet).
+struct MarkedElement {
+  QString href;
+  QString text;
+};
+
+// Collects every anchor whose tag carries `marker` in its class attribute.
+//
+// Only `<a>` elements are considered: a generic "any element" match would let a
+// large container (e.g. `<body>`) swallow the anchors nested inside it, so the
+// result links would never be seen individually.
+std::vector<MarkedElement> collect_marked(
+    const QString& html, const QString& marker
+) {
+  static const QRegularExpression anchor(
+      QStringLiteral("<a\\b([^>]*)>(.*?)</a>"),
+      QRegularExpression::DotMatchesEverythingOption |
+          QRegularExpression::CaseInsensitiveOption
+  );
+
+  std::vector<MarkedElement> out;
+  auto it = anchor.globalMatch(html);
+
+  while (it.hasNext()) {
+    const QRegularExpressionMatch match = it.next();
+    const QString attributes = match.captured(1);
+
+    if (!attributes.contains(marker, Qt::CaseInsensitive)) {
+      continue;
+    }
+
+    MarkedElement item;
+    item.href = attribute(attributes, QStringLiteral("href"));
+    item.text = html_to_text(match.captured(2));
+    out.push_back(std::move(item));
+  }
+
+  return out;
+}
+
+// Recovers the real target from a DuckDuckGo redirect link (`//duckduckgo.com/
+// l/?uddg=<encoded>`); a direct link is returned unchanged.
+QString resolve_ddg_url(const QString& href) {
+  QString candidate = href;
+
+  if (candidate.startsWith(QStringLiteral("//"))) {
+    candidate.prepend(QStringLiteral("https:"));
+  }
+
+  const QUrl url(candidate);
+
+  if (!url.isValid()) {
+    return candidate;
+  }
+
+  const QUrlQuery query(url);
+
+  if (query.hasQueryItem(QStringLiteral("uddg"))) {
+    return query.queryItemValue(QStringLiteral("uddg"), QUrl::FullyDecoded);
+  }
+
+  return candidate;
+}
+
+} // namespace
+
+QString http_get(
+    const QString& url, const std::optional<std::string>& proxy, int max_bytes
+) {
+  const QUrl target(url);
+
+  if (!target.isValid() ||
+      (target.scheme() != QStringLiteral("http") &&
+       target.scheme() != QStringLiteral("https"))) {
+    throw std::runtime_error("Only http/https URLs can be fetched");
+  }
+
+  QNetworkAccessManager manager;
+  manager.setTransferTimeout(20'000);
+
+  lnb::configure_proxy(manager, proxy);
+
+  QNetworkRequest request(target);
+  request.setHeader(
+      QNetworkRequest::UserAgentHeader,
+      QStringLiteral("Mozilla/5.0 (compatible; local-notebook/1.0)")
+  );
+  request.setRawHeader("Accept", "text/html,application/xhtml+xml,text/plain");
+  request.setAttribute(
+      QNetworkRequest::RedirectPolicyAttribute,
+      QNetworkRequest::NoLessSafeRedirectPolicy
+  );
+
+  QNetworkReply* reply = manager.get(request);
+
+  QEventLoop loop;
+  QByteArray body;
+
+  QObject::connect(reply, &QNetworkReply::readyRead, &loop, [&]() {
+    const QByteArray chunk = reply->readAll();
+
+    if (body.size() < max_bytes) {
+      body.append(chunk.left(max_bytes - body.size()));
+    }
+  });
+
+  QObject::connect(reply, &QNetworkReply::finished, &loop, [&]() { loop.quit(); });
+
+  loop.exec();
+
+  const QByteArray trailing = reply->readAll();
+
+  if (body.size() < max_bytes) {
+    body.append(trailing.left(max_bytes - body.size()));
+  }
+
+  const QNetworkReply::NetworkError error = reply->error();
+  const QString error_string = reply->errorString();
+  const int status =
+      reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+
+  delete reply;
+
+  if (error != QNetworkReply::NoError) {
+    std::string message = "HTTP request failed: " + error_string.toStdString();
+
+    if (status > 0) {
+      message += " (HTTP " + std::to_string(status) + ")";
+    }
+
+    throw std::runtime_error(message);
+  }
+
+  return QString::fromUtf8(body);
+}
+
+QString fetch_url(const QString& url, const std::optional<std::string>& proxy) {
+  if (url.trimmed().isEmpty()) {
+    throw std::runtime_error("A URL is required");
+  }
+
+  const QString text = html_to_text(
+      http_get(url.trimmed(), proxy, kFetchBodyLimit)
+  );
+
+  if (text.isEmpty()) {
+    return QStringLiteral("The page returned no readable text.");
+  }
+
+  if (text.size() > kFetchTextLimit) {
+    return text.left(kFetchTextLimit) +
+        QStringLiteral("\n\n[Page truncated; only the first part is shown.]");
+  }
+
+  return text;
+}
+
+QString web_search(const QString& query, const std::optional<std::string>& proxy) {
+  if (query.trimmed().isEmpty()) {
+    throw std::runtime_error("A search query is required");
+  }
+
+  QUrl url(QStringLiteral("https://html.duckduckgo.com/html/"));
+  QUrlQuery params;
+  params.addQueryItem(QStringLiteral("q"), query.trimmed());
+  url.setQuery(params);
+
+  const QString html = http_get(url.toString(), proxy, kFetchBodyLimit);
+
+  const auto links = collect_marked(html, QStringLiteral("result__a"));
+  const auto snippets = collect_marked(html, QStringLiteral("result__snippet"));
+
+  constexpr int kMaxResults = 8;
+
+  std::ostringstream out;
+  int count = 0;
+
+  for (std::size_t i = 0; i < links.size() && count < kMaxResults; ++i) {
+    const QString title = links[i].text;
+    const QString target = resolve_ddg_url(links[i].href);
+
+    if (title.isEmpty() || target.isEmpty()) {
+      continue;
+    }
+
+    ++count;
+    out << count << ". " << title.toStdString() << '\n';
+    out << target.toStdString() << '\n';
+
+    if (i < snippets.size() && !snippets[i].text.isEmpty()) {
+      out << snippets[i].text.toStdString() << '\n';
+    }
+
+    out << '\n';
+  }
+
+  if (count == 0) {
+    return QStringLiteral(
+        "No search results could be parsed. DuckDuckGo's HTML endpoint may be "
+        "unreachable or its markup changed; try fetch_url on a known URL."
+    );
+  }
+
+  return QString::fromStdString(out.str());
+}
+
+QString execute_local_tool(
+    const ToolCall& call, const std::optional<std::string>& root_path,
+    const std::optional<std::string>& proxy
+) {
   try {
     QJsonParseError parse_error;
     const QJsonDocument document =
@@ -222,20 +583,30 @@ QString execute_local_tool(const ToolCall& call, const std::string& root_path) {
 
     const QJsonObject args = document.object();
 
+    // Filesystem tools need a shared directory; network tools do not.
+    const bool needs_root = call.name == "list_directory" ||
+        call.name == "search_code" || call.name == "read_file";
+
+    if (needs_root && (!root_path.has_value() || root_path->empty())) {
+      return QStringLiteral(
+          "Tool error: this session has no shared directory configured"
+      );
+    }
+
     if (call.name == "list_directory") {
       const QString path = json_string_or(args, "path", QStringLiteral("."));
 
       return QString::fromStdString(
-          list_directory(root_path, path.toStdString())
+          list_directory(*root_path, path.toStdString())
       );
     }
 
     if (call.name == "search_code") {
       const QString query = json_string_or(args, "query");
-      const QString path = json_string_or(args, "path");
+      const QString path = json_string_or(args, "path", QStringLiteral("."));
 
       return QString::fromStdString(
-          search_code(query.toStdString(), root_path, path.toStdString())
+          search_code(query.toStdString(), *root_path, path.toStdString())
       );
     }
 
@@ -245,8 +616,18 @@ QString execute_local_tool(const ToolCall& call, const std::string& root_path) {
       const int end = json_int_or(args, "end_line", start + 100);
 
       return QString::fromStdString(read_file_range(
-          checked_repo_path(root_path, path.toStdString()), start, end
+          checked_repo_path(*root_path, path.toStdString()), start, end
       ));
+    }
+
+    if (call.name == "fetch_url") {
+      const QString url = json_string_or(args, "url");
+      return fetch_url(url, proxy);
+    }
+
+    if (call.name == "web_search") {
+      const QString query = json_string_or(args, "query");
+      return web_search(query, proxy);
     }
 
     throw std::runtime_error("Unknown tool: " + call.name.toStdString());

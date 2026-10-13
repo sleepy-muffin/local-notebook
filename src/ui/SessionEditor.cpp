@@ -3,9 +3,13 @@
 #include "../external.hpp"
 
 #include <QEventLoop>
+#include <QFrame>
+#include <QGroupBox>
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QSpinBox>
 #include <QLabel>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -30,7 +34,7 @@ SessionEditor::SessionEditor(
       session_(std::move(session))
 {
   setWindowTitle(session_ ? "Edit Session" : "Add Session");
-  resize(650, 680);
+  resize(720, 780);
 
   create_layout();
 
@@ -42,53 +46,131 @@ SessionEditor::SessionEditor(
 void SessionEditor::create_layout() {
     auto* main_layout = new QVBoxLayout(this);
 
-    main_layout->addWidget(new QLabel("Title:", this));
+    // All fields live in a scroll area so the dialog stays usable on a small
+    // screen: the content keeps its comfortable size and scrolls instead of
+    // squeezing the editors. The action buttons stay pinned below the scroll
+    // area.
+    auto* scroll = new QScrollArea(this);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
 
-    title_edit_ = new QLineEdit(this);
-    main_layout->addWidget(title_edit_);
+    auto* content = new QWidget(scroll);
+    auto* layout = new QVBoxLayout(content);
+    layout->setContentsMargins(0, 0, 0, 0);
+
+    layout->addWidget(new QLabel("Title:", content));
+
+    title_edit_ = new QLineEdit(content);
+    layout->addWidget(title_edit_);
 
     auto* settings_layout = new QGridLayout();
 
-    api_url_edit_ = new QLineEdit(this);
-    token_edit_ = new QLineEdit(this);
-    model_edit_ = new QLineEdit(this);
-    proxy_edit_ = new QLineEdit(this);
+    api_url_edit_ = new QLineEdit(content);
+    token_edit_ = new QLineEdit(content);
+    model_edit_ = new QLineEdit(content);
+    proxy_edit_ = new QLineEdit(content);
 
-    settings_layout->addWidget(new QLabel("API URL:", this), 0, 0);
+    settings_layout->addWidget(new QLabel("API URL:", content), 0, 0);
     settings_layout->addWidget(api_url_edit_, 1, 0);
 
     settings_layout->addWidget(
-        new QLabel("Authentication Token:", this), 0, 1
+        new QLabel("Authentication Token:", content), 0, 1
     );
     settings_layout->addWidget(token_edit_, 1, 1);
 
-    settings_layout->addWidget(new QLabel("Model:", this), 2, 0);
+    settings_layout->addWidget(new QLabel("Model:", content), 2, 0);
     settings_layout->addWidget(model_edit_, 3, 0);
 
-    settings_layout->addWidget(new QLabel("Proxy:", this), 2, 1);
+    settings_layout->addWidget(new QLabel("Proxy:", content), 2, 1);
     settings_layout->addWidget(proxy_edit_, 3, 1);
 
-    main_layout->addLayout(settings_layout);
+    layout->addLayout(settings_layout);
 
-    main_layout->addWidget(new QLabel("Shared Directory:", this));
+    layout->addWidget(new QLabel("Shared Directory:", content));
 
-    shared_directory_edit_ = new QLineEdit(this);
-    main_layout->addWidget(shared_directory_edit_);
+    shared_directory_edit_ = new QLineEdit(content);
+    layout->addWidget(shared_directory_edit_);
 
-    main_layout->addWidget(new QLabel("Custom Instructions:", this));
+    // ---- Generation & context ----
+    // Session-bound request/summarisation/tool budgets. Each session can target
+    // a different model, so these live with the session rather than in the
+    // global config. Laid out two per row to stay compact.
+    auto* generation = new QGroupBox("Generation & Context:", content);
+    auto* generation_layout = new QGridLayout(generation);
+    generation_layout->setHorizontalSpacing(16);
+    generation_layout->setVerticalSpacing(6);
 
-    instructions_edit_ = new QPlainTextEdit(this);
+    const lnb::generation_settings defaults;
+
+    const auto add_generation = [&](
+        int row, int column, const QString& label, int value,
+        int minimum, int maximum, int step
+    ) -> QSpinBox* {
+      auto* box = new QSpinBox(generation);
+      box->setRange(minimum, maximum);
+      box->setSingleStep(step);
+      box->setValue(value);
+      generation_layout->addWidget(new QLabel(label, generation), row, column * 2);
+      generation_layout->addWidget(box, row, column * 2 + 1);
+      return box;
+    };
+
+    model_context_spin_ = add_generation(
+        0, 0, "Model context (tokens)",
+        static_cast<int>(defaults.model_context_tokens_), 1024, 2000000, 1024
+    );
+    response_budget_spin_ = add_generation(
+        0, 1, "Response budget (tokens)",
+        static_cast<int>(defaults.response_token_budget_), 128, 2000000, 256
+    );
+    safety_margin_spin_ = add_generation(
+        1, 0, "Safety margin (tokens)",
+        static_cast<int>(defaults.context_safety_margin_tokens_), 0, 2000000, 256
+    );
+    summary_trigger_spin_ = add_generation(
+        1, 1, "Summary trigger (tokens)",
+        static_cast<int>(defaults.summary_trigger_tokens_), 256, 2000000, 256
+    );
+    summary_keep_spin_ = add_generation(
+        2, 0, "Summary keep (tokens)",
+        static_cast<int>(defaults.summary_keep_tokens_), 256, 2000000, 256
+    );
+    summary_budget_spin_ = add_generation(
+        2, 1, "Summary budget (tokens)",
+        static_cast<int>(defaults.summary_token_budget_), 128, 2000000, 256
+    );
+    summary_headroom_spin_ = add_generation(
+        3, 0, "Summary reasoning headroom (tokens)",
+        static_cast<int>(defaults.summary_reasoning_headroom_tokens_), 0, 2000000, 256
+    );
+    tool_output_cap_spin_ = add_generation(
+        3, 1, "Tool output cap (tokens)",
+        static_cast<int>(defaults.tool_output_max_tokens_), 128, 2000000, 256
+    );
+    max_tool_rounds_spin_ = add_generation(
+        4, 0, "Max tool rounds", defaults.max_tool_rounds_, 1, 1000, 1
+    );
+    max_tool_calls_spin_ = add_generation(
+        4, 1, "Max tool calls", defaults.max_tool_calls_, 1, 10000, 1
+    );
+
+    layout->addWidget(generation);
+
+    layout->addWidget(new QLabel("Custom Instructions:", content));
+
+    instructions_edit_ = new QPlainTextEdit(content);
     instructions_edit_->setTabChangesFocus(false);
-    main_layout->addWidget(instructions_edit_, 1);
+    instructions_edit_->setMinimumHeight(120);
+    layout->addWidget(instructions_edit_, 1);
 
     // The memory header carries the label and, on the right, a manual trigger.
     // The automatic summariser only folds once the transcript grows past the
     // configured keep window, so this lets a summary be produced on demand.
     auto* memory_header = new QHBoxLayout();
-    memory_header->addWidget(new QLabel("Conversation Memory:", this));
+    memory_header->addWidget(new QLabel("Conversation Memory:", content));
     memory_header->addStretch();
 
-    summarize_button_ = new QPushButton("Summarize now", this);
+    summarize_button_ = new QPushButton("Summarize now", content);
     summarize_button_->setToolTip(
         "Fold the whole conversation into the memory below. Folds everything "
         "except the newest message, ignoring the automatic trigger and the "
@@ -98,17 +180,81 @@ void SessionEditor::create_layout() {
     summarize_button_->setEnabled(session_.has_value());
     memory_header->addWidget(summarize_button_);
 
-    main_layout->addLayout(memory_header);
+    layout->addLayout(memory_header);
 
     // The generated summary can grow long, so it lives in a self-scrolling,
     // editable plain-text field: it can be inspected and corrected in place.
-    memory_edit_ = new QPlainTextEdit(this);
+    memory_edit_ = new QPlainTextEdit(content);
     memory_edit_->setTabChangesFocus(false);
+    memory_edit_->setMinimumHeight(120);
     memory_edit_->setPlaceholderText(
         "Automatically maintained summary of older turns. Edit to correct it, "
         "or clear it to rebuild it from the whole transcript."
     );
-    main_layout->addWidget(memory_edit_, 1);
+    layout->addWidget(memory_edit_, 1);
+
+    // ---- Memory watermark ----
+    // Records how much of the transcript the summary above already covers: only
+    // messages with a higher id are still sent verbatim. Exposed so it can be
+    // corrected alongside a hand-edited memory.
+    auto* watermark_layout = new QHBoxLayout();
+    watermark_layout->addWidget(
+        new QLabel("Memory watermark (folded up to message id):", content)
+    );
+
+    watermark_spin_ = new QSpinBox(content);
+    watermark_spin_->setRange(0, 2000000000);
+    watermark_spin_->setSingleStep(1);
+    watermark_spin_->setToolTip(
+        "Highest message id already folded into the summary. Messages above it "
+        "are still sent verbatim. Clearing the memory resets this to 0."
+    );
+    watermark_layout->addWidget(watermark_spin_);
+    watermark_layout->addStretch();
+    layout->addLayout(watermark_layout);
+
+    // A short, permanent reference for how the automatic memory behaves, so the
+    // fields above can be used with confidence.
+    auto* docs = new QLabel(content);
+    docs->setObjectName(QStringLiteral("SessionDocs"));
+    docs->setWordWrap(true);
+    docs->setTextFormat(Qt::RichText);
+    // Word-wrapped labels can collapse to a single line inside a resizable
+    // scroll area unless the layout is told the height depends on the width.
+    QSizePolicy docs_policy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+    docs_policy.setHeightForWidth(true);
+    docs->setSizePolicy(docs_policy);
+    docs->setText(QStringLiteral(
+        "<b>How summarization works</b><br>"
+        "The conversation memory is a rolling summary of older turns. Messages "
+        "with an id above the watermark are still sent verbatim; older turns are "
+        "represented only by the summary.<br><br>"
+        "When the transcript approaches the model's context limit (or you press "
+        "&ldquo;Summarize now&rdquo;), an internal LLM call folds the older "
+        "messages into the summary, keeps the newest messages verbatim, and "
+        "advances the watermark to the last message it folded. Custom "
+        "instructions are kept separate and are never touched by this.<br><br>"
+        "The box above holds the persisted summary. Press <b>Save</b> to keep a "
+        "hand-edited version; <b>Summarize now</b> always reads the stored "
+        "memory from the database, so unsaved edits in the box are ignored and "
+        "overwritten on screen.<br><br>"
+        "<b>Pressing &ldquo;Summarize now&rdquo; twice</b><br>"
+        "While the first run is in flight the button is disabled, so a second "
+        "press does nothing. Once it finishes, the first press has already "
+        "folded everything except the newest message and saved it, so a second "
+        "press finds nothing new, makes no API call, and reports &ldquo;Nothing "
+        "to Summarize&rdquo; &mdash; the operation is idempotent, with no "
+        "double-folding and no extra cost. It is only <i>not</i> a no-op when "
+        "the first pass could not fold everything (for example it hit the "
+        "maximum number of summary rounds, or the summariser returned an empty "
+        "result); then the second press folds the remainder.<br><br>"
+        "Clearing the memory and saving resets the watermark to 0, which "
+        "re-admits the whole transcript."
+    ));
+    layout->addWidget(docs);
+
+    scroll->setWidget(content);
+    main_layout->addWidget(scroll, 1);
 
     auto* button_layout = new QHBoxLayout();
     button_layout->addStretch();
@@ -207,6 +353,20 @@ void SessionEditor::load_session() {
           static_cast<qsizetype>(session_->memory_summary_.size())
       )
   );
+
+  watermark_spin_->setValue(static_cast<int>(session_->memory_watermark_));
+
+  const lnb::generation_settings& gen = session_->generation_;
+  model_context_spin_->setValue(static_cast<int>(gen.model_context_tokens_));
+  response_budget_spin_->setValue(static_cast<int>(gen.response_token_budget_));
+  safety_margin_spin_->setValue(static_cast<int>(gen.context_safety_margin_tokens_));
+  summary_trigger_spin_->setValue(static_cast<int>(gen.summary_trigger_tokens_));
+  summary_keep_spin_->setValue(static_cast<int>(gen.summary_keep_tokens_));
+  summary_budget_spin_->setValue(static_cast<int>(gen.summary_token_budget_));
+  summary_headroom_spin_->setValue(static_cast<int>(gen.summary_reasoning_headroom_tokens_));
+  max_tool_rounds_spin_->setValue(gen.max_tool_rounds_);
+  max_tool_calls_spin_->setValue(gen.max_tool_calls_);
+  tool_output_cap_spin_->setValue(static_cast<int>(gen.tool_output_max_tokens_));
 }
 
 void SessionEditor::save_session() {
@@ -243,14 +403,15 @@ void SessionEditor::save_session() {
     return value;
   };
 
-  // Keep the watermark that records how much of the transcript the memory
-  // already covers, so editing the text does not make older turns reappear.
-  // Clearing the memory, however, must re-admit the whole transcript: with an
-  // empty summary and a high watermark those turns would otherwise be lost.
-  uint32_t memory_watermark = session_ ? session_->memory_watermark_ : 0;
+  // The watermark records how much of the transcript the memory already covers,
+  // so editing the text does not make older turns reappear. It is editable, but
+  // clearing the memory must re-admit the whole transcript: with an empty
+  // summary and a high watermark those turns would otherwise be lost.
+  uint32_t memory_watermark = static_cast<uint32_t>(watermark_spin_->value());
 
   if (memory.empty()) {
     memory_watermark = 0;
+    watermark_spin_->setValue(0);
   }
 
   lnb::session updated_session{
@@ -266,6 +427,27 @@ void SessionEditor::save_session() {
     session_ ? session_->last_message_at_ : std::nullopt,
     memory_watermark
   };
+
+  // The generation budgets are not constructor parameters; attach them after
+  // construction from the editors above.
+  updated_session.generation_.model_context_tokens_ =
+      static_cast<std::size_t>(model_context_spin_->value());
+  updated_session.generation_.response_token_budget_ =
+      static_cast<std::size_t>(response_budget_spin_->value());
+  updated_session.generation_.context_safety_margin_tokens_ =
+      static_cast<std::size_t>(safety_margin_spin_->value());
+  updated_session.generation_.summary_keep_tokens_ =
+      static_cast<std::size_t>(summary_keep_spin_->value());
+  updated_session.generation_.summary_token_budget_ =
+      static_cast<std::size_t>(summary_budget_spin_->value());
+  updated_session.generation_.summary_reasoning_headroom_tokens_ =
+      static_cast<std::size_t>(summary_headroom_spin_->value());
+  updated_session.generation_.summary_trigger_tokens_ =
+      static_cast<std::size_t>(summary_trigger_spin_->value());
+  updated_session.generation_.max_tool_rounds_ = max_tool_rounds_spin_->value();
+  updated_session.generation_.max_tool_calls_ = max_tool_calls_spin_->value();
+  updated_session.generation_.tool_output_max_tokens_ =
+      static_cast<std::size_t>(tool_output_cap_spin_->value());
 
   try {
     if (session_) {
@@ -396,6 +578,7 @@ void SessionEditor::summarize_now() {
   memory_edit_->setPlainText(memory);
   session_->memory_summary_ = updated->memory_summary_;
   session_->memory_watermark_ = updated->memory_watermark_;
+  watermark_spin_->setValue(static_cast<int>(updated->memory_watermark_));
 
   if (memory.isEmpty() || memory == previous) {
     QMessageBox::information(

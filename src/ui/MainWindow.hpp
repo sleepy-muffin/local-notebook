@@ -44,6 +44,7 @@ private:
     lnb::session session_info;
     ConversationView* view = nullptr;
     QWidget* container = nullptr;
+    QLabel* context_label = nullptr;
     std::unique_ptr<ConversationController> controller;
   };
 
@@ -70,7 +71,8 @@ private:
   QWidget* create_sessions_page();
   QWidget* create_conversation_container(
       ConversationView* view,
-      const lnb::session& session
+      const lnb::session& session,
+      QLabel** context_label_out
   );
 
 

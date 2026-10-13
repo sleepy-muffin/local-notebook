@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <string>
 
 namespace ui {
 namespace {
@@ -27,6 +28,14 @@ struct ThemeState {
   Theme theme;
   QPixmap background;
   bool has_background = false;
+
+  // Source of the currently decoded background, so re-applying the theme does
+  // not decode the same image again (a full-size decode is expensive).
+  std::string background_url;
+
+  // Installing a QStyle forces a full re-polish of every widget. The style is
+  // fixed for the process, so it is installed once and skipped afterwards.
+  bool style_installed = false;
 
   QFont ui_font;
   QFont chat_font;
@@ -199,17 +208,26 @@ Theme parse_theme(const QJsonObject& root, const QString& requested) {
 void load_background(const lnb::general& config) {
   ThemeState& current = state();
 
-  current.background = QPixmap{};
-  current.has_background = false;
+  // Re-decoding the image on every theme apply is wasteful and shows up as a
+  // pause. Keep the decoded pixmap while the configured URL is unchanged.
+  const std::string requested = config.background_url_.value_or(std::string{});
 
-  if (!config.background_url_.has_value() || config.background_url_->empty()) {
+  if (requested == current.background_url) {
     return;
   }
 
-  const QPixmap pixmap(QString::fromStdString(*config.background_url_));
+  current.background_url = requested;
+  current.background = QPixmap{};
+  current.has_background = false;
+
+  if (requested.empty()) {
+    return;
+  }
+
+  const QPixmap pixmap(QString::fromStdString(requested));
 
   if (pixmap.isNull()) {
-    mmc::log::debug("Background image could not be loaded: {}", *config.background_url_);
+    mmc::log::debug("Background image could not be loaded: {}", requested);
     return;
   }
 
@@ -293,6 +311,7 @@ QString build_stylesheet(const Theme& theme, bool background) {
   sheet += "QLabel#CurrentUserName, QLabel#ConversationTitle { color: " + rgba(c.text) + "; font-weight: 600; }\n";
   sheet += "QLabel#CurrentUserId, QLabel#ConversationSubtitle { color: " + rgba(c.text_muted) + "; font-size: 11px; }\n";
   sheet += "QLabel#ConversationTimestamp { color: " + rgba(c.text_muted) + "; font-size: 11px; }\n";
+  sheet += "QLabel#ConversationContext { color: " + rgba(c.text_muted) + "; font-size: 11px; }\n";
   sheet += "QToolButton#CurrentUserSettings { background: transparent; border: 0; outline: 0; padding: 0; margin: 0; color: " + rgba(c.text_muted) + "; }\n";
   sheet += "QToolButton#CurrentUserSettings:hover, QToolButton#CurrentUserSettings:pressed { background: transparent; border: 0; outline: 0; }\n";
   sheet += "QLabel#EmptyHint { color: " + rgba(c.text_muted) + "; font-size: 16px; }\n";
@@ -345,6 +364,9 @@ QString build_stylesheet(const Theme& theme, bool background) {
       rgba(c.text) + "; }\n";
   sheet += "QToolButton#MessageAction:pressed { background-color: " + rgba(c.accent) + "; color: " +
       rgba(c.accent_text) + "; }\n";
+  // The hover-only message id, shown as a quiet "#<id>" beside the actions.
+  sheet += "QLabel#MessageId { color: " + rgba(c.text_muted) +
+      "; font-size: 11px; padding: 0 6px; }\n";
 
   // ---- Menus ----
   sheet += "QMenu { background-color: " + rgba(panel) + "; border: 1px solid " + rgba(c.border) +
@@ -373,6 +395,11 @@ QString build_stylesheet(const Theme& theme, bool background) {
       "; selection-background-color: " + rgba(c.accent) + "; selection-color: " + rgba(c.accent_text) +
       "; }\n";
   sheet += "QLineEdit:focus, QPlainTextEdit:focus { border: 1px solid " + rgba(c.accent) + "; }\n";
+
+  // The read-only reference text appended under the session editor's memory
+  // fields: quiet, low-contrast, and clearly not an input.
+  sheet += "QLabel#SessionDocs { color: " + rgba(c.text_muted) +
+      "; font-size: 12px; padding: 8px 2px; }\n";
 
   // ---- Tooltips ----
   sheet += "QToolTip { background-color: " + rgba(panel) + "; color: " + rgba(c.text) +
@@ -438,8 +465,13 @@ void apply_theme(QApplication& app, const lnb::general& config) {
   // The tint is only meaningful over a loaded image.
   current.tint = std::nullopt;
 
-  if (QStyle* style = QStyleFactory::create(QStringLiteral("breeze"))) {
-    app.setStyle(style);
+  // Installing a style re-polishes every widget; do it only once, since the
+  // style does not change at runtime.
+  if (!current.style_installed) {
+    if (QStyle* style = QStyleFactory::create(QStringLiteral("breeze"))) {
+      app.setStyle(style);
+      current.style_installed = true;
+    }
   }
 
   // The UI font drives every widget. The chat font derives from it so that an
@@ -489,7 +521,11 @@ void apply_theme(QApplication& app, const lnb::general& config) {
   current.chat_font = chat;
   current.mono_font = mono;
 
-  app.setFont(ui);
+  // Each global setter below re-polishes the whole widget tree, so it is only
+  // issued when the value actually changed. This keeps a no-op Save cheap.
+  if (app.font() != ui) {
+    app.setFont(ui);
+  }
 
   const ThemeColors& c = current.theme.colors;
 
@@ -507,9 +543,16 @@ void apply_theme(QApplication& app, const lnb::general& config) {
   palette.setColor(QPalette::ToolTipBase, c.surface);
   palette.setColor(QPalette::ToolTipText, c.text);
   palette.setColor(QPalette::Midlight, c.border);
-  app.setPalette(palette);
 
-  app.setStyleSheet(build_stylesheet(current.theme, current.has_background));
+  if (app.palette() != palette) {
+    app.setPalette(palette);
+  }
+
+  const QString sheet = build_stylesheet(current.theme, current.has_background);
+
+  if (app.styleSheet() != sheet) {
+    app.setStyleSheet(sheet);
+  }
 
   mmc::log::debug(
       "Theme applied: {} (background image: {}, base: #{:02x}{:02x}{:02x})",

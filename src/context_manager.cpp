@@ -28,17 +28,17 @@ std::size_t prompt_tokens(const std::string& text) {
   return mmc::str::estimate_tokens(text);
 }
 
-std::size_t request_budget(const general& cfg) {
+std::size_t request_budget(const generation_settings& cfg) {
   const std::size_t reserved =
       cfg.response_token_budget_ + cfg.context_safety_margin_tokens_;
   return cfg.model_context_tokens_ > reserved ? cfg.model_context_tokens_ - reserved : 256;
 }
 
-std::size_t summary_request_max_tokens(const general& cfg) {
+std::size_t summary_request_max_tokens(const generation_settings& cfg) {
   return cfg.summary_token_budget_ + cfg.summary_reasoning_headroom_tokens_;
 }
 
-std::size_t summarization_budget(const general& cfg) {
+std::size_t summarization_budget(const generation_settings& cfg) {
   // Reserve the whole completion (memory plus reasoning) and the safety margin:
   // the input transcript and everything the model generates share one context.
   const std::size_t reserved =
@@ -82,7 +82,7 @@ Window plan_window(
 
 bool should_summarize(
     const std::vector<message>& messages, std::size_t system_tokens,
-    uint32_t watermark, const general& cfg
+    uint32_t watermark, const generation_settings& cfg
 ) {
   std::size_t total = system_tokens;
 

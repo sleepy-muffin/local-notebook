@@ -27,7 +27,17 @@ CREATE TABLE IF NOT EXISTS session (
   proxy                TEXT DEFAULT NULL,
   shared_directory     TEXT DEFAULT NULL,
   memory_summary       TEXT NOT NULL DEFAULT '',
-  memory_watermark     INTEGER NOT NULL DEFAULT 0
+  memory_watermark     INTEGER NOT NULL DEFAULT 0,
+  model_context_tokens INTEGER NOT NULL DEFAULT 128000,
+  response_token_budget INTEGER NOT NULL DEFAULT 12000,
+  context_safety_margin_tokens INTEGER NOT NULL DEFAULT 4000,
+  summary_keep_tokens  INTEGER NOT NULL DEFAULT 20000,
+  summary_token_budget INTEGER NOT NULL DEFAULT 4000,
+  summary_reasoning_headroom_tokens INTEGER NOT NULL DEFAULT 12000,
+  summary_trigger_tokens INTEGER NOT NULL DEFAULT 80000,
+  max_tool_rounds      INTEGER NOT NULL DEFAULT 8,
+  max_tool_calls       INTEGER NOT NULL DEFAULT 32,
+  tool_output_max_tokens INTEGER NOT NULL DEFAULT 2000
 );
 
 CREATE TABLE IF NOT EXISTS lorebook (
@@ -67,12 +77,46 @@ constexpr std::string_view SQL_SESSION_MIGRATE_ADD_MEMORY_WATERMARK = R"sql(
 ALTER TABLE session ADD COLUMN memory_watermark INTEGER NOT NULL DEFAULT 0
 )sql";
 
+// Per-session generation budgets. Each column is added by its own ALTER so an
+// existing database is upgraded in place; the defaults match
+// generation_settings, so old rows keep the values the global config used.
+constexpr std::string_view SQL_SESSION_MIGRATE_ADD_MODEL_CONTEXT = R"sql(
+ALTER TABLE session ADD COLUMN model_context_tokens INTEGER NOT NULL DEFAULT 128000
+)sql";
+constexpr std::string_view SQL_SESSION_MIGRATE_ADD_RESPONSE_BUDGET = R"sql(
+ALTER TABLE session ADD COLUMN response_token_budget INTEGER NOT NULL DEFAULT 12000
+)sql";
+constexpr std::string_view SQL_SESSION_MIGRATE_ADD_SAFETY_MARGIN = R"sql(
+ALTER TABLE session ADD COLUMN context_safety_margin_tokens INTEGER NOT NULL DEFAULT 4000
+)sql";
+constexpr std::string_view SQL_SESSION_MIGRATE_ADD_SUMMARY_KEEP = R"sql(
+ALTER TABLE session ADD COLUMN summary_keep_tokens INTEGER NOT NULL DEFAULT 20000
+)sql";
+constexpr std::string_view SQL_SESSION_MIGRATE_ADD_SUMMARY_BUDGET = R"sql(
+ALTER TABLE session ADD COLUMN summary_token_budget INTEGER NOT NULL DEFAULT 4000
+)sql";
+constexpr std::string_view SQL_SESSION_MIGRATE_ADD_SUMMARY_HEADROOM = R"sql(
+ALTER TABLE session ADD COLUMN summary_reasoning_headroom_tokens INTEGER NOT NULL DEFAULT 12000
+)sql";
+constexpr std::string_view SQL_SESSION_MIGRATE_ADD_SUMMARY_TRIGGER = R"sql(
+ALTER TABLE session ADD COLUMN summary_trigger_tokens INTEGER NOT NULL DEFAULT 80000
+)sql";
+constexpr std::string_view SQL_SESSION_MIGRATE_ADD_MAX_TOOL_ROUNDS = R"sql(
+ALTER TABLE session ADD COLUMN max_tool_rounds INTEGER NOT NULL DEFAULT 8
+)sql";
+constexpr std::string_view SQL_SESSION_MIGRATE_ADD_MAX_TOOL_CALLS = R"sql(
+ALTER TABLE session ADD COLUMN max_tool_calls INTEGER NOT NULL DEFAULT 32
+)sql";
+constexpr std::string_view SQL_SESSION_MIGRATE_ADD_TOOL_OUTPUT_MAX = R"sql(
+ALTER TABLE session ADD COLUMN tool_output_max_tokens INTEGER NOT NULL DEFAULT 2000
+)sql";
+
 constexpr std::string_view SQL_SESSION_SELECT =
-    "SELECT s.id, s.title, s.custom_instructions, s.api_url, s.authentication_token, s.model, s.proxy, s.shared_directory, s.memory_summary, s.memory_watermark, MAX(m.created_at) FROM session s LEFT JOIN message m ON m.sender_id = s.id OR m.reader_id = s.id GROUP BY s.id ORDER BY MAX(m.created_at) IS NULL, MAX(m.created_at) DESC, s.id";
+    "SELECT s.id, s.title, s.custom_instructions, s.api_url, s.authentication_token, s.model, s.proxy, s.shared_directory, s.memory_summary, s.memory_watermark, s.model_context_tokens, s.response_token_budget, s.context_safety_margin_tokens, s.summary_keep_tokens, s.summary_token_budget, s.summary_reasoning_headroom_tokens, s.summary_trigger_tokens, s.max_tool_rounds, s.max_tool_calls, s.tool_output_max_tokens, MAX(m.created_at) FROM session s LEFT JOIN message m ON m.sender_id = s.id OR m.reader_id = s.id GROUP BY s.id ORDER BY MAX(m.created_at) IS NULL, MAX(m.created_at) DESC, s.id";
 constexpr std::string_view SQL_SESSION_INSERT =
-    "INSERT INTO session (title, custom_instructions, api_url, authentication_token, model, proxy, shared_directory, memory_summary, memory_watermark) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+    "INSERT INTO session (title, custom_instructions, api_url, authentication_token, model, proxy, shared_directory, memory_summary, memory_watermark, model_context_tokens, response_token_budget, context_safety_margin_tokens, summary_keep_tokens, summary_token_budget, summary_reasoning_headroom_tokens, summary_trigger_tokens, max_tool_rounds, max_tool_calls, tool_output_max_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 constexpr std::string_view SQL_SESSION_UPDATE =
-    "UPDATE session SET title = ?, custom_instructions = ?, api_url = ?, authentication_token = ?, model = ?, proxy = ?, shared_directory = ?, memory_summary = ?, memory_watermark = ? WHERE id = ?";
+    "UPDATE session SET title = ?, custom_instructions = ?, api_url = ?, authentication_token = ?, model = ?, proxy = ?, shared_directory = ?, memory_summary = ?, memory_watermark = ?, model_context_tokens = ?, response_token_budget = ?, context_safety_margin_tokens = ?, summary_keep_tokens = ?, summary_token_budget = ?, summary_reasoning_headroom_tokens = ?, summary_trigger_tokens = ?, max_tool_rounds = ?, max_tool_calls = ?, tool_output_max_tokens = ? WHERE id = ?";
 constexpr std::string_view SQL_SESSION_DELETE = "DELETE FROM session WHERE id = ?";
 constexpr std::string_view SQL_MESSAGE_INSERT =
     "INSERT INTO message (sender_id, reader_id, content) VALUES (?, ?, ?)";
@@ -149,36 +193,6 @@ lnb::general::general(std::string_view path)
     }
     if (general.contains("mono_font_size")) {
       mono_font_size_ = general.value("mono_font_size").toInt(mono_font_size_);
-    }
-    if (general.contains("max_tool_calls")) {
-      max_tool_calls_ = std::max(1, general.value("max_tool_calls").toInt(max_tool_calls_));
-    }
-    if (general.contains("model_context_tokens")) {
-      model_context_tokens_ = static_cast<std::size_t>(std::max(1024, general.value("model_context_tokens").toInt(static_cast<int>(model_context_tokens_))));
-    }
-    if (general.contains("response_token_budget")) {
-      response_token_budget_ = static_cast<std::size_t>(std::max(128, general.value("response_token_budget").toInt(static_cast<int>(response_token_budget_))));
-    }
-    if (general.contains("context_safety_margin_tokens")) {
-      context_safety_margin_tokens_ = static_cast<std::size_t>(std::max(0, general.value("context_safety_margin_tokens").toInt(static_cast<int>(context_safety_margin_tokens_))));
-    }
-    if (general.contains("summary_trigger_tokens")) {
-      summary_trigger_tokens_ = static_cast<std::size_t>(std::max(256, general.value("summary_trigger_tokens").toInt(static_cast<int>(summary_trigger_tokens_))));
-    }
-    if (general.contains("summary_token_budget")) {
-      summary_token_budget_ = static_cast<std::size_t>(std::max(128, general.value("summary_token_budget").toInt(static_cast<int>(summary_token_budget_))));
-    }
-    if (general.contains("summary_keep_tokens")) {
-      summary_keep_tokens_ = static_cast<std::size_t>(std::max(256, general.value("summary_keep_tokens").toInt(static_cast<int>(summary_keep_tokens_))));
-    }
-    if (general.contains("summary_reasoning_headroom_tokens")) {
-      summary_reasoning_headroom_tokens_ = static_cast<std::size_t>(std::max(0, general.value("summary_reasoning_headroom_tokens").toInt(static_cast<int>(summary_reasoning_headroom_tokens_))));
-    }
-    if (general.contains("max_tool_rounds")) {
-      max_tool_rounds_ = std::max(1, general.value("max_tool_rounds").toInt(max_tool_rounds_));
-    }
-    if (general.contains("tool_output_max_tokens")) {
-      tool_output_max_tokens_ = static_cast<std::size_t>(std::max(128, general.value("tool_output_max_tokens").toInt(static_cast<int>(tool_output_max_tokens_))));
     }
     if (general.contains("rendered_message_limit")) {
       rendered_message_limit_ =
@@ -292,19 +306,7 @@ void lnb::general::save() const {
 
   // general["background_override"] = QJsonValue(QJsonValue::Null);
 
-  // Generation/context budgets, so the file round-trips every knob.
-  general["model_context_tokens"] = static_cast<double>(model_context_tokens_);
-  general["response_token_budget"] = static_cast<double>(response_token_budget_);
-  general["context_safety_margin_tokens"] =
-      static_cast<double>(context_safety_margin_tokens_);
-  general["summary_trigger_tokens"] = static_cast<double>(summary_trigger_tokens_);
-  general["summary_token_budget"] = static_cast<double>(summary_token_budget_);
-  general["summary_keep_tokens"] = static_cast<double>(summary_keep_tokens_);
-  general["summary_reasoning_headroom_tokens"] =
-      static_cast<double>(summary_reasoning_headroom_tokens_);
-  general["max_tool_rounds"] = max_tool_rounds_;
-  general["max_tool_calls"] = max_tool_calls_;
-  general["tool_output_max_tokens"] = static_cast<double>(tool_output_max_tokens_);
+  // Transcript rendering window, so the file round-trips every knob.
   general["rendered_message_limit"] = rendered_message_limit_;
   general["history_page_size"] = history_page_size_;
 
@@ -639,6 +641,37 @@ void lnb::sqlite_interface::migrate() {
     ).execute();
   }
 
+  if (!column_exists("session", "model_context_tokens")) {
+    prepare(SQL_SESSION_MIGRATE_ADD_MODEL_CONTEXT).execute();
+  }
+  if (!column_exists("session", "response_token_budget")) {
+    prepare(SQL_SESSION_MIGRATE_ADD_RESPONSE_BUDGET).execute();
+  }
+  if (!column_exists("session", "context_safety_margin_tokens")) {
+    prepare(SQL_SESSION_MIGRATE_ADD_SAFETY_MARGIN).execute();
+  }
+  if (!column_exists("session", "summary_keep_tokens")) {
+    prepare(SQL_SESSION_MIGRATE_ADD_SUMMARY_KEEP).execute();
+  }
+  if (!column_exists("session", "summary_token_budget")) {
+    prepare(SQL_SESSION_MIGRATE_ADD_SUMMARY_BUDGET).execute();
+  }
+  if (!column_exists("session", "summary_reasoning_headroom_tokens")) {
+    prepare(SQL_SESSION_MIGRATE_ADD_SUMMARY_HEADROOM).execute();
+  }
+  if (!column_exists("session", "summary_trigger_tokens")) {
+    prepare(SQL_SESSION_MIGRATE_ADD_SUMMARY_TRIGGER).execute();
+  }
+  if (!column_exists("session", "max_tool_rounds")) {
+    prepare(SQL_SESSION_MIGRATE_ADD_MAX_TOOL_ROUNDS).execute();
+  }
+  if (!column_exists("session", "max_tool_calls")) {
+    prepare(SQL_SESSION_MIGRATE_ADD_MAX_TOOL_CALLS).execute();
+  }
+  if (!column_exists("session", "tool_output_max_tokens")) {
+    prepare(SQL_SESSION_MIGRATE_ADD_TOOL_OUTPUT_MAX).execute();
+  }
+
   // matches the current schema (and the SQL that queries it).
   if (column_exists("lorebook", "peer_id") &&
       !column_exists("lorebook", "session_id")) {
@@ -662,7 +695,18 @@ void lnb::db::update_session(const session& ses) {
   auto stmt = sql_.prepare(SQL_SESSION_UPDATE);
   stmt.bind(
     ses.title_, ses.custom_instructions_, ses.api_url_, ses.authentication_token_, ses.model_,
-    ses.proxy_, ses.shared_directory_, ses.memory_summary_, ses.memory_watermark_, ses.id_
+    ses.proxy_, ses.shared_directory_, ses.memory_summary_, ses.memory_watermark_,
+    static_cast<int>(ses.generation_.model_context_tokens_),
+    static_cast<int>(ses.generation_.response_token_budget_),
+    static_cast<int>(ses.generation_.context_safety_margin_tokens_),
+    static_cast<int>(ses.generation_.summary_keep_tokens_),
+    static_cast<int>(ses.generation_.summary_token_budget_),
+    static_cast<int>(ses.generation_.summary_reasoning_headroom_tokens_),
+    static_cast<int>(ses.generation_.summary_trigger_tokens_),
+    ses.generation_.max_tool_rounds_,
+    ses.generation_.max_tool_calls_,
+    static_cast<int>(ses.generation_.tool_output_max_tokens_),
+    ses.id_
   );
   stmt.execute();
 }
@@ -671,7 +715,17 @@ uint32_t lnb::db::insert_session(const session& ses) {
   auto stmt = sql_.prepare(SQL_SESSION_INSERT);
   stmt.bind(
     ses.title_, ses.custom_instructions_, ses.api_url_, ses.authentication_token_, ses.model_,
-    ses.proxy_, ses.shared_directory_, ses.memory_summary_, ses.memory_watermark_
+    ses.proxy_, ses.shared_directory_, ses.memory_summary_, ses.memory_watermark_,
+    static_cast<int>(ses.generation_.model_context_tokens_),
+    static_cast<int>(ses.generation_.response_token_budget_),
+    static_cast<int>(ses.generation_.context_safety_margin_tokens_),
+    static_cast<int>(ses.generation_.summary_keep_tokens_),
+    static_cast<int>(ses.generation_.summary_token_budget_),
+    static_cast<int>(ses.generation_.summary_reasoning_headroom_tokens_),
+    static_cast<int>(ses.generation_.summary_trigger_tokens_),
+    ses.generation_.max_tool_rounds_,
+    ses.generation_.max_tool_calls_,
+    static_cast<int>(ses.generation_.tool_output_max_tokens_)
   );
   const uint32_t id = stmt.execute_with_last_row_id();
   return id;
@@ -698,9 +752,23 @@ lnb::session_snapshot lnb::db::get_all_sessions() {
       stmt.column_text_opt(6),
       stmt.column_text_opt(7),
       stmt.column_text(8),
-      stmt.column_text_opt(10),
+      stmt.column_text_opt(20),
       stmt.column_uint32(9)
     );
+
+    // The generation budgets are not constructor parameters (they post-date the
+    // session shape), so they are attached after construction.
+    generation_settings& gen = sessions->back().generation_;
+    gen.model_context_tokens_ = static_cast<std::size_t>(stmt.column_int(10));
+    gen.response_token_budget_ = static_cast<std::size_t>(stmt.column_int(11));
+    gen.context_safety_margin_tokens_ = static_cast<std::size_t>(stmt.column_int(12));
+    gen.summary_keep_tokens_ = static_cast<std::size_t>(stmt.column_int(13));
+    gen.summary_token_budget_ = static_cast<std::size_t>(stmt.column_int(14));
+    gen.summary_reasoning_headroom_tokens_ = static_cast<std::size_t>(stmt.column_int(15));
+    gen.summary_trigger_tokens_ = static_cast<std::size_t>(stmt.column_int(16));
+    gen.max_tool_rounds_ = stmt.column_int(17);
+    gen.max_tool_calls_ = stmt.column_int(18);
+    gen.tool_output_max_tokens_ = static_cast<std::size_t>(stmt.column_int(19));
   }
 
   return sessions;
