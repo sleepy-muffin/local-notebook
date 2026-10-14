@@ -226,9 +226,8 @@
   },
 
   "default_metrics": {
-    "nav_width": 68,
     "sidebar_width": 280,
-    "bubble_radius": 16,
+    "bubble_radius": 8,
     "message_max_width": 640,
     "message_spacing": 12,
     "page_margin": 14,

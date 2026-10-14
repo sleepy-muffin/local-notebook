@@ -1,428 +1,309 @@
-# local-notebook
+# Local Notebook
 
-A small, local-first chat client built with Qt6 Widgets. It talks to an
-OpenAI-compatible chat-completions endpoint (the code targets a llama.cpp-style
-server) and stores everything in a local SQLite database.
+A local-first, assistant-backed notebook. One **assistant** per process, many
+**sessions**, and a two-level memory that keeps long conversations coherent
+without ever growing the prompt without bound.
 
-This document records the architecture and the design decisions that are not
-obvious from the code, so the project can keep evolving consistently.
+The interface is a flat, IDE-like shell in the spirit of [Zed](https://zed.dev) —
+low contrast, hand-drawn chrome, no speech bubbles or centred column — built with
+Qt Widgets, with no JavaScript anywhere in the stack.
+
+> **Status.** The application has been reconstructed from the ground up. The design
+> is frozen in `.local-notes/design-1.md`; the previous implementation is parked,
+> unbuilt, under `src/.old/`. The data format is new: no migration from the old
+> database or settings file is performed.
+
+---
+
+## Contents
+
+- [Key ideas](#key-ideas)
+- [Design principles](#design-principles)
+- [Architecture](#architecture)
+- [Data on disk](#data-on-disk)
+- [Configuration](#configuration)
+- [Memory and summarisation](#memory-and-summarisation)
+- [Tools and networking](#tools-and-networking)
+- [Interface](#interface)
+- [Building](#building)
+- [Running](#running)
+- [Tests](#tests)
+- [License](#license)
+
+---
+
+## Key ideas
+
+| Idea | Meaning |
+|---|---|
+| **One assistant per process** | The assistant is chosen at startup and fixed for the process's lifetime. Its *configuration* stays editable; its identity does not change mid-run. |
+| **Many sessions per assistant** | Each session is an independent conversation with its own transcript, instructions, shared directory and budgets. |
+| **Two-level memory** | A **session memory** (this conversation) and an **assistant memory** (what the assistant has learned about you across *all* sessions). Both are generated summaries; both are visible and editable. |
+| **Single-sourced configuration** | Every tunable has exactly one home. A value never has two sources of truth; a second appearance may only ever be a *validation*. |
+| **Local first** | Everything lives under `data/`. Secrets are plaintext for now; no cloud account, no telemetry. |
+
+## Design principles
+
+- **Explicit, reviewable memory.** The stored memory is shown in the session editor
+  and the assistant settings, where it can be read, edited and regenerated on demand.
+- **No derived budgets.** There is no "model context window" field feeding a
+  computed request size. The input bound is the session's own
+  `summary_trigger_tokens_`; the output bound is `response_token_budget_`. Nothing
+  is derived, so nothing can drift.
+- **Watermarks are bookkeeping only.** They count what is new so the automatic
+  summariser trigger can fire. They never decide what is sent, and never decide what
+  a summariser reads — so repeated manual summarisation is idempotent.
+- **Chrome drawn by hand.** Title bar, sidebar, session rows and toolbars are painted
+  with `QPalette` and `paintEvent`; the stylesheet is kept to small, scoped pieces.
+- **No `moc`.** There is no `Q_OBJECT` anywhere, so the build is a plain C++23
+  compile (with `AUTOMOC` off) and a single static core library.
+
+## Architecture
+
+```
+src/
+  model.hpp                 Role, Message, Session, Assistant
+  support/                  logging, the cancellable GenerationTask
+  store/                    SQLite wrapper, database, SessionManager/MessageManager
+  app/                      global settings, assistant I/O, the Application object
+  context/                  the pure context layer: windowing, triggers, summariser payloads
+  net/                      streaming client, proxy parsing, tools (filesystem + network)
+  ui/                       theme, chrome, main window, editors, settings
+```
+
+The layering keeps the interesting rules in **pure, testable functions** rather than
+inside the request loop:
+
+- `context::plan_window` — the verbatim window (the newest messages that fit).
+- `context::should_summarize` — the watermark-counted automatic trigger.
+- `context::summary_candidates` — the overflow to fold.
+- `context::session_summary_request` / `assistant_summary_request` — the internal
+  summariser payloads.
+- `context::clamp_tokens` — the per-tool-result bound.
+
+`net::client` speaks **Server-Sent Events** only: every request (chat *and* the
+internal summariser) asks for a stream, so there is a single, well-tested transport
+path.
+
+## Data on disk
+
+All paths are relative to the process working directory:
+
+```
+data/
+  settings.json            app-global settings (shared by every assistant)
+  <uuid>/
+    settings.json          assistant-level settings (identity, connection, memory, budgets)
+    data.db                SQLite: this assistant's sessions and messages
+```
+
+There is **no root registry**: the assistant picker discovers assistants by scanning
+`data/*/settings.json`. The `uuid` exists only to avoid directory collisions and
+never appears in the interface.
+
+### Schema
+
+One SQLite file per assistant.
+
+```sql
+CREATE TABLE session (
+  id                                INTEGER PRIMARY KEY AUTOINCREMENT,
+  title                             TEXT    NOT NULL DEFAULT '',
+  custom_instructions               TEXT    NOT NULL DEFAULT '',
+  memory                            TEXT    NOT NULL DEFAULT '',
+  memory_watermark                  INTEGER NOT NULL DEFAULT 0,
+  assistant_memory_watermark        INTEGER NOT NULL DEFAULT 0,
+  shared_directory                  TEXT,
+  summary_trigger_tokens            INTEGER NOT NULL DEFAULT 16000,
+  summary_token_budget              INTEGER NOT NULL DEFAULT 4000,
+  summary_reasoning_headroom_tokens INTEGER NOT NULL DEFAULT 12000,
+  max_tool_rounds                   INTEGER NOT NULL DEFAULT 8,
+  max_tool_calls                    INTEGER NOT NULL DEFAULT 32,
+  tool_output_max_tokens            INTEGER NOT NULL DEFAULT 8000,
+  response_token_budget             INTEGER NOT NULL DEFAULT 8000
+);
+
+CREATE TABLE message (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  role       INTEGER NOT NULL,   -- 0 = user, 1 = assistant
+  content    TEXT    NOT NULL,
+  made_at    TEXT    NOT NULL    -- ISO-8601 UTC, so sessions interleave by time
+);
+```
+
+A session's position in the sidebar is a **query** (`MAX(made_at)` per session), not
+a stored column. `made_at` is required because the assistant memory gathers messages
+from every session, interleaved by time.
+
+## Configuration
+
+Configuration lives at three levels, matching the three things it configures.
+
+### Global — `data/settings.json`
+
+Theme, fonts, window geometry, background image and tint, and the transcript
+rendering window. It also holds `auto_login` (reopen the last assistant at startup,
+or always show the picker).
+
+Sizing and spacing are **theme metrics** (`ThemeMetrics`): sidebar width, page
+margin, message spacing, composer height, title font size, session item height,
+reading rhythm (line heights and paragraph spacing), flow max width and bubble
+radius. The theme file (`themes/theme.json`) supplies defaults; `settings.json`
+stores only overrides.
+
+### Assistant — `data/<uuid>/settings.json`
+
+Identity and connection (`name`, `model`, `api_url`, `authentication_token`,
+`proxy`), `custom_instructions`, the assistant `memory`, and the assistant-level
+summariser budgets:
+
+| Field | Job |
+|---|---|
+| `summary_token_budget_` | Target size of the generated assistant memory. |
+| `summary_reasoning_headroom_tokens_` | Completion headroom for a reasoning model's hidden thinking. |
+| `summary_trigger_tokens_` | New tokens across **all** sessions that trigger the summariser; also the cap on the recent-message pool. |
+| `summary_token_budget_for_session_summarization_` | Cap on the per-session summaries included in the assistant fold. |
+
+### Session — the `session` row
+
+`title`, `custom_instructions`, `memory`, the two watermarks, `shared_directory`, and
+every session-bound budget (`summary_trigger_tokens_`, `summary_token_budget_`,
+`summary_reasoning_headroom_tokens_`, `max_tool_rounds_`, `max_tool_calls_`,
+`tool_output_max_tokens_`, `response_token_budget_`). Edited in the scrollable
+session editor.
+
+## Memory and summarisation
+
+A request for a prompt in session `S` of assistant `A` is assembled in order:
+
+1. **system** — `A.custom_instructions_` + `S.custom_instructions_`, under separate headers.
+2. **assistant memory** — `A.memory_`, shared across sessions.
+3. **session memory** — `S.memory_`.
+4. **verbatim window** — the newest messages of `S` that fit `S.summary_trigger_tokens_`,
+   with the message that crosses the boundary kept whole.
+5. **tools** — network tools always; filesystem tools when the session has a shared directory.
+
+### Session summarisation
+
+`S.summary_trigger_tokens_` is a single knob with three jobs: the verbatim **window**,
+the automatic **trigger** (new tokens above `memory_watermark_`), and the summarisation
+**granularity** (everything older than the window is the overflow that gets folded).
+The summariser rewrites `S.memory_` from the previous memory plus that overflow, in
+batches if it does not fit one call, so nothing is silently dropped. Manual
+summarisation ignores the trigger but reads the same overflow — pressing it twice with
+no new messages produces the same memory.
+
+### Assistant summarisation
+
+Gathers across **all** sessions into one `A.memory_`, by recency and independent of the
+watermarks, so it too is idempotent. Two **separate** pools are gathered and never
+mixed: the **recent messages** (interleaved by time, capped by `summary_trigger_tokens_`)
+and the **compacted historical messages** (each session's memory, newest session first,
+capped by `summary_token_budget_for_session_summarization_`). A session may contribute
+either block, both, or neither; sessions that do not fit are omitted, so older sessions
+may be forgotten.
+
+The summariser is an **internal LLM call**, not a tool call: it runs on a silent task
+so its text never reaches the visible transcript.
+
+## Tools and networking
+
+- **Filesystem** (only when the session has a `shared_directory`): `search_code` and
+  `list_directory`. Paths are resolved against the shared directory and anything that
+  would escape it — including through symlinks — is rejected.
+- **Network** (always available): `fetch_url` (fetch a page and return its readable
+  text) and `web_search`.
+
+Each tool result is bounded by `tool_output_max_tokens_`, and the in-turn loop by
+`max_tool_rounds_` / `max_tool_calls_`, so the context cannot grow without limit
+during a turn.
+
+**Proxy.** A session may configure a proxy; the scheme selects the type, and a bare
+`host:port` keeps the historical SOCKS5 meaning:
+
+| Spec | Meaning |
+|---|---|
+| `host:port` | SOCKS5 |
+| `socks5://host:port` | SOCKS5 |
+| `socks5h://host:port` | SOCKS5, DNS resolved by the proxy |
+| `http://host:port`, `https://host:port` | HTTP CONNECT tunnel |
+| `scheme://user:password@host:port` | the same, with credentials |
+
+## Interface
+
+A two-pane shell:
+
+- **Sidebar** — a calm `Local Notebook` banner, a `SESSIONS` category label, the
+  session list (newest activity first, ordered by the time of the last message), a
+  `New Session` button, and the current-session block (name, `Session #id`, a settings
+  button). Each session row reveals an **edit** pencil and a **trash** action on hover;
+  deleting asks for confirmation. The selected row is only slightly brighter — no
+  strong accent highlight.
+- **Chat pane** — a narrow title bar (session title and id on the left; context-token
+  usage and the last-message time on the right) above the transcript. All messages
+  share one width and one left edge, the way Zed's agent panel reads; the user's own
+  message is a rounded, bordered block matching the composer, and assistant replies are
+  rendered Markdown with code blocks and a copy button. Hovering a message reveals its
+  `#id` and its copy/edit/delete actions.
+- **Composer** — shares the conversation flow's background; the input field uses the
+  same surface as the user's message block. Enter behaviour is configurable
+  (`enter_with_modifier`).
+
+Windows:
+
+- **Assistant picker** — choose, create or edit an assistant at startup, with an
+  auto-login checkbox. Never shows API keys or URLs.
+- **Settings** — a left navigation with **Configuration**, **Metrics**, **Assistant**,
+  **Account** and **About**. The Assistant page edits the open assistant's
+  configuration *and* shows its memory, with a manual **Summarize now**. Save applies
+  everything, re-applies the theme at runtime, and closes the window.
+- **Session editor** — title, shared directory, custom instructions, conversation
+  memory (with **Summarize now**), watermarks and budgets. Scrollable.
+
+Two performance measures keep long conversations responsive: the transcript renders
+only the most recent messages (older ones are revealed a page at a time), and the
+background is a cached pixmap.
 
 ## Building
 
-The project uses CMake presets and Ninja.
+Requirements: a C++23 compiler (Clang is configured), CMake ≥ 3.31, Ninja, Qt 6
+(`Core`, `Gui`, `Widgets`, `Network`) and SQLite 3.
 
 ```sh
 cmake --preset linux-x64-debug
-cmake --build build/linux-x64-debug
+cmake --build build/linux-x64-debug -j 8
 ```
 
-Replace `linux-x64-debug` with `linux-x64-release` for a release build.
+A `linux-x64-release` preset is also provided.
 
 ## Running
 
-The application opens `local-notebook.json` and `local-notebook.db` **relative to the current
-working directory**, and expects the `run/` directory to be that directory
-(it already contains `local-notebook.json`, `local-notebook.db` and the background image).
-Launch it from `run/`:
+`data/` is resolved relative to the working directory, so run the binary from the
+directory that should hold the data:
 
 ```sh
-(cd run && ../build/linux-x64-debug/local-notebook)
-# or
-env -C run ../build/linux-x64-debug/local-notebook
+cd run
+../build/linux-x64-debug/local-notebook
 ```
 
-Alternatively use the Zed tasks defined in `.zed/tasks.json`
-(`task: spawn`), which set the working directory correctly for you.
+On first run the assistant picker appears. Create an assistant (name, model, API URL,
+token, optional proxy, instructions and budgets), then start a session.
 
-## Overview
+## Tests
 
-At startup `Logon` asks you to pick an identity (one of the stored sessions).
-That identity becomes `ApplicationState::self_id_`. `MainWindow` then lists all
-*other* sessions as chat targets; a session can never talk to itself.
+Two dependency-free suites, registered with CTest:
 
-A "session" is a configured peer: title, custom instructions, API URL, token,
-model, optional SOCKS5 proxy and an optional shared directory for the local
-tools. Conversations are stored as messages between `(sender_id, reader_id)`
-pairs, so a session's transcript is exactly the messages exchanged between the
-logged-in identity and that session.
-
-`local-notebook.json` groups the general settings under a `general` object and
-an optional set of layout overrides under `metrics` (the older flat format, with
-those keys at the top level, is still accepted). The `general` object also
-accepts the following generation settings (omitted keys keep these production
-defaults):
-
-```json
-{
-  "general": {
-    "model_context_tokens": 128000,
-    "response_token_budget": 12000,
-    "context_safety_margin_tokens": 4000,
-    "summary_trigger_tokens": 80000,
-    "summary_token_budget": 4000,
-    "summary_keep_tokens": 20000,
-    "max_tool_rounds": 8,
-    "max_tool_calls": 32,
-    "tool_output_max_tokens": 2000,
-    "rendered_message_limit": 50,
-    "history_page_size": 50
-  }
-}
+```sh
+ctest --test-dir build/linux-x64-debug --output-on-failure
 ```
 
-The payload builder reserves response and safety tokens, retains the newest
-messages that fit, and keeps custom instructions separate from the persisted
-session memory summary. Tool rounds, total tool calls and the size of each tool
-result are independently bounded, so the in-turn tool loop can never grow the
-context without limit.
+- **`store`** — headless: the store layer, session/message round-trips, ordering,
+  cascade delete, and the summariser payload shape.
+- **`ui`** — offscreen (`QT_QPA_PLATFORM=offscreen`): window chrome invariants, the
+  sidebar populating at startup, settings persistence, the shared assistant form, the
+  settings navigation, and the wheel-safe spin boxes.
 
-### Conversation memory (automatic summarisation)
+## License
 
-A long conversation cannot fit in the model context, so the oldest turns are
-folded into a per-session **memory summary** before each request:
-
-- `summary_trigger_tokens` is the soft threshold. Once the part of the
-  conversation that actually reaches the model (system prompt + not-yet-folded
-  messages) reaches it, the oldest turns are summarised.
-- `summary_keep_tokens` is how much of the newest transcript is always kept
-  **verbatim**; only messages older than that window are folded.
-- `summary_token_budget` caps the length of the generated summary.
-
-The summary is produced by an internal (non-tool) LLM call: the model is asked
-to merge the older turns into the existing memory and return only the updated
-text. It runs on the worker thread before the real request, is best-effort (a
-failure is logged and the turn continues), and is never shown in the chat. The
-result is stored on the session (`memory_summary`) together with a
-`memory_watermark` — the highest message id already folded — so a message is
-never both summarised and repeated verbatim, and each pass only has to look at
-the not-yet-summarised tail.
-
-Every request is therefore `custom instructions + memory summary + the recent
-verbatim window`. Because the summary lives in the system prompt, it is counted
-exactly once. The same budgeting rules (in `context_manager.*`) also bound the
-in-turn tool loop: each tool result is capped at `tool_output_max_tokens`, and
-the running payload is trimmed back to the request budget between rounds.
-
-`rendered_message_limit` bounds how many of the newest messages the transcript
-renders at once; older messages stay loaded in memory but out of the widget tree
-until the reader reveals them, either by scrolling to the top or with the **Load
-earlier messages** button. `history_page_size` is how many are revealed per
-step. Both only affect rendering: the full history is still sent to the model.
-
-Configuration is persisted: the Settings window's **Apply** button writes
-`local-notebook.json` back (via `lnb::general::save()`), and the file is also
-rewritten when the configuration object is destroyed at shutdown.
-
-
-```
-launcher.cpp            Owns ApplicationState, applies the theme, shows Logon then MainWindow.
-ui/Logon.*              Identity picker + session list (also allows adding).
-ui/MainWindow.*         Navigation, session list, and the stacked chat panes.
-ui/ConversationView.*   Pure UI for one conversation (transcript + composer).
-ui/ConversationController.*  State/glue for one conversation (one per session).
-ui/SessionEditor.*      Add/edit a session dialog.
-ui/theme.*              Named themes + metrics from theme.json; palette/QSS/background.
-ui/BackgroundWidget.*   Base layer that paints the background image or window colour.
-external.*              Payload assembly, streaming HTTP, tool-call loop.
-external_tools.*        Sandboxed local tools (search_code, read_file).
-db.*                    SQLite persistence (sessions, messages) + config loading.
-generation_task.hpp     Thread-safe state of an in-flight generation.
-external/mmc            Vendored helper library (logging, threads, strings).
-themes/theme.json       Bundled theme definitions (embedded into the binary).
-```
-
-### Layers
-
-- **`ConversationView`** is deliberately passive: it renders state and forwards
-  user intent through `std::function` callbacks (`set_on_send`,
-  `set_on_cancel`, `set_on_delete_message`). It contains no conversation logic.
-- **`ConversationController`** owns the state of one conversation: the
-  transcript, the current `GenerationTask`, and the wiring to the database and
-  the worker pool. All of its methods run on the GUI thread.
-- **`external.cpp`** contains the network code. `generate_reply()` runs a whole
-  assistant turn, including the tool-call loop; `send_message_llama_once()`
-  performs a single streaming request. Requests go through Qt's
-  `QNetworkAccessManager` and the payload is built from Qt JSON
-  (`QJsonObject`/`QJsonArray`), so neither Boost.Beast nor Boost.JSON is used
-  by the application. The SSE response is decoded by a small `SseStream`
-  helper. Cancellation is observed from inside the request's Qt event loop: a
-  timer polls the stop token and aborts the reply.
-- **`context_manager.*`** is the context-budgeting layer. It is pure logic (no
-  I/O): it estimates message/prompt token costs, plans the verbatim window,
-  decides when to summarise, builds the internal summarisation request, clamps a
-  tool result to a token budget, and trims a payload back to budget without
-  orphaning a tool result. Keeping these rules here (rather than inside
-  `generate_reply`) keeps the network loop small and the budgeting testable.
-  `external.cpp`'s `maybe_summarize()` uses it to fold older turns into the
-  session memory before a request is built.
-- **`external_tools.*`** implement the two local tools (`search_code`,
-  `read_file`) against the session's shared directory. Tool failures are
-  returned to the model as text so it can correct its arguments.
-
-> Note: the codebase does **not** use Qt's `moc`/`Q_OBJECT` (there is no
-> `AUTOMOC` in `CMakeLists.txt`). New UI code follows the same convention:
-> `std::function` callbacks and connections to existing Qt signals, never
-> custom signals/slots.
-
-## Theming and appearance
-
-All colours and most layout metrics live in `themes/theme.json`, which is
-**embedded into the binary** through Qt's resource system (so a fresh build
-needs no extra files next to it). If `:/themes/theme.json` cannot be read, the
-application falls back to a `theme.json` in the current working directory.
-
-The file has two top-level sections:
-
-- `themes`: a map from a theme name to `{ dark, colors, metrics }`. Eight
-  Catppuccin variants ship by default: the four opaque themes (`Catppuccin
-  Mocha`, `Catppuccin Macchiato`, `Catppuccin Frappe`, `Catppuccin Latte`) and
-  four `... (Translucent)` counterparts meant for background-image mode (see
-  below). Every theme uses Catppuccin **pink** as its accent colour.
-- `default_metrics`: the fallback layout metrics, which each theme may override
-  through its own `metrics` object. The knobs are `nav_width`, `sidebar_width`,
-  `bubble_radius`, `message_max_width`, `message_spacing`, `page_margin`,
-  `composer_height`, `title_font_size`, `session_item_height` (the height of a row
-  in the session list) and the chat-text knobs `line_height_other`,
-  `line_height_self`, `paragraph_spacing` and `list_paragraph_spacing`.
-
-The same metrics can be overridden per installation under the `metrics` section
-of `local-notebook.json`; when that section is present it takes precedence over
-the theme's values (the Settings window edits it). See
-`src/ui/metrics.hpp` for the full struct.
-
-A colour is a four-element array. Channels above `1` are read as 0-255, while
-values `<= 1` are read as normalised floats; the fourth element is always the
-alpha (0-1). See `lnb::load_color` in `src/ui.hpp`.
-
-### Selecting a theme
-
-The configuration key `theme` selects a theme **by name**:
-
-```json
-"theme": "Catppuccin Mocha"
-```
-
-An unknown name falls back to the first theme in `theme.json`, and a missing
-`theme.json` falls back to a hard-coded Catppuccin Mocha palette, so the app
-always starts with a coherent look. `ui::apply_theme()` (called once from
-`launcher.cpp` before any window is created) installs the Breeze style, the
-`QPalette`, a generated global stylesheet and the configured fonts.
-
-`ui::theme()` exposes the active theme to widgets. The theme is chosen at startup
-from the `theme` key; the Settings window (opened from the session card) can
-re-apply a different theme and edited metrics at runtime through
-`ui::apply_theme()`.
-
-### Background image
-
-The optional `background_url` key names an image **relative to the current
-working directory**. When it loads successfully:
-
-- the top-level window background and the transcript canvas become transparent
-  so the image shows through, and
-- `background_override` (a four-element colour) is painted over the *whole*
-  background - right above the image and below every component. Components
-  (navigation, sidebar, cards, composer field, menus, bubbles) keep their
-  palette colours, so the override never changes them. Set
-  `background_override` to `null` to show the image untinted.
-
-The image and the tint are painted by `ui::BackgroundWidget`, which is used as
-the central widget of both windows and scales the picture to *cover* the widget
-(keeping the aspect ratio and centre-cropping). The cover-fit is rendered in
-device pixels and tagged with the widget's device pixel ratio, so the image
-stays sharp on scaled displays (for example Wayland at 125%/150%) even though
-the components are drawn at logical size. This widget also paints the theme
-window colour when no image is set, which is what removed the thin unpainted
-line that window managers used to show above the content area.
-
-> The old keys `dark_mode` and `background` (and an object-valued `theme`) are no
-> longer used; `background` is still accepted as an alias of `background_url`.
-
-### Translucent themes
-
-Every opaque theme has a `... (Translucent)` counterpart, intended for
-background-image mode. They keep the same pink accent but give the component
-colours a low alpha (`surface` `0.55`, `base` `0.38`, bubbles `0.5`, `border`
-`0.35`, and the code background `0.55`), so the navigation, sidebar, composer
-field and bubbles become subtly
-see-through and the tinted image shows through them. Text stays fully opaque and
-`window` keeps a high alpha so dialogs stay readable. Select one with the
-`theme` key:
-
-```json
-"theme": "Catppuccin Mocha (Translucent)"
-```
-
-### Fonts
-
-Six configuration keys control typography, split between the chat area, the
-code inside replies, and the rest of the interface:
-
-| key | scope | default |
-| --- | --- | --- |
-| `ui_font` | every widget (the application font) | the platform default |
-| `ui_font_size` | point size of `ui_font`; `0` keeps the platform default | `0` |
-| `font` | the conversation transcript and composer only | inherits `ui_font` |
-| `font_size` | point size of `font`; `0` keeps `ui_font_size` | `12` |
-| `mono_font` | code in replies (fenced blocks and inline `code`) | the system fixed-pitch font |
-| `mono_font_size` | point size of `mono_font`; `0` keeps the chat size | `0` |
-
-The chat font is derived from the UI font, so leaving `font`/`font_size` unset
-makes the chat match the interface. `ui::ui_font()`, `ui::chat_font()` and
-`ui::mono_font()` expose the resolved fonts; `ConversationView` applies
-`chat_font()` to the message labels and the composer and `mono_font()` to code,
-while everything else follows the application font.
-
-### Reading rhythm
-
-Three theme metrics keep the transcript airy (ChatGPT-style) instead of compact.
-They live under `default_metrics` (or a theme's own `metrics`, or the `metrics`
-section of `local-notebook.json`) and are applied by `ConversationView` through
-`QTextBlockFormat`, so they affect every message body:
-
-| metric | meaning | default |
-| --- | --- | --- |
-| `line_height_other` | assistant line height as a percentage (`100` is normal single spacing) | `160` |
-| `line_height_self` | user-message line height as a percentage | `135` |
-| `paragraph_spacing` | gap left after each prose paragraph, in pixels | `10` |
-| `list_paragraph_spacing` | gap left after each list item, in pixels | `0` |
-
-The assistant line height is applied to assistant blocks, while user messages use
-`line_height_self`. The paragraph gap is added only after prose paragraphs
-and never after the final one (code blocks stay tight and the closing edge is
-flush). List items use `list_paragraph_spacing` instead, so a list stays tight by
-default. Both line heights are clamped to at least `100` to avoid clipping lines;
-the spacing knobs may be `0`.
-
-### Message width
-
-| metric | meaning | default |
-| --- | --- | --- |
-| `message_max_width` | maximum width of a message body in pixels; `0` means unlimited | `640` |
-
-`ui::message_max_width()` exposes the value (where `0` means "no limit"), and
-`ConversationView` centres the transcript column once the pane is wider than it,
-so bubbles pull away from both edges instead of hugging the left.
-
-### Composer
-
-| key | meaning | default |
-| --- | --- | --- |
-| `enter_with_modifier` | `true`: Ctrl+Enter sends and Enter inserts a line break; `false`: Enter sends and Shift+Enter inserts a line break | `true` |
-
-The composer placeholder reflects the active mode, so the shortcut is always
-discoverable.
-
-### Components and hover affordances
-
-The look leans on a few conventions that are worth keeping consistent:
-
-- **The navigation rail is icon-only.** `MainWindow` builds it from checkable
-  `QToolButton`s (object name `NavButton`) inside a `QButtonGroup`; each label is
-  a tooltip rather than a caption.
-- **Message actions appear on hover.** A `MessageRow` keeps a fixed-height
-  action strip under every message; the icon-only buttons only appear while the
-  pointer is over the entry, so revealing them never reflows the transcript.
-- **Hints use native tooltips.** Labels are surfaced with `QToolTip`
-  (`setToolTip`), never by resizing or restyling the widget itself.
-- **Only user messages are wrapped in a bubble.** Assistant replies are rendered
-  as bare text (no bubble), ChatGPT-style, and differ from user messages by
-  alignment alone. Error messages keep a danger-coloured bubble.
-- **Code is highlighted without extra dependencies.** Code in replies uses
-  `mono_font()`. Fenced blocks are drawn as rounded `#CodeBlock` frames on the
-  `bubble_assistant_code` colour (a shade darker than `base` in dark themes, a
-  touch brighter in the light theme); inline spans keep their own background.
-  Rich text cannot round a background, which is why fenced blocks are real
-  frames; inline code stays square.
-
-## Conversation semantics
-
-These behaviours were chosen deliberately:
-
-- **Per-session state.** Each conversation has its own persistent
-  `ConversationView` (kept alive in a `QStackedWidget`) and its own
-  `ConversationController`. Switching sessions therefore never touches the
-  other session's state.
-- **Streaming is not tied to visibility.** Generation runs on a worker thread
-  and advances even while its session is not on screen. A single `QTimer`
-  (33 ms) polls *every* controller, so background generations still progress
-  and still get persisted when they finish.
-- **Drafts are per session and in memory only.** Because each session has its
-  own composer widget, the unsent text travels with the session when you switch
-  away and back. Drafts are intentionally **not** persisted across restarts.
-- **At most one generation per session.** While a session is generating its
-  send button/Enter are disabled; the UI shows a Cancel button instead.
-- **Cancel discards the assistant output.** Cancelling stops the request and
-  does **not** write the partial reply to the database; `reload()` then removes
-  it from the screen as well. The user's own message, however, is already
-  persisted (and stays visible), so re-sending simply appends another turn.
-- **Only completed turns are persisted.** The assistant reply is written to the
-  database only when generation completes successfully with non-empty content.
-- **Tool calls are executed inline.** `generate_reply()` executes the requested
-  local tools against the session's `shared_directory`, feeds the results back,
-  and repeats (capped by `max_tool_rounds` / `max_tool_calls`). Each tool result
-  is clamped to `tool_output_max_tokens`, and the running payload is trimmed
-  back to the request budget between rounds, so the loop cannot overflow the
-  context window. The chat shows at most one transient, human-readable status
-  title (for example, `Reading files...`) while a tool is running; tool
-  arguments and results are never shown or persisted.
-- **Assistant replies render light Markdown.** The reply Markdown is split into
-  prose and fenced-code segments (`MessageBubble::parse_segments`). Each prose
-  segment is imported into a `QTextDocument` (no extra dependency) and shown as a
-  rich-text label, so headings, emphasis, lists and links are supported
-  (blockquotes are not). Each fenced block becomes a rounded `#CodeBlock` frame
-  wrapping a `mono_font()` label, because a `QTextDocument` cannot round a block
-  background. User messages and errors stay plain text. While a reply streams the
-  block shape is compared to the previous one and labels are updated in place
-  when it is unchanged, so a growing reply neither flickers nor is rebuilt on
-  every token; text is re-rendered at most every 50 ms.
-- **Full-width message rows.** User and assistant messages occupy the same
-  available transcript width and are left-aligned; message length no longer
-  determines the row width.
-  the viewport (a leading stretch in the transcript layout), so a short
-  conversation does not leave a large empty gap below the last message.
-- **Deleting and editing a message.** Hovering a stored message reveals an
-  icon-only action strip (native tooltips: "Edit message" / "Delete message").
-  Editing rewrites the row in the database; deleting removes it. Both reload the
-  transcript. The strip has a constant height, so it never reflows the view.
-
-## Threading model
-
-- `mmc::async::multi_executor` is a small condition-variable-based thread pool
-  (3 worker threads). Jobs are picked up immediately when queued.
-- A generation job runs on a worker thread and shares state with the GUI
-  thread only through the thread-safe `GenerationTask`. The job creates its own
-  `QNetworkAccessManager` and drives a local `QEventLoop` for the request, but
-  it never touches widgets or the shared Qt object graph.
-- All widget updates, database writes and finalization happen on the GUI thread
-  via the polling timer.
-- On window close every controller is cancelled so the worker pool can be
-  joined promptly during shutdown.
-
-## Database migrations
-
-`sqlite_interface::migrate()` runs whenever the database is opened and brings
-older databases up to the current schema. In particular, databases created
-before the peer→session renaming still name the lorebook owner column
-`peer_id`; it is renamed to `session_id` (data-preserving, no rows touched) so
-that the lorebook queries match the current code. Without this migration those
-queries fail and, because they run from a Qt event handler, abort the process.
-
-## Known limitations / possible follow-ups
-
-- Background images are painted by the application itself (`BackgroundWidget`);
-  the windows are never made translucent at the compositor level. Keeping them
-  opaque avoids the earlier glitch where bubbles appeared to bleed onto the KWin
-  title bar.
-- The theme (including the background image path and the fonts) is read once at
-  startup; there is no live theme switching yet. The only exception is the
-  message action icons, which follow the system icon theme at runtime.
-- Cancellation is observed from inside the request's Qt event loop, so a
-  blocked DNS resolution or TLS handshake is not interruptible. A stalled
-  request is bounded by the manager's 60 s transfer (inactivity) timeout.
-- A message body cannot shrink below the width of its longest unbreakable
-token (a long URL, identifier or code line) because `QLabel` wraps only at word
-boundaries. Such a message raises the window's minimum width, so the window can
-no longer be narrowed until that message scrolls out of the layout. A future
-"wrap anywhere" text widget would lift this.
-- The Settings and Profile pages are placeholders.
+MIT — see [LICENSE.txt](LICENSE.txt).

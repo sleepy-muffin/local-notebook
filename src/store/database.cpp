@@ -1,0 +1,271 @@
+#include "store/database.hpp"
+
+#include <algorithm>
+
+namespace lnb::store {
+
+namespace {
+
+// design-1.md §9. The schema is versioned via PRAGMA user_version so future
+// migrations have a starting point; this is a fresh start, so there is no
+// migration from the legacy database.
+constexpr std::string_view SCHEMA = R"sql(
+PRAGMA user_version = 1;
+
+CREATE TABLE IF NOT EXISTS session (
+  id                                INTEGER PRIMARY KEY AUTOINCREMENT,
+  title                             TEXT    NOT NULL DEFAULT '',
+  custom_instructions               TEXT    NOT NULL DEFAULT '',
+  memory                            TEXT    NOT NULL DEFAULT '',
+  memory_watermark                  INTEGER NOT NULL DEFAULT 0,
+  assistant_memory_watermark        INTEGER NOT NULL DEFAULT 0,
+  shared_directory                  TEXT,
+  summary_trigger_tokens            INTEGER NOT NULL DEFAULT 16000,
+  summary_token_budget              INTEGER NOT NULL DEFAULT 4000,
+  summary_reasoning_headroom_tokens INTEGER NOT NULL DEFAULT 12000,
+  max_tool_rounds                   INTEGER NOT NULL DEFAULT 8,
+  max_tool_calls                    INTEGER NOT NULL DEFAULT 32,
+  tool_output_max_tokens            INTEGER NOT NULL DEFAULT 8000,
+  response_token_budget             INTEGER NOT NULL DEFAULT 8000
+);
+
+CREATE TABLE IF NOT EXISTS message (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  role       INTEGER NOT NULL,
+  content    TEXT    NOT NULL,
+  made_at    TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_message_session ON message(session_id, id);
+CREATE INDEX IF NOT EXISTS idx_message_made_at ON message(made_at);
+)sql";
+
+constexpr std::string_view SESSION_COLUMNS =
+  "id, title, custom_instructions, memory, memory_watermark, "
+  "assistant_memory_watermark, shared_directory, summary_trigger_tokens, "
+  "summary_token_budget, summary_reasoning_headroom_tokens, max_tool_rounds, "
+  "max_tool_calls, tool_output_max_tokens, response_token_budget";
+
+constexpr std::string_view MESSAGE_COLUMNS = "id, session_id, role, content, made_at";
+
+Session read_session(const statement& stmt) {
+  Session session;
+  session.id_ = stmt.column_uint32(0);
+  session.title_ = stmt.column_text(1);
+  session.custom_instructions_ = stmt.column_text(2);
+  session.memory_ = stmt.column_text(3);
+  session.memory_watermark_ = stmt.column_uint32(4);
+  session.assistant_memory_watermark_ = stmt.column_uint32(5);
+  session.shared_directory_ = stmt.column_text_opt(6);
+  session.summary_trigger_tokens_ = static_cast<std::size_t>(stmt.column_int(7));
+  session.summary_token_budget_ = static_cast<std::size_t>(stmt.column_int(8));
+  session.summary_reasoning_headroom_tokens_ = static_cast<std::size_t>(stmt.column_int(9));
+  session.max_tool_rounds_ = static_cast<std::size_t>(stmt.column_int(10));
+  session.max_tool_calls_ = static_cast<std::size_t>(stmt.column_int(11));
+  session.tool_output_max_tokens_ = static_cast<std::size_t>(stmt.column_int(12));
+  session.response_token_budget_ = static_cast<std::size_t>(stmt.column_int(13));
+  return session;
+}
+
+Message read_message(const statement& stmt) {
+  Message message;
+  message.id_ = stmt.column_uint32(0);
+  message.session_id_ = stmt.column_uint32(1);
+  message.role_ = static_cast<Role>(stmt.column_int(2));
+  message.content_ = stmt.column_text(3);
+  message.made_at_ = stmt.column_text(4);
+  return message;
+}
+
+} // namespace
+
+database::database(std::string_view path) : connection_(path) {
+  connection_.exec(SCHEMA);
+}
+
+std::uint32_t database::insert_session(const Session& session) {
+  auto stmt = connection_.prepare(
+    "INSERT INTO session (title, custom_instructions, memory, memory_watermark, "
+    "assistant_memory_watermark, shared_directory, summary_trigger_tokens, "
+    "summary_token_budget, summary_reasoning_headroom_tokens, max_tool_rounds, "
+    "max_tool_calls, tool_output_max_tokens, response_token_budget) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  );
+  stmt.bind(
+    session.title_, session.custom_instructions_, session.memory_,
+    session.memory_watermark_, session.assistant_memory_watermark_,
+    session.shared_directory_, static_cast<int>(session.summary_trigger_tokens_),
+    static_cast<int>(session.summary_token_budget_),
+    static_cast<int>(session.summary_reasoning_headroom_tokens_),
+    static_cast<int>(session.max_tool_rounds_),
+    static_cast<int>(session.max_tool_calls_),
+    static_cast<int>(session.tool_output_max_tokens_),
+    static_cast<int>(session.response_token_budget_)
+  );
+  return stmt.execute_with_last_row_id();
+}
+
+void database::update_session(const Session& session) {
+  auto stmt = connection_.prepare(
+    "UPDATE session SET title = ?, custom_instructions = ?, memory = ?, "
+    "memory_watermark = ?, assistant_memory_watermark = ?, shared_directory = ?, "
+    "summary_trigger_tokens = ?, summary_token_budget = ?, "
+    "summary_reasoning_headroom_tokens = ?, max_tool_rounds = ?, "
+    "max_tool_calls = ?, tool_output_max_tokens = ?, response_token_budget = ? "
+    "WHERE id = ?"
+  );
+  stmt.bind(
+    session.title_, session.custom_instructions_, session.memory_,
+    session.memory_watermark_, session.assistant_memory_watermark_,
+    session.shared_directory_, static_cast<int>(session.summary_trigger_tokens_),
+    static_cast<int>(session.summary_token_budget_),
+    static_cast<int>(session.summary_reasoning_headroom_tokens_),
+    static_cast<int>(session.max_tool_rounds_),
+    static_cast<int>(session.max_tool_calls_),
+    static_cast<int>(session.tool_output_max_tokens_),
+    static_cast<int>(session.response_token_budget_), session.id_
+  );
+  stmt.execute();
+}
+
+void database::remove_session(std::uint32_t session_id) {
+  auto stmt = connection_.prepare("DELETE FROM session WHERE id = ?");
+  stmt.bind(session_id);
+  stmt.execute();
+}
+
+std::optional<Session> database::session(std::uint32_t session_id) const {
+  auto stmt = connection_.prepare(
+    "SELECT " + std::string(SESSION_COLUMNS) + " FROM session WHERE id = ?"
+  );
+  stmt.bind(session_id);
+  if (stmt.step()) {
+    return read_session(stmt);
+  }
+  return std::nullopt;
+}
+
+std::vector<Session> database::sessions_by_recent(
+  std::optional<std::size_t> limit
+) const {
+  std::string sql =
+    "SELECT " + std::string(SESSION_COLUMNS) +
+    ", (SELECT MAX(made_at) FROM message WHERE message.session_id = session.id) AS last_at "
+    "FROM session ORDER BY last_at IS NULL, last_at DESC, id DESC";
+  if (limit) {
+    sql += " LIMIT ?";
+  }
+
+  auto stmt = connection_.prepare(sql);
+  if (limit) {
+    stmt.bind(static_cast<int>(*limit));
+  }
+
+  std::vector<Session> sessions;
+  while (stmt.step()) {
+    sessions.push_back(read_session(stmt));
+  }
+  return sessions;
+}
+
+void database::set_session_memory(
+  std::uint32_t session_id, const std::string& memory, std::uint32_t watermark
+) {
+  auto stmt = connection_.prepare(
+    "UPDATE session SET memory = ?, memory_watermark = ? WHERE id = ?"
+  );
+  stmt.bind(memory, watermark, session_id);
+  stmt.execute();
+}
+
+void database::set_assistant_memory_watermark(
+  std::uint32_t session_id, std::uint32_t watermark
+) {
+  auto stmt = connection_.prepare(
+    "UPDATE session SET assistant_memory_watermark = ? WHERE id = ?"
+  );
+  stmt.bind(watermark, session_id);
+  stmt.execute();
+}
+
+std::uint32_t database::insert_message(const Message& message) {
+  auto stmt = connection_.prepare(
+    "INSERT INTO message (session_id, role, content, made_at) VALUES (?, ?, ?, ?)"
+  );
+  stmt.bind(
+    message.session_id_, static_cast<int>(message.role_), message.content_,
+    message.made_at_
+  );
+  return stmt.execute_with_last_row_id();
+}
+
+void database::update_message(std::uint32_t message_id, const std::string& content) {
+  auto stmt = connection_.prepare("UPDATE message SET content = ? WHERE id = ?");
+  stmt.bind(content, message_id);
+  stmt.execute();
+}
+
+bool database::remove_message(std::uint32_t message_id) {
+  auto stmt = connection_.prepare("DELETE FROM message WHERE id = ?");
+  stmt.bind(message_id);
+  stmt.execute();
+  return stmt.changes() > 0;
+}
+
+std::vector<Message> database::messages(std::uint32_t session_id) const {
+  auto stmt = connection_.prepare(
+    "SELECT " + std::string(MESSAGE_COLUMNS) +
+    " FROM message WHERE session_id = ? ORDER BY id ASC"
+  );
+  stmt.bind(session_id);
+
+  std::vector<Message> messages;
+  while (stmt.step()) {
+    messages.push_back(read_message(stmt));
+  }
+  return messages;
+}
+
+std::vector<Message> database::recent_messages(
+  std::uint32_t session_id, std::size_t count
+) const {
+  auto stmt = connection_.prepare(
+    "SELECT " + std::string(MESSAGE_COLUMNS) +
+    " FROM message WHERE session_id = ? ORDER BY id DESC LIMIT ?"
+  );
+  stmt.bind(session_id, static_cast<int>(count));
+
+  std::vector<Message> messages;
+  while (stmt.step()) {
+    messages.push_back(read_message(stmt));
+  }
+  std::reverse(messages.begin(), messages.end());
+  return messages;
+}
+
+std::size_t database::message_count(std::uint32_t session_id) const {
+  auto stmt = connection_.prepare(
+    "SELECT COUNT(*) FROM message WHERE session_id = ?"
+  );
+  stmt.bind(session_id);
+  if (stmt.step()) {
+    return static_cast<std::size_t>(stmt.column_int(0));
+  }
+  return 0;
+}
+
+std::optional<std::string> database::last_message_time(
+  std::uint32_t session_id
+) const {
+  auto stmt = connection_.prepare(
+    "SELECT MAX(made_at) FROM message WHERE session_id = ?"
+  );
+  stmt.bind(session_id);
+  if (stmt.step()) {
+    return stmt.column_text_opt(0);
+  }
+  return std::nullopt;
+}
+
+} // namespace lnb::store
