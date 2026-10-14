@@ -8,7 +8,14 @@ compile_commands.json
 .idea/
 .zed/
 .cache/
+.local-notes/
 
 # Runtime state and local database
 /run/
 /external/
+
+# Local backups of parked sources
+/backups/
+
+*.run.old-*/
+/src/.old/
