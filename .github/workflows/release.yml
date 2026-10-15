@@ -11,9 +11,14 @@ name: CI
 
 on:
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v0.7.5"
+        required: true
+        type: string
+
 
 # A new push supersedes an in-flight run on the same branch.
 concurrency:
@@ -50,6 +55,31 @@ jobs:
 
       - name: Build
         run: cmake --build build --parallel
+
+      - name: Rename executable with version tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          tag="$RELEASE_TAG"
+
+          if [ -z "$tag" ]; then
+            tag="dev-${GITHUB_SHA::7}"
+          fi
+
+          tag="$(echo "$tag" | sed 's#[^A-Za-z0-9._-]#-#g')"
+
+          src="build/local-notebook"
+          dst="build/local-notebook-${tag}"
+
+          if [ ! -f "$src" ]; then
+            echo "Executable not found: $src"
+            find build -type f -maxdepth 5 -print
+            exit 1
+          fi
+
+          mv "$src" "$dst"
+          echo "Generated: $dst"
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
@@ -90,6 +120,31 @@ jobs:
 
       - name: Build
         run: cmake --build build --parallel
+
+      - name: Rename executable with version tag
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          $tag = $env:RELEASE_TAG
+
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            $tag = "dev-$($env:GITHUB_SHA.Substring(0, 7))"
+          }
+
+          $tag = $tag -replace '[^A-Za-z0-9._-]', '-'
+
+          $src = "build/local-notebook.exe"
+          $dst = "build/local-notebook-$tag.exe"
+
+          if (-not (Test-Path $src)) {
+            Write-Error "Executable not found: $src"
+            Get-ChildItem build -Recurse -File | Select-Object FullName
+            exit 1
+          }
+
+          Rename-Item -Path $src -NewName "local-notebook-$tag.exe"
+          Write-Host "Generated: $dst"
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
