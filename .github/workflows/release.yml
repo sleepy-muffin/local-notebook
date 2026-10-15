@@ -1,4 +1,4 @@
-name: CI
+name: Release
 
 # Build and test the application for x86_64 on both a general Linux desktop and
 # Windows. The project targets Qt 6 Widgets, so the two jobs differ mainly in how
