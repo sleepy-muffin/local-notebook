@@ -139,11 +139,11 @@
         "accent_active": [235, 160, 172, 1.0],
         "accent_text": [17, 17, 27, 1.0],
 
-        "bubble_user": [49, 50, 68, 0.5],
+        "bubble_user": [118, 100, 125, 0.35],
         "bubble_user_text": [205, 214, 244, 1.0],
         "bubble_assistant": [49, 50, 68, 0.5],
         "bubble_assistant_text": [205, 214, 244, 1.0],
-        "bubble_assistant_code": [49, 50, 68, 0.25],
+        "bubble_assistant_code": [49, 50, 68, 0.35],
 
         "conversation_background": [17, 17, 27, 0.0],
         "input_background": [17, 17, 27, 0.0],
@@ -170,11 +170,11 @@
         "accent_active": [238, 153, 160, 1.0],
         "accent_text": [24, 25, 38, 1.0],
 
-        "bubble_user": [54, 58, 79, 0.5],
+        "bubble_user": [121, 104, 132, 0.35],
         "bubble_user_text": [202, 211, 245, 1.0],
         "bubble_assistant": [54, 58, 79, 0.5],
         "bubble_assistant_text": [202, 211, 245, 1.0],
-        "bubble_assistant_code": [54, 58, 79, 0.25],
+        "bubble_assistant_code": [54, 58, 79, 0.35],
 
         "conversation_background": [24, 25, 38, 0.0],
         "input_background": [24, 25, 38, 0.0],
@@ -201,11 +201,11 @@
         "accent_active": [234, 150, 156, 1.0],
         "accent_text": [35, 38, 52, 1.0],
 
-        "bubble_user": [65, 69, 89, 0.5],
+        "bubble_user": [128, 109, 138, 0.35],
         "bubble_user_text": [198, 208, 245, 1.0],
         "bubble_assistant": [65, 69, 89, 0.5],
         "bubble_assistant_text": [198, 208, 245, 1.0],
-        "bubble_assistant_code": [65, 69, 89, 0.25],
+        "bubble_assistant_code": [65, 69, 89, 0.35],
 
         "conversation_background": [35, 38, 52, 0.0],
         "input_background": [35, 38, 52, 0.0],
@@ -232,11 +232,11 @@
         "accent_active": [230, 69, 83, 1.0],
         "accent_text": [255, 255, 255, 1.0],
 
-        "bubble_user": [204, 208, 218, 0.5],
+        "bubble_user": [215, 177, 213, 0.35],
         "bubble_user_text": [76, 79, 105, 1.0],
         "bubble_assistant": [204, 208, 218, 0.5],
         "bubble_assistant_text": [76, 79, 105, 1.0],
-        "bubble_assistant_code": [204, 208, 218, 0.25],
+        "bubble_assistant_code": [204, 208, 218, 0.35],
 
         "conversation_background": [220, 224, 232, 0.0],
         "input_background": [220, 224, 232, 0.0],

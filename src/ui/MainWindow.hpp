@@ -9,6 +9,7 @@
 
 class QLabel;
 class QListView;
+class QPushButton;
 class QStackedWidget;
 class QTimer;
 class QToolButton;
@@ -24,10 +25,10 @@ class SessionItemDelegate;
 class SessionListModel;
 class SettingsWindow;
 
-// The application shell: a sidebar of sessions on the left, a narrow title bar
-// and the transcript on the right. It owns the lazily created ConversationViews
-// (one per open session) and drives their poll loop, so a generation keeps
-// running while its session is off screen.
+// The application shell: one full-width title bar across the top, a sidebar of
+// sessions on the left and the transcript on the right. It owns the lazily
+// created ConversationViews (one per open session) and drives their poll loop,
+// so a generation keeps running while its session is off screen.
 class MainWindow : public BackgroundWidget {
 public:
   explicit MainWindow(lnb::Application& app, QWidget* parent = nullptr);
@@ -38,6 +39,7 @@ protected:
 
 private:
   void build_ui();
+  QWidget* build_title_bar();
   QWidget* build_sidebar();
   QWidget* build_right_pane();
 
@@ -74,7 +76,7 @@ private:
   QListView* sessions_view_ = nullptr;
   SessionListModel* sessions_model_ = nullptr;
   SessionItemDelegate* sessions_delegate_ = nullptr;
-  QToolButton* new_session_button_ = nullptr;
+  QPushButton* new_session_button_ = nullptr;
 
   QLabel* current_name_ = nullptr;
   QLabel* current_model_ = nullptr;
@@ -83,7 +85,6 @@ private:
   QLabel* brand_ = nullptr;
   QLabel* category_ = nullptr;
 
-  QLabel* header_title_ = nullptr;
   QLabel* header_subtitle_ = nullptr;
   QLabel* header_context_ = nullptr;
   QLabel* header_time_ = nullptr;

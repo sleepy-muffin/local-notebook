@@ -17,6 +17,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QShowEvent>
 #include <QSizePolicy>
 #include <QSpinBox>
 #include <QStackedWidget>
@@ -97,6 +98,18 @@ QLabel* value_label(QWidget* parent, const QString& text, bool prominent) {
   label->setFont(prominent ? scaled_font(1.0, true) : ui_font());
   label->setWordWrap(true);
   return label;
+}
+
+// Fills a font selector from a stored family. An empty family means "the system
+// default", so the selectors were left untouched at build time; on a reload we
+// resolve it to the application's font, which is what an empty family already
+// behaves as.
+void set_font_box(FontComboBox* box, const std::string& family) {
+  if (!family.empty()) {
+    box->setCurrentFont(QFont(QString::fromStdString(family)));
+  } else {
+    box->setCurrentFont(QApplication::font());
+  }
 }
 
 } // namespace
@@ -267,6 +280,12 @@ QWidget* SettingsWindow::build_config_page() {
     config_writers_.push_back([this, theme_box]() {
       pending_.theme = theme_box->currentText().toStdString();
     });
+    config_reloaders_.push_back([this, theme_box]() {
+      const int index = theme_box->findText(QString::fromStdString(pending_.theme));
+      if (index >= 0) {
+        theme_box->setCurrentIndex(index);
+      }
+    });
 
     auto* ui_font_box = new FontComboBox(content);
     if (!pending_.ui_font.empty()) {
@@ -282,6 +301,10 @@ QWidget* SettingsWindow::build_config_page() {
     });
     config_writers_.push_back([this, ui_font_size]() {
       pending_.ui_font_size = ui_font_size->value();
+    });
+    config_reloaders_.push_back([this, ui_font_box]() { set_font_box(ui_font_box, pending_.ui_font); });
+    config_reloaders_.push_back([this, ui_font_size]() {
+      ui_font_size->setValue(pending_.ui_font_size);
     });
 
     auto* font_box = new FontComboBox(content);
@@ -299,6 +322,8 @@ QWidget* SettingsWindow::build_config_page() {
     config_writers_.push_back([this, font_size]() {
       pending_.font_size = font_size->value();
     });
+    config_reloaders_.push_back([this, font_box]() { set_font_box(font_box, pending_.font); });
+    config_reloaders_.push_back([this, font_size]() { font_size->setValue(pending_.font_size); });
 
     auto* mono_box = new FontComboBox(content);
     if (!pending_.mono_font.empty()) {
@@ -314,6 +339,10 @@ QWidget* SettingsWindow::build_config_page() {
     });
     config_writers_.push_back([this, mono_size]() {
       pending_.mono_font_size = mono_size->value();
+    });
+    config_reloaders_.push_back([this, mono_box]() { set_font_box(mono_box, pending_.mono_font); });
+    config_reloaders_.push_back([this, mono_size]() {
+      mono_size->setValue(pending_.mono_font_size);
     });
 
     layout->addLayout(form);
@@ -332,6 +361,9 @@ QWidget* SettingsWindow::build_config_page() {
     config_writers_.push_back([this, send_check]() {
       pending_.enter_with_modifier = send_check->isChecked();
     });
+    config_reloaders_.push_back([this, send_check]() {
+      send_check->setChecked(pending_.enter_with_modifier);
+    });
   }
 
   layout->addWidget(h_separator(content));
@@ -342,11 +374,15 @@ QWidget* SettingsWindow::build_config_page() {
     auto* form = form_layout(content);
 
     auto* rendered = new SpinBox(content);
+    rendered->setObjectName(QStringLiteral("RenderedMessages"));
     rendered->setRange(1, 100000);
     rendered->setValue(pending_.rendered_message_limit);
     form->addRow(field_label(content, QStringLiteral("Rendered messages")), rendered);
     config_writers_.push_back([this, rendered]() {
       pending_.rendered_message_limit = rendered->value();
+    });
+    config_reloaders_.push_back([this, rendered]() {
+      rendered->setValue(pending_.rendered_message_limit);
     });
 
     auto* page_size = new SpinBox(content);
@@ -355,6 +391,9 @@ QWidget* SettingsWindow::build_config_page() {
     form->addRow(field_label(content, QStringLiteral("History page size")), page_size);
     config_writers_.push_back([this, page_size]() {
       pending_.history_page_size = page_size->value();
+    });
+    config_reloaders_.push_back([this, page_size]() {
+      page_size->setValue(pending_.history_page_size);
     });
 
     layout->addLayout(form);
@@ -377,6 +416,13 @@ QWidget* SettingsWindow::build_config_page() {
       const QString text = url->text().trimmed();
       pending_.background_url =
           text.isEmpty() ? std::nullopt : std::optional<std::string>(text.toStdString());
+    });
+    config_reloaders_.push_back([this, url]() {
+      url->setText(
+          pending_.background_url.has_value()
+              ? QString::fromStdString(*pending_.background_url)
+              : QString()
+      );
     });
 
     layout->addLayout(form);
@@ -420,6 +466,36 @@ QWidget* SettingsWindow::build_config_page() {
           static_cast<float>(spins[3]->value()),
       };
     });
+    config_reloaders_.push_back([this, tint_check, spins]() {
+      const std::array<float, 4> values = pending_.background_override.value_or(
+          std::array<float, 4>{0.094f, 0.098f, 0.149f, 0.85f}
+      );
+      tint_check->setChecked(pending_.background_override.has_value());
+
+      for (int i = 0; i < 4; ++i) {
+        spins[static_cast<std::size_t>(i)]->setValue(
+            static_cast<double>(values[static_cast<std::size_t>(i)])
+        );
+      }
+    });
+  }
+
+  // ---- Restore ----
+  {
+    auto* actions = new QHBoxLayout();
+    actions->setSpacing(8);
+    actions->addStretch(1);
+
+    auto* restore = new QPushButton(QStringLiteral("Restore to defaults"), content);
+    restore->setObjectName(QStringLiteral("RestoreConfig"));
+    restore->setToolTip(
+        QStringLiteral("Reset this page's fields to their shipped defaults. Nothing is "
+                       "saved until you press Save.")
+    );
+    actions->addWidget(restore);
+    layout->addLayout(actions);
+
+    connect(restore, &QPushButton::clicked, this, [this]() { restore_config_defaults(); });
   }
 
   layout->addStretch(1);
@@ -462,6 +538,7 @@ QWidget* SettingsWindow::build_metrics_page() {
     grid->addWidget(spin, row, column * 2 + 1);
 
     metric_writers_.push_back([this, spin, field]() { pending_metrics_.*field = spin->value(); });
+    metric_reloaders_.push_back([this, spin, field]() { spin->setValue(pending_metrics_.*field); });
 
     ++column;
     if (column == 2) {
@@ -531,6 +608,7 @@ QWidget* SettingsWindow::build_metrics_page() {
     rhythm->addWidget(field_label(content, label), row, column * 2);
     rhythm->addWidget(spin, row, column * 2 + 1);
     metric_writers_.push_back([this, spin, field]() { pending_metrics_.*field = spin->value(); });
+    metric_reloaders_.push_back([this, spin, field]() { spin->setValue(pending_metrics_.*field); });
     ++column;
     if (column == 2) {
       column = 0;
@@ -556,6 +634,25 @@ QWidget* SettingsWindow::build_metrics_page() {
   );
 
   layout->addLayout(rhythm);
+
+  // ---- Restore ----
+  {
+    auto* actions = new QHBoxLayout();
+    actions->setSpacing(8);
+    actions->addStretch(1);
+
+    auto* restore = new QPushButton(QStringLiteral("Restore to defaults"), content);
+    restore->setObjectName(QStringLiteral("RestoreMetrics"));
+    restore->setToolTip(
+        QStringLiteral("Reset these metrics to the current theme's own defaults. Nothing "
+                       "is saved until you press Save.")
+    );
+    actions->addWidget(restore);
+    layout->addLayout(actions);
+
+    connect(restore, &QPushButton::clicked, this, [this]() { restore_metrics_defaults(); });
+  }
+
   layout->addStretch(1);
 
   return make_page(
@@ -671,6 +768,7 @@ QWidget* SettingsWindow::build_account_page() {
     auto* auto_login = new QCheckBox(
         QStringLiteral("Open this assistant automatically at startup"), startup_card
     );
+    auto_login->setObjectName(QStringLiteral("AutoLogin"));
     auto_login->setChecked(pending_.auto_login);
     body->addWidget(auto_login);
     body->addWidget(value_label(
@@ -681,6 +779,9 @@ QWidget* SettingsWindow::build_account_page() {
 
     config_writers_.push_back([this, auto_login]() {
       pending_.auto_login = auto_login->isChecked();
+    });
+    config_reloaders_.push_back([this, auto_login]() {
+      auto_login->setChecked(pending_.auto_login);
     });
   }
   layout->addWidget(startup_card);
@@ -767,6 +868,71 @@ void SettingsWindow::write_config() {
 void SettingsWindow::write_metrics() {
   for (const auto& writer : metric_writers_) {
     writer();
+  }
+}
+
+void SettingsWindow::showEvent(QShowEvent* event) {
+  QDialog::showEvent(event);
+
+  // A cancelled edit must not survive into the next visit, so every open starts
+  // from the stored state rather than from whatever was left in the widgets.
+  reload_from_app();
+}
+
+void SettingsWindow::reload_from_app() {
+  pending_ = app_.settings();
+  pending_metrics_ = metrics();
+
+  for (const auto& reload : config_reloaders_) {
+    reload();
+  }
+
+  for (const auto& reload : metric_reloaders_) {
+    reload();
+  }
+
+  if (assistant_form_ != nullptr) {
+    assistant_form_->set_assistant(app_.assistant());
+  }
+
+  if (assistant_memory_ != nullptr) {
+    assistant_memory_->setPlainText(to_qstring(app_.assistant().memory_));
+  }
+
+  update_account_page();
+}
+
+void SettingsWindow::restore_config_defaults() {
+  // Only the fields this page shows are reset; the settings that live elsewhere
+  // (last assistant, geometry, metrics) are left untouched, so a later Save does
+  // not clobber them.
+  const lnb::Settings defaults;
+
+  pending_.theme = defaults.theme;
+  pending_.ui_font = defaults.ui_font;
+  pending_.ui_font_size = defaults.ui_font_size;
+  pending_.font = defaults.font;
+  pending_.font_size = defaults.font_size;
+  pending_.mono_font = defaults.mono_font;
+  pending_.mono_font_size = defaults.mono_font_size;
+  pending_.enter_with_modifier = defaults.enter_with_modifier;
+  pending_.rendered_message_limit = defaults.rendered_message_limit;
+  pending_.history_page_size = defaults.history_page_size;
+  pending_.background_url = defaults.background_url;
+  pending_.background_override = defaults.background_override;
+
+  for (const auto& reload : config_reloaders_) {
+    reload();
+  }
+}
+
+void SettingsWindow::restore_metrics_defaults() {
+  // The theme's own defaults, before any user override: the same source
+  // apply_theme() falls back to when no override is stored.
+  pending_metrics_ = theme().metrics;
+
+  for (const auto& reload : metric_reloaders_) {
+    reload();
   }
 }
 

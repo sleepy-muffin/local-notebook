@@ -13,6 +13,7 @@ class QLabel;
 class QListWidget;
 class QPlainTextEdit;
 class QPushButton;
+class QShowEvent;
 class QStackedWidget;
 class QWidget;
 
@@ -47,6 +48,11 @@ public:
     on_saved_ = std::move(handler);
   }
 
+protected:
+  // Every open re-reads the stored settings and assistant, so an edit that was
+  // cancelled (or left uncommitted) never leaks into the next visit.
+  void showEvent(QShowEvent* event) override;
+
 private:
   QWidget* build_config_page();
   QWidget* build_metrics_page();
@@ -60,6 +66,15 @@ private:
   // Pushes the widget values back into the pending settings / metrics.
   void write_config();
   void write_metrics();
+
+  // Repopulates every widget from the stored state (settings, metrics and the
+  // assistant). Called on each show.
+  void reload_from_app();
+
+  // Resets the Configuration page's fields to the shipped defaults, and the
+  // Metrics page's fields to the current theme's own defaults. Neither saves.
+  void restore_config_defaults();
+  void restore_metrics_defaults();
 
   // Applies the pending settings, persists them, and closes the window.
   void save();
@@ -94,9 +109,12 @@ private:
   bool assistant_summarizing_ = false;
 
   // One writer per editor, so write_config()/write_metrics() do not need to keep
-  // a pointer to every widget.
+  // a pointer to every widget. The reloaders mirror them in the opposite
+  // direction: they push the stored state back into the widgets on each show.
   std::vector<std::function<void()>> config_writers_;
   std::vector<std::function<void()>> metric_writers_;
+  std::vector<std::function<void()>> config_reloaders_;
+  std::vector<std::function<void()>> metric_reloaders_;
 
   std::function<void()> on_saved_;
 };

@@ -90,11 +90,18 @@ inline QString dialog_stylesheet(const QString& object_name) {
                .arg(surface, muted);
 
   sheet += QStringLiteral(
-               "QPushButton#Secondary { background: transparent; color: %1;"
+               "QPushButton#Secondary, QPushButton#RestoreConfig, QPushButton#RestoreMetrics {"
+               " background: transparent; color: %1;"
                "  border: 1px solid %2; border-radius: 6px; padding: 6px 14px; }")
                .arg(text, border);
-  sheet += QStringLiteral("QPushButton#Secondary:hover { background: %1; }").arg(surface);
-  sheet += QStringLiteral("QPushButton#Secondary:disabled { color: %1; }").arg(muted);
+  sheet += QStringLiteral(
+               "QPushButton#Secondary:hover, QPushButton#RestoreConfig:hover,"
+               " QPushButton#RestoreMetrics:hover { background: %1; }")
+               .arg(surface);
+  sheet += QStringLiteral(
+               "QPushButton#Secondary:disabled, QPushButton#RestoreConfig:disabled,"
+               " QPushButton#RestoreMetrics:disabled { color: %1; }")
+               .arg(muted);
 
   sheet += QStringLiteral("QCheckBox { color: %1; }").arg(text);
 

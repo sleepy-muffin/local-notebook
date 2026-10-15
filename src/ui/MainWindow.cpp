@@ -9,6 +9,7 @@
 #include <QLabel>
 #include <QListView>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QStackedWidget>
 #include <QStyle>
 #include <QTimer>
@@ -36,13 +37,17 @@ namespace {
 
 constexpr int kSessionListLimit = 500;
 
-// Horizontal inset of every sidebar band. It matches the delegate's text inset,
-// so the banner, the category label and the current-session name all line up with
-// the session-row titles.
+// The horizontal inset of every sidebar band. It matches the delegate's text inset,
+// so the New Session row, the category label and the current-session name all line
+// up with the session-row titles. The title-bar banner reuses it so it aligns too.
 constexpr int kSidebarPadding = 12;
 
-// The narrow band height shared by the sidebar header and the chat title bar, so
-// the two read as one continuous strip across the window.
+// Vertical inset of the New Session row, so its hover fill matches the height of a
+// session row without touching the band above or the category below.
+constexpr int kNewSessionPadding = 4;
+
+// The narrow band height of the unified title bar, so the chrome reads as one
+// continuous strip across the top of the window.
 constexpr int kBandHeight = 38;
 
 // How many recent messages are enough to estimate the next request's context
@@ -149,29 +154,72 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 }
 
 void MainWindow::build_ui() {
-  auto* root = new QHBoxLayout(this);
+  auto* root = new QVBoxLayout(this);
   root->setContentsMargins(0, 0, 0, 0);
   root->setSpacing(0);
 
-  root->addWidget(build_sidebar());
+  // One title bar spanning the whole window, so the chrome reads as a single
+  // continuous strip rather than two separate bands.
+  root->addWidget(build_title_bar());
 
-  // The single hairline between the panes.
+  // The body: sidebar, the single hairline between the panes, and the transcript.
+  auto* body = new QHBoxLayout();
+  body->setContentsMargins(0, 0, 0, 0);
+  body->setSpacing(0);
+
+  body->addWidget(build_sidebar());
+
   auto* separator = new QWidget(this);
   separator->setObjectName(QStringLiteral("SidebarSeparator"));
   separator->setAttribute(Qt::WA_StyledBackground, true);
   separator->setFixedWidth(1);
-  root->addWidget(separator);
+  body->addWidget(separator);
 
-  root->addWidget(build_right_pane(), 1);
+  body->addWidget(build_right_pane(), 1);
+
+  root->addLayout(body, 1);
 
   // Applied last, so the scoped rules and the derived fonts reach the widgets
   // that now exist.
   apply_window_style();
 }
 
+QWidget* MainWindow::build_title_bar() {
+  auto* bar = new QFrame(this);
+  bar->setObjectName(QStringLiteral("TitleBar"));
+  bar->setAttribute(Qt::WA_StyledBackground, true);
+  bar->setFixedHeight(kBandHeight);
+
+  auto* layout = new QHBoxLayout(bar);
+  // The banner is inset like the sidebar content, so it lines up with the
+  // session rows; the conversation info is inset a little further from the edge.
+  layout->setContentsMargins(kSidebarPadding, 0, 16, 0);
+  layout->setSpacing(10);
+
+  brand_ = new QLabel(QStringLiteral("Local Notebook"), bar);
+  brand_->setObjectName(QStringLiteral("Brand"));
+
+  header_subtitle_ = new QLabel(bar);
+  header_subtitle_->setObjectName(QStringLiteral("HeaderSubtitle"));
+
+  header_context_ = new QLabel(bar);
+  header_context_->setObjectName(QStringLiteral("HeaderContext"));
+
+  header_time_ = new QLabel(bar);
+  header_time_->setObjectName(QStringLiteral("HeaderTime"));
+
+  layout->addWidget(brand_);
+  layout->addStretch(1);
+  layout->addWidget(header_subtitle_);
+  layout->addWidget(header_context_);
+  layout->addSpacing(12);
+  layout->addWidget(header_time_);
+
+  return bar;
+}
+
 void MainWindow::apply_window_style() {
   const ThemeColors& c = theme().colors;
-  const lnb::ThemeMetrics& m = metrics();
 
   // Chrome is painted by hand; only the scoped, per-window rules below are
   // stylesheet driven (design-1.md §12).
@@ -179,20 +227,20 @@ void MainWindow::apply_window_style() {
       QStringLiteral(
           "QLabel#Brand { color: %1; }"
           "QLabel#SidebarCategory { color: %2; }"
-          "QLabel#HeaderTitle { color: %1; }"
           "QLabel#HeaderSubtitle, QLabel#HeaderContext, QLabel#HeaderTime { color: %2; }"
           "QLabel#CurrentName { color: %1; }"
           "QLabel#CurrentModel { color: %2; }"
           "QLabel#EmptyHint { color: %2; }"
           "QWidget#Sidebar { background: %4; }"
-          "QWidget#SidebarHeader { background: transparent; border-bottom: 1px solid %3; }"
           "QWidget#SidebarSeparator { background: %3; }"
-          "QFrame#Header { background: %4; border: none; border-bottom: 1px solid %3; }"
+          "QFrame#TitleBar { background: %4; border: none;"
+          "  border-bottom: 1px solid %3; }"
           "QFrame#CurrentUser { background: transparent; border: none;"
           "  border-top: 1px solid %3; }"
           "QListView#Sessions { background: transparent; border: none; outline: none; }"
-          "QToolButton#NewSession { background: transparent; border: none; padding: 0; }"
-          "QToolButton#NewSession:hover { background: %5; border-radius: 4px; }"
+          "QPushButton#NewSession { background: transparent; border: none; color: %1;"
+          "  text-align: left; padding: 6px 12px; border-radius: 0; }"
+          "QPushButton#NewSession:hover { background: %5; }"
           "QToolButton#CurrentSettings { background: transparent; border: none; padding: 0; }"
           "QToolButton#CurrentSettings:hover { background: %5; border-radius: 4px; }"
       )
@@ -228,15 +276,6 @@ void MainWindow::apply_window_style() {
     }
     current_model_->setFont(font);
   }
-
-  if (header_title_ != nullptr) {
-    QFont font = ui_font();
-    font.setWeight(QFont::DemiBold);
-    if (m.title_font_size > 0) {
-      font.setPointSize(m.title_font_size);
-    }
-    header_title_->setFont(font);
-  }
 }
 
 QWidget* MainWindow::build_sidebar() {
@@ -251,34 +290,22 @@ QWidget* MainWindow::build_sidebar() {
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(0);
 
-  // ---- Sidebar header: the banner and the New Session action ----
-  // A flat band, like Zed's panel header: no page margin, so the hairline below
-  // it can run edge to edge.
-  auto* header = new QWidget(sidebar);
-  header->setObjectName(QStringLiteral("SidebarHeader"));
-  header->setAttribute(Qt::WA_StyledBackground, true);
-  header->setFixedHeight(kBandHeight);
+  // ---- New Session action ----
+  // Sits above the SESSIONS category, as the first item of the list. It is a flat,
+  // borderless row with a subtle hover fill, so it reads like a session row rather
+  // than a button.
+  auto* new_session_row = new QWidget(sidebar);
+  auto* new_session_layout = new QVBoxLayout(new_session_row);
+  // No horizontal inset: like a session row, the hover fill runs edge to edge and
+  // the padding is applied inside the button, so the text lines up with the rows.
+  new_session_layout->setContentsMargins(0, kNewSessionPadding, 0, 0);
+  new_session_layout->setSpacing(0);
 
-  auto* header_layout = new QHBoxLayout(header);
-  header_layout->setContentsMargins(kSidebarPadding, 0, kSidebarPadding - 4, 0);
-  header_layout->setSpacing(4);
-
-  // The banner sits at the window's top-left. It is deliberately calm: a small
-  // step up from the body text, no accent colour. Its font is derived in
-  // apply_window_style().
-  brand_ = new QLabel(QStringLiteral("Local Notebook"), header);
-  brand_->setObjectName(QStringLiteral("Brand"));
-
-  // New Session is an icon-only action in the header, not a bordered button, so
-  // the sidebar stays flat.
-  new_session_button_ = new QToolButton(header);
+  new_session_button_ = new QPushButton(QStringLiteral("New Session"), new_session_row);
   new_session_button_->setObjectName(QStringLiteral("NewSession"));
-  new_session_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
-  new_session_button_->setAutoRaise(true);
-  new_session_button_->setFocusPolicy(Qt::NoFocus);
-  new_session_button_->setFixedSize(26, 26);
-  new_session_button_->setIconSize(QSize(16, 16));
   new_session_button_->setCursor(Qt::PointingHandCursor);
+  new_session_button_->setFocusPolicy(Qt::NoFocus);
+  new_session_button_->setFlat(true);
   new_session_button_->setToolTip(QStringLiteral("New Session"));
 
   QIcon add = QIcon::fromTheme(QStringLiteral("list-add"));
@@ -289,14 +316,13 @@ QWidget* MainWindow::build_sidebar() {
     add = style()->standardIcon(QStyle::SP_FileDialogNewFolder);
   }
   new_session_button_->setIcon(add);
+  new_session_button_->setIconSize(QSize(16, 16));
 
   connect(
-      new_session_button_, &QToolButton::clicked, this, [this]() { new_session(); }
+      new_session_button_, &QPushButton::clicked, this, [this]() { new_session(); }
   );
 
-  header_layout->addWidget(brand_);
-  header_layout->addStretch(1);
-  header_layout->addWidget(new_session_button_);
+  new_session_layout->addWidget(new_session_button_);
 
   // ---- SESSIONS category ----
   // "Sessions" is a category identifier, not a title: small, muted, spaced.
@@ -420,7 +446,7 @@ QWidget* MainWindow::build_sidebar() {
   current_layout->addLayout(current_text, 1);
   current_layout->addWidget(current_settings_);
 
-  layout->addWidget(header);
+  layout->addWidget(new_session_row);
   layout->addWidget(category_row);
   layout->addWidget(sessions_view_, 1);
   layout->addWidget(current_user);
@@ -437,35 +463,6 @@ QWidget* MainWindow::build_right_pane() {
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(0);
 
-  // ---- Narrow, Zed-like title bar ----
-  auto* header = new QFrame(pane);
-  header->setObjectName(QStringLiteral("Header"));
-  header->setAttribute(Qt::WA_StyledBackground, true);
-  header->setFixedHeight(kBandHeight);
-
-  auto* header_layout = new QHBoxLayout(header);
-  header_layout->setContentsMargins(16, 0, 16, 0);
-  header_layout->setSpacing(10);
-
-  header_title_ = new QLabel(header);
-  header_title_->setObjectName(QStringLiteral("HeaderTitle"));
-
-  header_subtitle_ = new QLabel(header);
-  header_subtitle_->setObjectName(QStringLiteral("HeaderSubtitle"));
-
-  header_context_ = new QLabel(header);
-  header_context_->setObjectName(QStringLiteral("HeaderContext"));
-
-  header_time_ = new QLabel(header);
-  header_time_->setObjectName(QStringLiteral("HeaderTime"));
-
-  header_layout->addWidget(header_title_);
-  header_layout->addWidget(header_subtitle_);
-  header_layout->addStretch(1);
-  header_layout->addWidget(header_context_);
-  header_layout->addSpacing(12);
-  header_layout->addWidget(header_time_);
-
   workspace_ = new QStackedWidget(pane);
   workspace_->setObjectName(QStringLiteral("Workspace"));
   workspace_->setFrameShape(QFrame::NoFrame);
@@ -479,7 +476,6 @@ QWidget* MainWindow::build_right_pane() {
   workspace_->addWidget(empty_hint_);
   workspace_->setCurrentWidget(empty_hint_);
 
-  layout->addWidget(header);
   layout->addWidget(workspace_, 1);
 
   return pane;
@@ -712,7 +708,8 @@ void MainWindow::update_header() {
   const auto session = app_.db().session(current_session_);
 
   if (!session.has_value()) {
-    header_title_->setText(QStringLiteral("Local Notebook"));
+    // No session open: the conversation info is simply absent; the banner on the
+    // left of the bar stays.
     header_subtitle_->clear();
     header_context_->clear();
     header_context_->setToolTip(QString());
@@ -720,9 +717,6 @@ void MainWindow::update_header() {
     return;
   }
 
-  header_title_->setText(
-      session->title_.empty() ? QStringLiteral("New Session") : from_utf8(session->title_)
-  );
   header_subtitle_->setText(QStringLiteral("Session #%1").arg(session->id_));
 
   const std::vector<lnb::Message> sample =

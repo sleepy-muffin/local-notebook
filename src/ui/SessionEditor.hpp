@@ -6,6 +6,7 @@
 
 #include "model.hpp"
 
+class QComboBox;
 class QLineEdit;
 class QPlainTextEdit;
 class QPushButton;
@@ -58,6 +59,9 @@ private:
   QPushButton* summarize_button_ = nullptr;
   QPushButton* save_button_ = nullptr;
   QPushButton* cancel_button_ = nullptr;
+
+  // Fills the budget fields below with a preset; it never saves by itself.
+  QComboBox* preset_ = nullptr;
 
   // Session-bound budgets.
   QSpinBox* summary_trigger_ = nullptr;

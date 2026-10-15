@@ -4,6 +4,7 @@
 
 #include "model.hpp"
 
+class QComboBox;
 class QLineEdit;
 class QPlainTextEdit;
 class QSpinBox;
@@ -37,6 +38,7 @@ private:
   QLineEdit* token_ = nullptr;
   QLineEdit* proxy_ = nullptr;
   QPlainTextEdit* instructions_ = nullptr;
+  QComboBox* preset_ = nullptr;
   QSpinBox* summary_token_budget_ = nullptr;
   QSpinBox* summary_reasoning_headroom_ = nullptr;
   QSpinBox* summary_trigger_ = nullptr;

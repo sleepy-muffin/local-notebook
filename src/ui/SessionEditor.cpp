@@ -1,5 +1,6 @@
 #include "ui/SessionEditor.hpp"
 
+#include <QComboBox>
 #include <QEventLoop>
 #include <QFrame>
 #include <QGridLayout>
@@ -34,6 +35,33 @@
 namespace ui {
 
 using namespace dialog_style;
+
+namespace {
+
+// Presets for the session budgets (design-1.md §8). Selecting one only fills the
+// fields below; it never saves, so the values can still be tweaked before Save.
+// The values are starting points, not limits.
+struct BudgetPreset {
+  const char* name;
+  int trigger;
+  int memory_budget;
+  int headroom;
+  int response;
+  int tool_output;
+  int rounds;
+  int calls;
+};
+
+constexpr BudgetPreset kBudgetPresets[] = {
+    {"Light chat (instant help)", 8000, 2000, 4000, 2000, 4000, 4, 12},
+    {"Balanced (default)", 16000, 4000, 12000, 8000, 8000, 8, 32},
+    {"Novel writing", 32000, 8000, 16000, 16000, 4000, 4, 16},
+    {"Immersive role-play", 24000, 6000, 8000, 8000, 4000, 4, 12},
+    {"Abstract design work", 48000, 6000, 24000, 16000, 12000, 16, 64},
+    {"Large codebase analysis", 96000, 8000, 32000, 16000, 16000, 24, 128},
+};
+
+} // namespace
 
 SessionEditor::SessionEditor(
     lnb::Application& app, std::uint32_t session_id, QWidget* parent
@@ -235,6 +263,40 @@ QWidget* SessionEditor::build_content() {
 
   // ---- Budgets ----
   layout->addWidget(section_label(content, QStringLiteral("Budgets")));
+
+  {
+    auto* preset_row = new QHBoxLayout();
+    preset_row->setSpacing(8);
+
+    preset_ = new QComboBox(content);
+    preset_->addItem(QStringLiteral("Apply a preset..."));
+    for (const BudgetPreset& budget_preset : kBudgetPresets) {
+      preset_->addItem(QString::fromUtf8(budget_preset.name));
+    }
+    preset_->setToolTip(
+        QStringLiteral("Fill the budgets below with a preset. Nothing is saved until you "
+                       "press Save.")
+    );
+
+    preset_row->addWidget(field_label(content, QStringLiteral("Preset")));
+    preset_row->addWidget(preset_, 1);
+    layout->addLayout(preset_row);
+
+    connect(preset_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
+      if (index <= 0) {
+        return;
+      }
+
+      const BudgetPreset& budget_preset = kBudgetPresets[index - 1];
+      summary_trigger_->setValue(budget_preset.trigger);
+      summary_budget_->setValue(budget_preset.memory_budget);
+      summary_headroom_->setValue(budget_preset.headroom);
+      response_budget_->setValue(budget_preset.response);
+      tool_output_cap_->setValue(budget_preset.tool_output);
+      max_tool_rounds_->setValue(budget_preset.rounds);
+      max_tool_calls_->setValue(budget_preset.calls);
+    });
+  }
 
   auto* grid = new QGridLayout();
   grid->setHorizontalSpacing(16);

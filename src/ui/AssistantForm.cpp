@@ -1,5 +1,6 @@
 #include "ui/AssistantForm.hpp"
 
+#include <QComboBox>
 #include <QFormLayout>
 #include <QLineEdit>
 #include <QPlainTextEdit>
@@ -15,6 +16,26 @@
 namespace ui {
 
 using namespace dialog_style;
+
+namespace {
+
+// Presets for the assistant-level summarisation budgets. Selecting one only fills
+// the fields; it never saves, so the values can still be tweaked before Save.
+struct SummaryPreset {
+  const char* name;
+  int memory_budget;
+  int headroom;
+  int trigger;
+  int session_pool;
+};
+
+constexpr SummaryPreset kSummaryPresets[] = {
+    {"Light", 2000, 4000, 40000, 8000},
+    {"Balanced (default)", 4000, 12000, 80000, 16000},
+    {"Deep memory", 8000, 24000, 160000, 32000},
+};
+
+} // namespace
 
 AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
   // Named so callers can locate the form without qobject_cast (the app has no
@@ -79,6 +100,18 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
 
   // ---- Summarisation ----
   content->addWidget(section_label(this, QStringLiteral("Summarisation")));
+
+  preset_ = new QComboBox(this);
+  preset_->addItem(QStringLiteral("Apply a preset..."));
+  for (const SummaryPreset& summary_preset : kSummaryPresets) {
+    preset_->addItem(QString::fromUtf8(summary_preset.name));
+  }
+  preset_->setToolTip(
+      QStringLiteral("Fill the budgets below with a preset. Nothing is saved until you "
+                     "press Save.")
+  );
+  content->addWidget(preset_);
+
   {
     auto* form = form_layout(this);
 
@@ -115,6 +148,18 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
     form->addRow(field_label(this, QStringLiteral("Trigger tokens")), summary_trigger_);
     form->addRow(field_label(this, QStringLiteral("Session pool")), summary_session_budget_);
     content->addLayout(form);
+
+    connect(preset_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
+      if (index <= 0) {
+        return;
+      }
+
+      const SummaryPreset& summary_preset = kSummaryPresets[index - 1];
+      summary_token_budget_->setValue(summary_preset.memory_budget);
+      summary_reasoning_headroom_->setValue(summary_preset.headroom);
+      summary_trigger_->setValue(summary_preset.trigger);
+      summary_session_budget_->setValue(summary_preset.session_pool);
+    });
   }
 
   content->addStretch(1);

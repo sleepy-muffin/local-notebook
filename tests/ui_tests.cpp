@@ -9,13 +9,16 @@
 // QT_QPA_PLATFORM=offscreen set.
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QColor>
+#include <QComboBox>
 #include <QFrame>
 #include <QLabel>
 #include <QListView>
 #include <QListWidget>
 #include <QMouseEvent>
 #include <QPoint>
+#include <QPushButton>
 #include <QRect>
 #include <QScrollArea>
 #include <QSpinBox>
@@ -40,6 +43,7 @@
 #include "ui/AssistantForm.hpp"
 #include "ui/ConversationView.hpp"
 #include "ui/MainWindow.hpp"
+#include "ui/SessionEditor.hpp"
 #include "ui/SessionItemDelegate.hpp"
 #include "ui/SessionListModel.hpp"
 #include "ui/SettingsWindow.hpp"
@@ -204,23 +208,18 @@ void test_main_window_invariants() {
     CHECK(separator->maximumWidth() == 1);
   }
 
-  auto* header = window.findChild<QWidget*>(QStringLiteral("Header"));
-  CHECK(header != nullptr);
-  if (header != nullptr) {
-    CHECK(header->minimumHeight() == 38);
-    CHECK(header->maximumHeight() == 38);
+  auto* title_bar = window.findChild<QWidget*>(QStringLiteral("TitleBar"));
+  CHECK(title_bar != nullptr);
+  if (title_bar != nullptr) {
+    CHECK(title_bar->minimumHeight() == 38);
+    CHECK(title_bar->maximumHeight() == 38);
+    CHECK(title_bar->findChild<QLabel*>(QStringLiteral("Brand")) != nullptr);
   }
 
-  // The flat sidebar: a header band holding an icon-only New Session action,
-  // above the SESSIONS category and the list.
-  auto* sidebar_header = window.findChild<QWidget*>(QStringLiteral("SidebarHeader"));
-  CHECK(sidebar_header != nullptr);
-  if (sidebar_header != nullptr) {
-    CHECK(sidebar_header->minimumHeight() == 38);
-    CHECK(sidebar_header->maximumHeight() == 38);
-  }
-
-  auto* new_session = window.findChild<QToolButton*>(QStringLiteral("NewSession"));
+  // The flat sidebar: a New Session row (styled like a list item) above the
+  // SESSIONS category and the list; the banner now lives in the unified title
+  // bar, so the sidebar has no header band of its own.
+  auto* new_session = window.findChild<QPushButton*>(QStringLiteral("NewSession"));
   CHECK(new_session != nullptr);
 
   // The foot-of-sidebar card shows the current assistant (name and model), not a
@@ -422,6 +421,142 @@ void test_settings_window_nav() {
       }
     }
   }
+}
+
+// --- Settings window: reload, restore, presets -------------------------------
+
+// A cancelled edit must not survive into the next visit: every show re-reads the
+// stored settings.
+void test_settings_reload_on_show(QApplication& app) {
+  enter_scratch("settings-reload");
+  ui::apply_theme(app, lnb::Settings{});
+
+  lnb::Application notebook;
+  notebook.open_assistant("55555555-5555-5555-5555-555555555555", make_assistant());
+
+  ui::SettingsWindow window(notebook);
+
+  auto* auto_login = window.findChild<QCheckBox*>(QStringLiteral("AutoLogin"));
+  CHECK(auto_login != nullptr);
+  if (auto_login == nullptr) {
+    return;
+  }
+
+  window.show();
+  QApplication::processEvents();
+  CHECK(auto_login->isChecked());  // the stored default
+
+  // An edit that is then cancelled.
+  auto_login->setChecked(false);
+  window.reject();
+  QApplication::processEvents();
+
+  // Reopening reloads from the stored settings, so the edit is gone.
+  window.show();
+  QApplication::processEvents();
+  CHECK(auto_login->isChecked());
+
+  window.close();
+}
+
+// "Restore to defaults" resets the page's own fields and never saves.
+void test_settings_restore_defaults(QApplication& app) {
+  enter_scratch("settings-restore");
+  ui::apply_theme(app, lnb::Settings{});
+
+  lnb::Application notebook;
+  notebook.open_assistant("66666666-6666-6666-6666-666666666666", make_assistant());
+
+  ui::SettingsWindow window(notebook);
+
+  auto* stack = window.findChild<QStackedWidget*>(QStringLiteral("SettingsStack"));
+  CHECK(stack != nullptr);
+  if (stack == nullptr) {
+    return;
+  }
+
+  // Configuration page: the rendered-messages field returns to its default.
+  QWidget* config_page = stack->widget(0);
+  auto* rendered = config_page->findChild<QSpinBox*>(QStringLiteral("RenderedMessages"));
+  auto* restore_config = config_page->findChild<QPushButton*>(QStringLiteral("RestoreConfig"));
+  CHECK(rendered != nullptr);
+  CHECK(restore_config != nullptr);
+  if (rendered != nullptr && restore_config != nullptr) {
+    rendered->setValue(9999);
+    restore_config->click();
+    CHECK(rendered->value() == lnb::Settings{}.rendered_message_limit);
+  }
+
+  // Metrics page: the fields return to the current theme's own defaults. The first
+  // metric field is the sidebar width.
+  QWidget* metrics_page = stack->widget(1);
+  const QList<QSpinBox*> metric_spins = metrics_page->findChildren<QSpinBox*>();
+  auto* restore_metrics = metrics_page->findChild<QPushButton*>(QStringLiteral("RestoreMetrics"));
+  CHECK(!metric_spins.isEmpty());
+  CHECK(restore_metrics != nullptr);
+  if (!metric_spins.isEmpty() && restore_metrics != nullptr) {
+    metric_spins.front()->setValue(metric_spins.front()->maximum());
+    restore_metrics->click();
+    CHECK(metric_spins.front()->value() == ui::theme().metrics.sidebar_width);
+  }
+}
+
+// A preset only fills the fields; it never saves by itself.
+void test_assistant_form_preset() {
+  ui::AssistantForm form;
+
+  auto* preset = form.findChild<QComboBox*>();
+  CHECK(preset != nullptr);
+  if (preset == nullptr) {
+    return;
+  }
+
+  const QList<QSpinBox*> spins = form.findChildren<QSpinBox*>();
+  CHECK(spins.size() == 4);
+  if (spins.size() != 4) {
+    return;
+  }
+
+  // Index 0 is the placeholder; "Balanced (default)" is the second real entry:
+  // memory 4000, headroom 12000, trigger 80000, session pool 16000, in field order.
+  preset->setCurrentIndex(2);
+  CHECK(spins[0]->value() == 4000);
+  CHECK(spins[1]->value() == 12000);
+  CHECK(spins[2]->value() == 80000);
+  CHECK(spins[3]->value() == 16000);
+}
+
+void test_session_editor_preset() {
+  enter_scratch("session-preset");
+
+  lnb::Application notebook;
+  notebook.open_assistant("77777777-7777-7777-7777-777777777777", make_assistant());
+
+  ui::SessionEditor editor(notebook, 0);
+
+  auto* preset = editor.findChild<QComboBox*>();
+  CHECK(preset != nullptr);
+  if (preset == nullptr) {
+    return;
+  }
+
+  // "Large codebase analysis" (index 6) sets the trigger to 96000 and the tool-call
+  // budget to 128, which no other field holds.
+  preset->setCurrentIndex(6);
+
+  bool found_trigger = false;
+  bool found_calls = false;
+  const QList<QSpinBox*> spins = editor.findChildren<QSpinBox*>();
+  for (const QSpinBox* spin : spins) {
+    if (spin->value() == 96000) {
+      found_trigger = true;
+    }
+    if (spin->value() == 128) {
+      found_calls = true;
+    }
+  }
+  CHECK(found_trigger);
+  CHECK(found_calls);
 }
 
 // --- Wheel-safe spin boxes ----------------------------------------------------
@@ -652,6 +787,10 @@ int main(int argc, char** argv) {
   test_assistant_log_file();
   test_session_action_click_flag();
   test_settings_window_nav();
+  test_settings_reload_on_show(app);
+  test_settings_restore_defaults(app);
+  test_assistant_form_preset();
+  test_session_editor_preset();
   test_translucent_theme_buttons(app);
   test_code_block_restyles_on_theme_change(app);
   test_conversation_backgrounds(app);

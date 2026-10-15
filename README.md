@@ -255,23 +255,28 @@ during a turn.
 
 ## Interface
 
-A two-pane shell, flat in the spirit of Zed: components are separated by hairlines
-and background bands, not by frames or heavy highlights.
+A flat shell in the spirit of Zed: a full-width title bar over a sidebar and a chat
+pane, with components separated by hairlines and background bands, not by frames or
+heavy highlights.
 
-- **Sidebar** — a top header band with the `Local Notebook` banner and an icon-only
-  **New Session** action, a `SESSIONS` category label, the session list (newest
+- **Title bar** — one full-width band across the very top of the window, on the
+  `surface` colour with a hairline beneath it. The `Local Notebook` banner sits at
+  its left (inset to line up with the sidebar content); the conversation-specific
+  information sits at its right — the session id, the context-token usage of the
+  next request, and the last-message time. The session title is not repeated here;
+  it lives only in the sidebar row.
+- **Sidebar** — no header band of its own: below the unified title bar, a flat
+  full-width **New Session** row (styled like a list item: no border, a subtle hover
+  fill) sitting above the `SESSIONS` category label, the session list (newest
   activity first, ordered by the time of the last message), and the current-assistant
   block at the foot (assistant name, model, a settings button). A single hairline
-  separates the sidebar from the chat pane; the sidebar sits on the `surface` colour
-  and the header band has a hairline beneath it. Session rows are flat and full-width —
-  the title on the first line and the last-message time on the second — with a hairline
-  above the assistant block and no rounded corners or gaps anywhere. Each row reveals an
-  **edit** pencil and a **trash** action on hover; deleting asks for confirmation. The
-  hovered and selected rows fill edge to edge with a slightly brighter shade — no strong
-  accent highlight.
-- **Chat pane** — a narrow title bar (session title and id on the left; context-token
-  usage and the last-message time on the right) on the same `surface` band as the
-  sidebar header, with a hairline beneath it, above the transcript. All messages
+  separates the sidebar from the chat pane; the sidebar sits on the `surface` colour.
+  Session rows are flat and full-width — the title on the first line and the
+  last-message time on the second — with a hairline above the assistant block and no
+  rounded corners or gaps anywhere. Each row reveals an **edit** pencil and a
+  **trash** action on hover; deleting asks for confirmation. The hovered and selected
+  rows fill edge to edge with a slightly brighter shade — no strong accent highlight.
+- **Chat pane** — the transcript, below the unified title bar. All messages
   share one width and one left edge, the way Zed's agent panel reads; the user's own
   message is a rounded, bordered block, and assistant replies are
   rendered Markdown with code blocks and a copy button. Hovering a message reveals its
@@ -289,9 +294,16 @@ Windows:
 - **Settings** — a left navigation with **Configuration**, **Metrics**, **Assistant**,
   **Account** and **About**. The Assistant page edits the open assistant's
   configuration *and* shows its memory, with a manual **Summarize now**. Save applies
-  everything, re-applies the theme at runtime, and closes the window.
+  everything, re-applies the theme at runtime, and closes the window. Because a
+  cancelled edit must not survive to the next visit, every open re-reads the stored
+  settings, metrics and assistant. The Configuration and Metrics pages each carry a
+  **Restore to defaults** button (the shipped defaults, and the current theme's own
+  metrics respectively); it only fills the fields and never saves.
 - **Session editor** — title, shared directory, custom instructions, conversation
-  memory (with **Summarize now**), watermarks and budgets. Scrollable.
+  memory (with **Summarize now**), watermarks and budgets. A **preset** dropdown above
+  the budgets fills them with a starting point (light chat, balanced, novel writing,
+  role-play, abstract design, large codebase); like the settings presets, it only fills
+  the fields and never saves. Scrollable.
 
 Two performance measures keep long conversations responsive: the transcript renders
 only the most recent messages (older ones are revealed a page at a time), and the
@@ -334,7 +346,8 @@ ctest --test-dir build/linux-x64-debug --output-on-failure
   cascade delete, and the summariser payload shape.
 - **`ui`** — offscreen (`QT_QPA_PLATFORM=offscreen`): window chrome invariants, the
   sidebar populating at startup, settings persistence, the shared assistant form, the
-  settings navigation, and the wheel-safe spin boxes and font selectors.
+  settings navigation, settings reload-on-show and restore-to-defaults, the budget and
+  summarisation presets, and the wheel-safe spin boxes and font selectors.
 
 ## License
 
