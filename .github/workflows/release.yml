@@ -2,9 +2,6 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
   pull_request:
   workflow_dispatch:
     inputs:
@@ -28,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: main
           fetch-depth: 0
 
       - name: Determine version
@@ -169,7 +166,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: main
           fetch-depth: 0
 
       - name: Determine version
@@ -277,7 +274,7 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: [linux, windows]
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
 
     permissions:
@@ -301,7 +298,8 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
+          tag_name: ${{ inputs.tag }}
+          target_commitish: main
           generate_release_notes: true
           files: |
             release/*
