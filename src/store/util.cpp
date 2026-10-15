@@ -69,6 +69,10 @@ std::filesystem::path assistant_db(std::string_view uuid) {
   return assistant_dir(uuid) / "data.db";
 }
 
+std::filesystem::path assistant_log(std::string_view uuid) {
+  return assistant_dir(uuid) / "local-notebook.log";
+}
+
 } // namespace paths
 
 std::vector<std::string> scan_assistants() {

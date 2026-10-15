@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 
 #include "context/context.hpp"
@@ -14,6 +15,7 @@
 #include "store/database.hpp"
 #include "store/managers.hpp"
 #include "store/util.hpp"
+#include "support/log.hpp"
 
 namespace {
 
@@ -63,6 +65,50 @@ void test_util() {
     lnb::store::paths::assistant_db("abc") ==
     std::filesystem::path("data") / "abc" / "data.db"
   );
+  CHECK(
+    lnb::store::paths::assistant_log("abc") ==
+    std::filesystem::path("data") / "abc" / "local-notebook.log"
+  );
+}
+
+// --- Assistant log ------------------------------------------------------------
+
+// The logger buffers lines until a sink is attached, so messages logged before an
+// assistant is chosen still land at the top of that assistant's log rather than
+// on the command line.
+void test_log_file_sink() {
+  const std::filesystem::path path =
+    std::filesystem::temp_directory_path() / ("lnb-log-" + lnb::store::make_uuid() + ".log");
+
+  // Written before any sink exists: it must be buffered, not dropped.
+  lnb::log::info("before attach {}", 42);
+
+  std::FILE* file = std::fopen(path.string().c_str(), "w");
+  CHECK(file != nullptr);
+
+  if (file != nullptr) {
+    lnb::log::attach(file);
+    lnb::log::info("after attach {}", 7);
+    lnb::log::attach(nullptr);  // detach before closing the handle
+    std::fclose(file);
+
+    std::ifstream in(path);
+    const std::string contents(
+      (std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()
+    );
+
+    const std::size_t buffered = contents.find("before attach 42");
+    const std::size_t live = contents.find("after attach 7");
+
+    CHECK(buffered != std::string::npos);
+    CHECK(live != std::string::npos);
+
+    // The buffered startup line is flushed ahead of the line written afterwards.
+    CHECK(buffered < live);
+  }
+
+  std::error_code error;
+  std::filesystem::remove(path, error);
 }
 
 void test_scan_assistants() {
@@ -281,6 +327,14 @@ void test_sessions_by_recent(const std::filesystem::path& path) {
   CHECK(limited.size() == 2);
   CHECK(limited[0].id_ == newer_id);
   CHECK(limited[1].id_ == older_id);
+
+  // session_last_times gives one entry per session that has messages; the empty
+  // session is absent.
+  const auto times = db.session_last_times();
+  CHECK(times.size() == 2);
+  CHECK(times.at(newer_id) == "2026-01-02T00:00:00Z");
+  CHECK(times.at(older_id) == "2026-01-01T00:00:00Z");
+  CHECK(times.find(empty_id) == times.end());
 }
 
 void test_cascade_delete(const std::filesystem::path& path) {
@@ -372,6 +426,7 @@ int main() {
   };
 
   test_util();
+  test_log_file_sink();
   test_scan_assistants();
   test_summary_requests_stream();
   run(test_session_round_trip);

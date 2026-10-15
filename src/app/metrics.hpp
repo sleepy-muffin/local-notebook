@@ -19,7 +19,10 @@ struct ThemeMetrics {
   int composer_height = 76;
 
   int title_font_size = 15;
-  int session_item_height = 36;
+
+  // Session row height. The row holds two lines (title and time), so the delegate
+  // treats this as a floor and never clips the second line.
+  int session_item_height = 48;
 
   // Reading rhythm of message text. line_height_other / line_height_self are
   // percentages (100 is normal single spacing); paragraph_spacing is the gap

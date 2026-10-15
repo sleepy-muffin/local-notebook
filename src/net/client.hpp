@@ -6,6 +6,7 @@
 #include <optional>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "model.hpp"
@@ -54,10 +55,14 @@ ContextUsage context_usage(
 // Performs one streaming chat-completions request. Assistant text is streamed
 // into `task` as it arrives. Throws std::runtime_error on failure; a stop
 // request surfaces as the message "Generation cancelled".
+//
+// `kind` labels the request in the assistant log ("chat", "session-summary",
+// "assistant-summary"); the exact request body is written there verbatim before
+// it is posted.
 ChatCompletionResult send_message_once(
     const QJsonObject& payload, GenerationTask& task, std::stop_token stop_token,
     const std::string& api_url, const std::string& api_key,
-    const std::optional<std::string>& proxy
+    const std::optional<std::string>& proxy, std::string_view kind
 );
 
 // Runs one full assistant turn: sends the payload, executes any local tool

@@ -87,6 +87,12 @@ ThemeColors parse_colors(const QJsonObject& colors) {
   result.bubble_assistant_code =
       read_color(colors, "bubble_assistant_code", QColor(49, 50, 68));
 
+  // Default to the window colour so a theme that predates these keys keeps its
+  // previous look (the transcript and the field were transparent over the window).
+  result.conversation_background =
+      read_color(colors, "conversation_background", result.window);
+  result.input_background = read_color(colors, "input_background", result.window);
+
   result.border = read_color(colors, "border", QColor(69, 71, 90));
 
   result.danger = read_color(colors, "danger", QColor(243, 139, 168));
@@ -225,21 +231,25 @@ QString build_stylesheet() {
 
   // A small, scoped stylesheet: the chrome (title bar, sidebar rows, transcript)
   // is painted by hand, so only the standard controls are styled here.
+  //
+  // Backgrounds and borders are emitted through rgba() so a translucent theme
+  // lets the background image show through the standard controls too; QColor's
+  // name() would drop the alpha and force them opaque.
   QString sheet;
 
-  sheet += QStringLiteral("QWidget { color: %1; }").arg(c.text.name());
+  sheet += QStringLiteral("QWidget { color: %1; }").arg(rgba(c.text));
 
   sheet += QStringLiteral(
                "QLineEdit, QPlainTextEdit, QSpinBox, QComboBox {"
                "  background: %1; border: 1px solid %2; border-radius: 6px;"
                "  padding: 4px 6px; selection-background-color: %3;"
                "  selection-color: %4; }")
-               .arg(c.base.name(), c.border.name(), c.accent.name(), c.accent_text.name());
+               .arg(rgba(c.base), rgba(c.border), rgba(c.accent), rgba(c.accent_text));
 
   sheet += QStringLiteral(
                "QLineEdit:focus, QPlainTextEdit:focus, QSpinBox:focus, QComboBox:focus {"
                "  border: 1px solid %1; }")
-               .arg(c.accent.name());
+               .arg(rgba(c.accent));
 
   sheet += QStringLiteral(
                "QPushButton {"
@@ -248,14 +258,14 @@ QString build_stylesheet() {
                "QPushButton:hover { background: %3; }"
                "QPushButton:pressed { background: %4; }"
                "QPushButton:disabled { color: %5; }")
-               .arg(c.base.name(), c.border.name(), c.surface.name(), c.accent_active.name(),
-                    c.text_muted.name());
+               .arg(rgba(c.base), rgba(c.border), rgba(c.surface), rgba(c.accent_active),
+                    rgba(c.text_muted));
 
   sheet += QStringLiteral(
                "QToolButton { background: transparent; border: none; border-radius: 4px;"
                "  padding: 2px; }"
                "QToolButton:hover { background: %1; }")
-               .arg(c.surface.name());
+               .arg(rgba(c.surface));
 
   sheet += QStringLiteral(
                "QScrollBar:vertical { background: transparent; width: 10px; margin: 0; }"
@@ -264,13 +274,13 @@ QString build_stylesheet() {
                "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
                "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {"
                "  background: transparent; }")
-               .arg(c.border.name());
+               .arg(rgba(c.border));
 
   sheet += QStringLiteral(
                "QMenu { background: %1; border: 1px solid %2; padding: 4px; }"
                "QMenu::item { padding: 5px 18px; border-radius: 4px; }"
                "QMenu::item:selected { background: %3; }")
-               .arg(c.surface.name(), c.border.name(), c.accent.name());
+               .arg(rgba(c.surface), rgba(c.border), rgba(c.accent));
 
   sheet += QStringLiteral("QLabel { background: transparent; }");
 
@@ -279,6 +289,8 @@ QString build_stylesheet() {
                "QListView, QListWidget { background: transparent; border: none;"
                "  outline: none; }");
 
+  // Dialogs stay opaque: a dialog is a top-level window with no background image
+  // behind it, so an alpha fill would only darken it against the desktop.
   sheet += QStringLiteral(
                "QDialog { background: %1; }"
                "QSpinBox::up-button, QSpinBox::down-button { width: 14px; }")

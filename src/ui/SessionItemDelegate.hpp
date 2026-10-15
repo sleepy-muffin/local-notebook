@@ -11,9 +11,10 @@ class QStyleOptionViewItem;
 
 namespace ui {
 
-// Paints one session row: a subtle hover, a slightly brighter selected row (the
-// way Zed's chrome behaves), the title, and two hover-only actions — an edit
-// pencil that opens the session editor and a trash can that deletes it.
+// Paints one session row: a flat, full-width hover or selected shading (the way
+// Zed's chrome behaves), the title on the first line and the last-message time on
+// the second, plus two hover-only actions — an edit pencil that opens the session
+// editor and a trash can that deletes it.
 //
 // The action icons come from the icon theme (with standard-icon fallbacks),
 // exactly as the per-message actions in the transcript do, so the row does not

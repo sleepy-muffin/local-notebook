@@ -21,6 +21,9 @@
         "bubble_assistant_text": [205, 214, 244, 1.0],
         "bubble_assistant_code": [49, 50, 68, 1.0],
 
+        "conversation_background": [17, 17, 27, 1.0],
+        "input_background": [17, 17, 27, 1.0],
+
         "border": [69, 71, 90, 1.0],
 
         "danger": [243, 139, 168, 1.0],
@@ -48,6 +51,9 @@
         "bubble_assistant": [54, 58, 79, 1.0],
         "bubble_assistant_text": [202, 211, 245, 1.0],
         "bubble_assistant_code": [54, 58, 79, 1.0],
+
+        "conversation_background": [24, 25, 38, 1.0],
+        "input_background": [24, 25, 38, 1.0],
 
         "border": [73, 77, 100, 1.0],
 
@@ -77,6 +83,9 @@
         "bubble_assistant_text": [198, 208, 245, 1.0],
         "bubble_assistant_code": [65, 69, 89, 1.0],
 
+        "conversation_background": [35, 38, 52, 1.0],
+        "input_background": [35, 38, 52, 1.0],
+
         "border": [81, 87, 109, 1.0],
 
         "danger": [231, 130, 132, 1.0],
@@ -105,6 +114,9 @@
         "bubble_assistant_text": [76, 79, 105, 1.0],
         "bubble_assistant_code": [204, 208, 218, 1.0],
 
+        "conversation_background": [220, 224, 232, 1.0],
+        "input_background": [220, 224, 232, 1.0],
+
         "border": [188, 192, 204, 1.0],
 
         "danger": [210, 15, 57, 1.0],
@@ -116,7 +128,7 @@
       "dark": true,
       "colors": {
         "window": [17, 17, 27, 1.0],
-        "surface": [24, 24, 37, 0.25],
+        "surface": [24, 24, 37, 0.0],
         "base": [30, 30, 46, 0.38],
 
         "text": [205, 214, 244, 1.0],
@@ -131,7 +143,10 @@
         "bubble_user_text": [205, 214, 244, 1.0],
         "bubble_assistant": [49, 50, 68, 0.5],
         "bubble_assistant_text": [205, 214, 244, 1.0],
-        "bubble_assistant_code": [49, 50, 68, 0.5],
+        "bubble_assistant_code": [49, 50, 68, 0.25],
+
+        "conversation_background": [17, 17, 27, 0.0],
+        "input_background": [17, 17, 27, 0.0],
 
         "border": [69, 71, 90, 0.35],
 
@@ -144,7 +159,7 @@
       "dark": true,
       "colors": {
         "window": [24, 25, 38, 1.0],
-        "surface": [30, 32, 48, 0.25],
+        "surface": [30, 32, 48, 0.0],
         "base": [36, 39, 58, 0.35],
 
         "text": [202, 211, 245, 1.0],
@@ -159,7 +174,10 @@
         "bubble_user_text": [202, 211, 245, 1.0],
         "bubble_assistant": [54, 58, 79, 0.5],
         "bubble_assistant_text": [202, 211, 245, 1.0],
-        "bubble_assistant_code": [54, 58, 79, 0.5],
+        "bubble_assistant_code": [54, 58, 79, 0.25],
+
+        "conversation_background": [24, 25, 38, 0.0],
+        "input_background": [24, 25, 38, 0.0],
 
         "border": [73, 77, 100, 0.35],
 
@@ -172,7 +190,7 @@
       "dark": true,
       "colors": {
         "window": [35, 38, 52, 1.0],
-        "surface": [41, 44, 60, 0.25],
+        "surface": [41, 44, 60, 0.0],
         "base": [48, 52, 70, 0.38],
 
         "text": [198, 208, 245, 1.0],
@@ -187,7 +205,10 @@
         "bubble_user_text": [198, 208, 245, 1.0],
         "bubble_assistant": [65, 69, 89, 0.5],
         "bubble_assistant_text": [198, 208, 245, 1.0],
-        "bubble_assistant_code": [65, 69, 89, 0.5],
+        "bubble_assistant_code": [65, 69, 89, 0.25],
+
+        "conversation_background": [35, 38, 52, 0.0],
+        "input_background": [35, 38, 52, 0.0],
 
         "border": [81, 87, 109, 0.35],
 
@@ -200,7 +221,7 @@
       "dark": false,
       "colors": {
         "window": [220, 224, 232, 0.85],
-        "surface": [230, 233, 239, 0.25],
+        "surface": [230, 233, 239, 0.0],
         "base": [239, 241, 245, 0.38],
 
         "text": [76, 79, 105, 1.0],
@@ -215,7 +236,10 @@
         "bubble_user_text": [76, 79, 105, 1.0],
         "bubble_assistant": [204, 208, 218, 0.5],
         "bubble_assistant_text": [76, 79, 105, 1.0],
-        "bubble_assistant_code": [204, 208, 218, 0.5],
+        "bubble_assistant_code": [204, 208, 218, 0.25],
+
+        "conversation_background": [220, 224, 232, 0.0],
+        "input_background": [220, 224, 232, 0.0],
 
         "border": [188, 192, 204, 0.35],
 
@@ -233,7 +257,7 @@
     "page_margin": 14,
     "composer_height": 76,
     "title_font_size": 15,
-    "session_item_height": 36,
+    "session_item_height": 48,
     "line_height_other": 160,
     "line_height_self": 135,
     "paragraph_spacing": 10,

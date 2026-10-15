@@ -268,4 +268,19 @@ std::optional<std::string> database::last_message_time(
   return std::nullopt;
 }
 
+std::unordered_map<std::uint32_t, std::string> database::session_last_times() const {
+  auto stmt = connection_.prepare(
+    "SELECT session_id, MAX(made_at) FROM message GROUP BY session_id"
+  );
+
+  std::unordered_map<std::uint32_t, std::string> times;
+  while (stmt.step()) {
+    const std::optional<std::string> made_at = stmt.column_text_opt(1);
+    if (made_at.has_value()) {
+      times.emplace(stmt.column_uint32(0), *made_at);
+    }
+  }
+  return times;
+}
+
 } // namespace lnb::store

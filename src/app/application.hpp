@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <string>
 
@@ -48,11 +49,20 @@ public:
   [[nodiscard]] bool shutting_down() const { return shutting_down_; }
 
 private:
+  // Opens data/<uuid>/local-notebook.log (append) and attaches it as the log
+  // sink; closes any previously attached log first. A failure leaves logging
+  // buffered, never fatal.
+  void open_log(const std::string& uuid);
+
+  // Detaches and closes the log file, if one is open.
+  void close_log();
+
   Settings settings_;
   std::string assistant_uuid_;
   Assistant assistant_;
   std::unique_ptr<store::database> db_;
   std::unique_ptr<store::SessionManager> sessions_;
+  std::FILE* log_file_ = nullptr;
   bool shutting_down_ = false;
 };
 

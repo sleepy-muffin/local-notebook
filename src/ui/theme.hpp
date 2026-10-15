@@ -40,6 +40,12 @@ struct ThemeColors {
   QColor bubble_assistant_text;
   QColor bubble_assistant_code;
 
+  // The conversation (transcript) pane and the composer input field. Themes that
+  // sit over a background image keep both fully transparent, so the tinted image
+  // shows through; plain themes use the window colour.
+  QColor conversation_background;
+  QColor input_background;
+
   QColor border;
 
   QColor danger;

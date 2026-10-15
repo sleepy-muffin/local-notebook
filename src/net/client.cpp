@@ -370,7 +370,7 @@ ContextUsage context_usage(
 ChatCompletionResult send_message_once(
     const QJsonObject& payload, GenerationTask& task, std::stop_token stop_token,
     const std::string& api_url, const std::string& api_key,
-    const std::optional<std::string>& proxy
+    const std::optional<std::string>& proxy, std::string_view kind
 ) {
   auto throw_if_stopped = [&stop_token]() {
     if (stop_token.stop_requested()) {
@@ -401,8 +401,13 @@ ChatCompletionResult send_message_once(
     );
   }
 
-  QNetworkReply* reply =
-      manager.post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
+  // Record the exact request body: these are byte-for-byte the bytes posted, so
+  // a surprising reply (or a failed summary) can always be traced back to what
+  // the model was actually sent.
+  const QByteArray body = QJsonDocument(payload).toJson(QJsonDocument::Compact);
+  lnb::log::info("request {}: {}", kind, body.toStdString());
+
+  QNetworkReply* reply = manager.post(request, body);
 
   SseStream stream(task, stop_token);
 
@@ -534,7 +539,9 @@ ChatCompletionResult generate_reply(
 
     lnb::log::info("generate_reply round={}", round);
 
-    result = send_message_once(payload, task, stop_token, api_url, api_key, proxy);
+    result = send_message_once(
+        payload, task, stop_token, api_url, api_key, proxy, "chat"
+    );
 
     if (result.tool_calls.empty()) {
       note_length_warning(result, task);
@@ -687,7 +694,7 @@ std::string fold_session_memory(
     silent_task.start();
 
     const ChatCompletionResult result = send_message_once(
-        request, silent_task, stop_token, api_url, api_key, proxy
+        request, silent_task, stop_token, api_url, api_key, proxy, "session-summary"
     );
 
     const std::string text = trimmed(result.text);
@@ -882,7 +889,7 @@ std::string fold_assistant_memory(
   silent_task.start();
 
   const ChatCompletionResult result = send_message_once(
-      request, silent_task, stop_token, api_url, api_key, proxy
+      request, silent_task, stop_token, api_url, api_key, proxy, "assistant-summary"
   );
 
   const std::string memory = trimmed(result.text);

@@ -9,8 +9,9 @@
 
 namespace ui {
 
-BackgroundWidget::BackgroundWidget(QWidget* parent)
-    : QWidget(parent) {
+BackgroundWidget::BackgroundWidget(QWidget* parent, bool use_background_image)
+    : QWidget(parent),
+      use_background_image_(use_background_image) {
   // The widget paints itself, so the stylesheet must not fill it first.
   setAttribute(Qt::WA_StyledBackground, false);
   setAutoFillBackground(false);
@@ -58,7 +59,7 @@ void BackgroundWidget::paintEvent(QPaintEvent* event) {
 
   QPainter painter(this);
 
-  if (background_enabled() && !background_image().isNull()) {
+  if (use_background_image_ && background_enabled() && !background_image().isNull()) {
     ensure_scaled_background();
 
     if (!scaled_background_.isNull()) {

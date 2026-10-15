@@ -9,7 +9,9 @@
 // QT_QPA_PLATFORM=offscreen set.
 
 #include <QApplication>
+#include <QColor>
 #include <QFrame>
+#include <QLabel>
 #include <QListView>
 #include <QListWidget>
 #include <QMouseEvent>
@@ -19,12 +21,15 @@
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QStyleOptionViewItem>
+#include <QToolButton>
 #include <QWheelEvent>
 #include <QWidget>
 
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 
 #include "app/application.hpp"
@@ -33,8 +38,10 @@
 #include "model.hpp"
 #include "store/util.hpp"
 #include "ui/AssistantForm.hpp"
+#include "ui/ConversationView.hpp"
 #include "ui/MainWindow.hpp"
 #include "ui/SessionItemDelegate.hpp"
+#include "ui/SessionListModel.hpp"
 #include "ui/SettingsWindow.hpp"
 #include "ui/SpinBox.hpp"
 #include "ui/theme.hpp"
@@ -204,6 +211,42 @@ void test_main_window_invariants() {
     CHECK(header->maximumHeight() == 38);
   }
 
+  // The flat sidebar: a header band holding an icon-only New Session action,
+  // above the SESSIONS category and the list.
+  auto* sidebar_header = window.findChild<QWidget*>(QStringLiteral("SidebarHeader"));
+  CHECK(sidebar_header != nullptr);
+  if (sidebar_header != nullptr) {
+    CHECK(sidebar_header->minimumHeight() == 38);
+    CHECK(sidebar_header->maximumHeight() == 38);
+  }
+
+  auto* new_session = window.findChild<QToolButton*>(QStringLiteral("NewSession"));
+  CHECK(new_session != nullptr);
+
+  // The foot-of-sidebar card shows the current assistant (name and model), not a
+  // session.
+  auto* current_name = window.findChild<QLabel*>(QStringLiteral("CurrentName"));
+  CHECK(current_name != nullptr);
+  if (current_name != nullptr) {
+    CHECK(current_name->text() == QStringLiteral("Tester"));
+  }
+
+  auto* current_model = window.findChild<QLabel*>(QStringLiteral("CurrentModel"));
+  CHECK(current_model != nullptr);
+  if (current_model != nullptr) {
+    CHECK(current_model->text() == QStringLiteral("test-model"));
+  }
+
+  // Each session row carries the time of its newest message on the second line.
+  auto* sessions_view = window.findChild<QListView*>(QStringLiteral("Sessions"));
+  CHECK(sessions_view != nullptr);
+  if (sessions_view != nullptr && sessions_view->model() != nullptr &&
+      sessions_view->model()->rowCount() == 1) {
+    const QString time =
+        sessions_view->model()->index(0, 0).data(ui::SessionListModel::TimeRole).toString();
+    CHECK(!time.isEmpty());
+  }
+
   const QList<QFrame*> bubbles =
     window.findChildren<QFrame*>(QStringLiteral("MessageBubble"));
   CHECK(bubbles.size() == 3);
@@ -257,6 +300,33 @@ void test_session_list_populated_on_startup() {
   }
 }
 
+// --- Assistant log ------------------------------------------------------------
+
+// Opening an assistant redirects logging into its own file, which lives beside
+// the assistant's settings and database.
+void test_assistant_log_file() {
+  const std::filesystem::path directory = enter_scratch("assistant-log");
+
+  lnb::Application notebook;
+  notebook.open_assistant("44444444-4444-4444-4444-444444444444", make_assistant());
+
+  const std::filesystem::path path = directory / "data" /
+      "44444444-4444-4444-4444-444444444444" / "local-notebook.log";
+
+  CHECK(std::filesystem::exists(path));
+
+  std::ifstream in(path);
+  const std::string contents(
+      (std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()
+  );
+
+  // The line that records the opened assistant is written into the file.
+  CHECK(
+      contents.find("opened assistant 44444444-4444-4444-4444-444444444444") !=
+      std::string::npos
+  );
+}
+
 // --- Session row actions ------------------------------------------------------
 
 // A release on a row's edit/delete icon is claimed by the delegate and flagged,
@@ -289,6 +359,12 @@ void test_session_action_click_flag() {
   // A release on the row body is not an action click.
   CHECK(!release_at(QPointF(20, 18)));
   CHECK(!delegate.take_action_click());
+
+  // The row holds two lines (title and time), so its height never falls below the
+  // configured metric even when that metric is set small.
+  QStyleOptionViewItem hint_option;
+  const QSize hint = delegate.sizeHint(hint_option, QModelIndex());
+  CHECK(hint.height() >= ui::metrics().session_item_height);
 }
 
 // --- Settings window ----------------------------------------------------------
@@ -378,6 +454,174 @@ void test_spin_box_wheel() {
   CHECK(!down.isAccepted());
 }
 
+void test_font_combo_wheel() {
+  ui::FontComboBox combo;
+
+  const auto wheel = [](int delta) {
+    return QWheelEvent(
+        QPointF(10, 10), QPointF(10, 10), QPoint(0, 0), QPoint(0, delta), Qt::NoButton,
+        Qt::NoModifier, Qt::NoScrollPhase, false
+    );
+  };
+
+  // The family under the cursor is the current one; crossing the field while
+  // scrolling must never switch it, in either direction.
+  const QString before = combo.currentFont().family();
+
+  QWheelEvent up = wheel(120);
+  QApplication::sendEvent(&combo, &up);
+  CHECK(combo.currentFont().family() == before);
+
+  QWheelEvent down = wheel(-120);
+  QApplication::sendEvent(&combo, &down);
+  CHECK(combo.currentFont().family() == before);
+
+  CHECK(!up.isAccepted());
+  CHECK(!down.isAccepted());
+}
+
+// --- Translucent theme --------------------------------------------------------
+
+// Writes a theme file with one opaque and one translucent variant, so a theme
+// change can be observed without shipping the real themes/theme.json into the
+// sandbox.
+void write_probe_themes() {
+  std::filesystem::create_directories("themes");
+  std::ofstream out("themes/theme.json");
+  out << R"({
+  "themes": {
+    "Opaque": {
+      "dark": true,
+      "colors": {
+        "window": [17, 17, 27, 1.0],
+        "surface": [24, 24, 37, 1.0],
+        "base": [30, 30, 46, 1.0],
+        "text": [205, 214, 244, 1.0],
+        "text_muted": [166, 173, 200, 1.0],
+        "accent": [245, 194, 231, 1.0],
+        "accent_hover": [242, 205, 205, 1.0],
+        "accent_active": [235, 160, 172, 1.0],
+        "accent_text": [17, 17, 27, 1.0],
+        "bubble_user": [49, 50, 68, 1.0],
+        "bubble_user_text": [205, 214, 244, 1.0],
+        "bubble_assistant": [49, 50, 68, 1.0],
+        "bubble_assistant_text": [205, 214, 244, 1.0],
+        "bubble_assistant_code": [49, 50, 68, 1.0],
+        "conversation_background": [70, 80, 90, 1.0],
+        "input_background": [100, 110, 120, 1.0],
+        "border": [69, 71, 90, 1.0],
+        "danger": [243, 139, 168, 1.0],
+        "danger_text": [17, 17, 27, 1.0]
+      }
+    },
+    "Translucent": {
+      "dark": true,
+      "colors": {
+        "window": [17, 17, 27, 1.0],
+        "surface": [24, 24, 37, 0.25],
+        "base": [30, 30, 46, 0.38],
+        "text": [205, 214, 244, 1.0],
+        "text_muted": [166, 173, 200, 0.85],
+        "accent": [245, 194, 231, 1.0],
+        "accent_hover": [242, 205, 205, 1.0],
+        "accent_active": [235, 160, 172, 1.0],
+        "accent_text": [17, 17, 27, 1.0],
+        "bubble_user": [49, 50, 68, 0.5],
+        "bubble_user_text": [205, 214, 244, 1.0],
+        "bubble_assistant": [49, 50, 68, 0.5],
+        "bubble_assistant_text": [205, 214, 244, 1.0],
+        "bubble_assistant_code": [49, 50, 68, 0.5],
+        "conversation_background": [70, 80, 90, 0.0],
+        "input_background": [100, 110, 120, 0.0],
+        "border": [69, 71, 90, 0.35],
+        "danger": [243, 139, 168, 1.0],
+        "danger_text": [17, 17, 27, 1.0]
+      }
+    }
+  },
+  "default_metrics": {}
+}
+)";
+}
+
+// Buttons inherit the theme's alpha through the global stylesheet. It used to
+// emit QColor::name() for their backgrounds, which silently dropped it and left
+// "New Session" and "Send" opaque on translucent themes.
+void test_translucent_theme_buttons(QApplication& app) {
+  enter_scratch("translucent-buttons");
+  write_probe_themes();
+
+  lnb::Settings settings;
+  settings.theme = "Translucent";
+  ui::apply_theme(app, settings);
+
+  const QString sheet = app.styleSheet();
+  const int start = sheet.indexOf(QStringLiteral("QPushButton {"));
+  CHECK(start >= 0);
+  if (start >= 0) {
+    // The button background must keep the theme's alpha (0.38 for base).
+    const QString rule = sheet.mid(start, 240);
+    CHECK(rule.contains(QStringLiteral("rgba(")));
+    CHECK(!rule.contains(QStringLiteral("#")));
+  }
+}
+
+// A fenced code block carries its background in a stylesheet rather than in the
+// rendered HTML, so a live theme change must restyle the frame explicitly; an
+// in-place text update never rebuilds it.
+void test_code_block_restyles_on_theme_change(QApplication& app) {
+  enter_scratch("code-restyle");
+  write_probe_themes();
+
+  lnb::Settings opaque;
+  opaque.theme = "Opaque";
+  ui::apply_theme(app, opaque);
+
+  ui::MessageBubble bubble(ui::MessageBubble::Role::Assistant);
+  bubble.set_text(QStringLiteral("```\nint x = 0;\n```"));
+
+  auto* frame = bubble.findChild<QFrame*>(QStringLiteral("CodeBlock"));
+  CHECK(frame != nullptr);
+  if (frame == nullptr) {
+    return;
+  }
+
+  const QString before = frame->styleSheet();
+  CHECK(before.contains(QStringLiteral("rgba(")));
+  CHECK(before.contains(QStringLiteral("255")));
+
+  lnb::Settings translucent;
+  translucent.theme = "Translucent";
+  ui::apply_theme(app, translucent);
+  bubble.refresh_style();
+
+  const QString after = frame->styleSheet();
+  CHECK(after != before);
+  CHECK(after.contains(QStringLiteral("127")));
+}
+
+// --- Conversation / input backgrounds ----------------------------------------
+
+// The conversation pane and the composer read their own theme colours, which
+// default to the window colour. On translucent themes both are fully
+// transparent, so the background image (or tint) shows through.
+void test_conversation_backgrounds(QApplication& app) {
+  enter_scratch("conversation-backgrounds");
+  write_probe_themes();
+
+  lnb::Settings opaque;
+  opaque.theme = "Opaque";
+  ui::apply_theme(app, opaque);
+  CHECK(ui::theme().colors.conversation_background == QColor(70, 80, 90, 255));
+  CHECK(ui::theme().colors.input_background == QColor(100, 110, 120, 255));
+
+  lnb::Settings translucent;
+  translucent.theme = "Translucent";
+  ui::apply_theme(app, translucent);
+  CHECK(ui::theme().colors.conversation_background.alpha() == 0);
+  CHECK(ui::theme().colors.input_background.alpha() == 0);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -397,6 +641,7 @@ int main(int argc, char** argv) {
   test_settings_round_trip();
   test_assistant_form_round_trip();
   test_spin_box_wheel();
+  test_font_combo_wheel();
 
   // Widgets read the theme, so it must be installed before any is created. With
   // no theme.json in the sandbox, this exercises the compiled-in fallback.
@@ -404,8 +649,12 @@ int main(int argc, char** argv) {
 
   test_main_window_invariants();
   test_session_list_populated_on_startup();
+  test_assistant_log_file();
   test_session_action_click_flag();
   test_settings_window_nav();
+  test_translucent_theme_buttons(app);
+  test_code_block_restyles_on_theme_change(app);
+  test_conversation_backgrounds(app);
 
   if (g_failures != 0) {
     std::fprintf(stderr, "%d check(s) failed\n", g_failures);

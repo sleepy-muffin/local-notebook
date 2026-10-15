@@ -12,6 +12,8 @@
 #include <QStyle>
 #include <QStyleOptionViewItem>
 
+#include <algorithm>
+
 namespace ui {
 
 namespace {
@@ -22,6 +24,13 @@ constexpr int kActionSize = 20;
 constexpr int kIconSize = 15;
 constexpr int kActionMargin = 4;
 constexpr int kActionGap = 2;
+
+// The text inset. It matches the sidebar bands' padding, so row titles line up
+// with the banner and the category label.
+constexpr int kTextInset = 12;
+
+// Vertical breathing room shared by the title and time lines.
+constexpr int kRowVerticalPadding = 12;
 
 // The inner rect the icon is centred in.
 QRect icon_rect(const QRect& button) {
@@ -88,32 +97,51 @@ void SessionItemDelegate::paint(
   const bool selected = option.state & QStyle::State_Selected;
   const bool hovered = option.state & QStyle::State_MouseOver;
 
-  // Low-contrast states: a barely-visible hover and a slightly brighter
-  // selected row. No strong accent highlight.
+  // Flat rows: the state fills the whole row, edge to edge, with no radius and no
+  // inset, so adjacent rows touch and the list reads as one surface shaded only
+  // by its hover and selection colours.
   if (selected) {
-    painter->setPen(Qt::NoPen);
-    painter->setBrush(row_selected_background());
-    painter->drawRoundedRect(rect.adjusted(4, 1, -4, -1), 6, 6);
+    painter->fillRect(rect, row_selected_background());
   } else if (hovered) {
-    painter->setPen(Qt::NoPen);
-    painter->setBrush(row_hover_background());
-    painter->drawRoundedRect(rect.adjusted(4, 1, -4, -1), 6, 6);
+    painter->fillRect(rect, row_hover_background());
   }
 
   const QString title = index.data(SessionListModel::TitleRole).toString();
+  const QString time = index.data(SessionListModel::TimeRole).toString();
 
-  QFont font = ui_font();
-  painter->setFont(font);
-  painter->setPen(theme().colors.text);
+  const QFont title_font = ui_font();
+  QFont time_font = ui_font();
+  if (time_font.pointSizeF() > 1.5) {
+    time_font.setPointSizeF(time_font.pointSizeF() - 1.0);
+  }
 
-  // Reserve the trailing room the two action icons need, so a long title is
-  // elided before it can reach them.
+  const QFontMetrics title_metrics(title_font);
+  const QFontMetrics time_metrics(time_font);
+
+  // Two lines, centred as a block. The trailing room the actions need is
+  // reserved, so a long title is elided before it can reach them.
   const int reserved = kActionSize * 2 + kActionGap + kActionMargin;
-  const QRect text_rect = rect.adjusted(12, 0, -reserved, 0);
-  const QString elided = QFontMetrics(font).elidedText(
-      title, Qt::ElideRight, text_rect.width()
+  const int text_width = rect.width() - kTextInset - reserved;
+  const int text_height = title_metrics.height() + (time.isEmpty() ? 0 : time_metrics.height());
+  const int top = rect.top() + (rect.height() - text_height) / 2;
+
+  const QRect title_rect(rect.left() + kTextInset, top, text_width, title_metrics.height());
+  painter->setFont(title_font);
+  painter->setPen(theme().colors.text);
+  painter->drawText(
+      title_rect, Qt::AlignVCenter | Qt::AlignLeft,
+      title_metrics.elidedText(title, Qt::ElideRight, title_rect.width())
   );
-  painter->drawText(text_rect, Qt::AlignVCenter | Qt::AlignLeft, elided);
+
+  if (!time.isEmpty()) {
+    const QRect time_rect(
+        rect.left() + kTextInset, top + title_metrics.height(), text_width,
+        time_metrics.height()
+    );
+    painter->setFont(time_font);
+    painter->setPen(theme().colors.text_muted);
+    painter->drawText(time_rect, Qt::AlignVCenter | Qt::AlignLeft, time);
+  }
 
   // The actions appear only while the row is hovered, so even the current
   // session's row stays calm at rest.
@@ -136,7 +164,19 @@ QSize SessionItemDelegate::sizeHint(
 ) const {
   Q_UNUSED(index);
   Q_UNUSED(option);
-  return QSize(0, metrics().session_item_height);
+
+  // The row holds two lines (title and time); the configured height is a floor, so
+  // the second line is never clipped even if the metric is set small.
+  const QFont title_font = ui_font();
+  QFont time_font = ui_font();
+  if (time_font.pointSizeF() > 1.5) {
+    time_font.setPointSizeF(time_font.pointSizeF() - 1.0);
+  }
+
+  const int two_line_height = QFontMetrics(title_font).height() +
+      QFontMetrics(time_font).height() + kRowVerticalPadding;
+
+  return QSize(0, std::max(metrics().session_item_height, two_line_height));
 }
 
 bool SessionItemDelegate::editorEvent(

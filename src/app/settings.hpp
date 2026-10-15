@@ -27,7 +27,7 @@ struct Settings {
 
   // RGBA colour painted over the background image. nullopt shows it untinted.
   std::optional<std::array<float, 4>> background_override =
-      std::array<float, 4>{0.12f, 0.05f, 0.10f, 0.25f};
+      std::array<float, 4>{0.094f, 0.098f, 0.149f, 0.85f};
 
   // General UI font (every widget), chat font (transcript + composer) and
   // monospace font (code). An empty family keeps the system default.

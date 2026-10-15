@@ -9,7 +9,6 @@
 
 class QLabel;
 class QListView;
-class QPushButton;
 class QStackedWidget;
 class QTimer;
 class QToolButton;
@@ -75,10 +74,10 @@ private:
   QListView* sessions_view_ = nullptr;
   SessionListModel* sessions_model_ = nullptr;
   SessionItemDelegate* sessions_delegate_ = nullptr;
-  QPushButton* new_session_button_ = nullptr;
+  QToolButton* new_session_button_ = nullptr;
 
   QLabel* current_name_ = nullptr;
-  QLabel* current_id_ = nullptr;
+  QLabel* current_model_ = nullptr;
   QToolButton* current_settings_ = nullptr;
 
   QLabel* brand_ = nullptr;

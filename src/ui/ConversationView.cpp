@@ -98,6 +98,13 @@ int code_block_bottom_gap() {
   return line_spacing * std::max(0, line_height_other() - 100) / 100;
 }
 
+// The stylesheet of a fenced code block. It is rebuilt (rather than cached) so a
+// theme change always re-derives the background from the current colours.
+QString code_block_stylesheet() {
+  return QStringLiteral("QFrame#CodeBlock { background: %1; border-radius: 6px; }")
+      .arg(css_color(theme().colors.bubble_assistant_code));
+}
+
 // Renders Markdown into rich text for the assistant label. Code blocks get a
 // darker background and every code span uses the configured monospace font.
 QString render_markdown(const QString& markdown) {
@@ -315,6 +322,18 @@ void MessageBubble::refresh_style() {
   const QString current = source_;
   source_.clear();
   set_text(current);
+
+  // A fenced code block keeps its stylesheet outside the rendered HTML, so it
+  // must be restyled explicitly; an in-place text update never rebuilds it.
+  refresh_code_blocks();
+}
+
+void MessageBubble::refresh_code_blocks() {
+  for (const Block& block : blocks_) {
+    if (block.code && block.frame != nullptr) {
+      block.frame->setStyleSheet(code_block_stylesheet());
+    }
+  }
 }
 
 // Splits raw Markdown into alternating prose and fenced-code segments. A fence
@@ -447,10 +466,7 @@ void MessageBubble::rebuild_blocks(const std::vector<Segment>& segments) {
     frame->setAttribute(Qt::WA_StyledBackground, true);
     frame->setMinimumSize(0, 0);
     frame->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
-    frame->setStyleSheet(
-        QStringLiteral("QFrame#CodeBlock { background: %1; border-radius: 6px; }")
-            .arg(css_color(theme().colors.bubble_assistant_code))
-    );
+    frame->setStyleSheet(code_block_stylesheet());
     auto* frame_layout = new QVBoxLayout(frame);
     frame_layout->setContentsMargins(10, 8, 10, 8);
     QLabel* label = make_label(frame, Qt::PlainText);
@@ -473,7 +489,7 @@ void MessageBubble::rebuild_blocks(const std::vector<Segment>& segments) {
     container_layout->addWidget(frame);
 
     body_layout_->addWidget(container);
-    blocks_.push_back(Block{true, container, label});
+    blocks_.push_back(Block{true, container, label, frame});
   }
 }
 
@@ -623,6 +639,11 @@ ConversationView::ConversationView(
       controller_(app, session_id) {
   const lnb::ThemeMetrics& m = metrics();
 
+  // The pane paints its own background (the conversation surface), so the
+  // stylesheet must be allowed to fill it.
+  setObjectName(QStringLiteral("ConversationView"));
+  setAttribute(Qt::WA_StyledBackground, true);
+
   setMinimumWidth(0);
   setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Minimum);
 
@@ -646,7 +667,6 @@ ConversationView::ConversationView(
   transcript_->setObjectName(QStringLiteral("TranscriptInner"));
   transcript_->setMinimumWidth(0);
   transcript_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-  transcript_->setAutoFillBackground(false);
 
   transcript_layout_ = new QVBoxLayout(transcript_);
   transcript_layout_->setContentsMargins(
@@ -705,6 +725,13 @@ ConversationView::ConversationView(
 
   scroll_->setWidget(transcript_);
 
+  // QScrollArea::setWidget() force-enables the scrolled widget's auto-fill with
+  // QPalette::Window, which would paint an opaque band over the pane's own
+  // conversation surface. Undo it so the surface shows through -- most visibly on
+  // a translucent theme, where the tinted background image must reach the
+  // transcript.
+  transcript_->setAutoFillBackground(false);
+
   // The transcript column is re-inset whenever the viewport is resized so it
   // stays centred once the pane is wider than the configured flow width.
   scroll_->viewport()->installEventFilter(this);
@@ -712,7 +739,9 @@ ConversationView::ConversationView(
 
   auto* composer = new QWidget(this);
   composer->setObjectName(QStringLiteral("ComposerBar"));
+  composer->setAttribute(Qt::WA_StyledBackground, true);
   composer->setAutoFillBackground(false);
+  composer_bar_ = composer;
 
   auto* composer_layout = new QHBoxLayout(composer);
   composer_layout->setContentsMargins(
@@ -733,16 +762,20 @@ ConversationView::ConversationView(
   input_->installEventFilter(this);
 
   auto* buttons = new QVBoxLayout();
-  buttons->setSpacing(6);
+  buttons->setSpacing(4);
 
   send_button_ = new QPushButton(QStringLiteral("Send"), composer);
+  send_button_->setObjectName(QStringLiteral("SendButton"));
+  send_button_->setCursor(Qt::PointingHandCursor);
   cancel_button_ = new QPushButton(QStringLiteral("Cancel"), composer);
   cancel_button_->setObjectName(QStringLiteral("Secondary"));
   cancel_button_->setVisible(false);
 
+  // The action sits at the bottom-right of the block, the way Zed places its
+  // composer action.
+  buttons->addStretch(1);
   buttons->addWidget(send_button_);
   buttons->addWidget(cancel_button_);
-  buttons->addStretch();
 
   composer_layout->addWidget(input_, 1);
   composer_layout->addLayout(buttons);
@@ -1159,18 +1192,48 @@ void ConversationView::update_content_margins() {
 
 void ConversationView::apply_composer_style() {
   const ThemeColors& colors = theme().colors;
-  const int radius = metrics().bubble_radius;
 
-  // The field wears the same surface as the user's own message block.
+  // The conversation surface. A theme with a background image keeps it fully
+  // transparent, so the tinted image shows through; a plain theme uses its
+  // window colour.
+  setStyleSheet(
+      QStringLiteral("QWidget#ConversationView { background: %1; }")
+          .arg(css_color(colors.conversation_background))
+  );
+
+  // Zed-like composer: the field is bare text on the conversation surface, and
+  // the whole block is set off from the transcript by a single hairline. No field
+  // chrome and no rounded corners. The field's own background is themeable.
   input_->setStyleSheet(
       QStringLiteral(
-          "QPlainTextEdit#Composer { background: %1; border: 1px solid %2;"
-          " border-radius: %3px; padding: 6px 10px; color: %4; }"
+          "QPlainTextEdit#Composer { background: %1; border: none;"
+          " padding: 4px 2px; color: %2; }"
       )
-          .arg(css_color(colors.bubble_user), css_color(colors.border))
-          .arg(radius)
-          .arg(css_color(colors.bubble_user_text))
+          .arg(css_color(colors.input_background), css_color(colors.text))
   );
+
+  if (composer_bar_ != nullptr) {
+    composer_bar_->setStyleSheet(
+        QStringLiteral(
+            "QWidget#ComposerBar { background: transparent;"
+            " border-top: 1px solid %1; }"
+        )
+            .arg(css_color(colors.border))
+    );
+  }
+
+  if (send_button_ != nullptr) {
+    send_button_->setStyleSheet(
+        QStringLiteral(
+            "QPushButton#SendButton { background: transparent; border: none;"
+            " border-radius: 0; padding: 6px 10px; color: %1; }"
+            "QPushButton#SendButton:hover { background: %2; }"
+            "QPushButton#SendButton:disabled { color: %3; }"
+        )
+            .arg(css_color(colors.accent), css_color(row_hover_background()),
+                 css_color(colors.text_muted))
+    );
+  }
 }
 
 void ConversationView::submit() {

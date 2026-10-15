@@ -95,11 +95,22 @@ data/
   <uuid>/
     settings.json          assistant-level settings (identity, connection, memory, budgets)
     data.db                SQLite: this assistant's sessions and messages
+    local-notebook.log     assistant-level log (appended across runs)
 ```
 
 There is **no root registry**: the assistant picker discovers assistants by scanning
 `data/*/settings.json`. The `uuid` exists only to avoid directory collisions and
 never appears in the interface.
+
+### Logging
+
+Log output goes to the open assistant's `local-notebook.log`, not to the command
+line. Lines emitted before an assistant is chosen (theme, picker, startup errors)
+are buffered and flushed to the top of that file once one is opened, so nothing
+from startup is lost. The client also records every request it sends **verbatim** —
+the exact request body, tagged `chat`, `session-summary` or `assistant-summary` —
+so a surprising reply or a failed summarisation can be traced back to precisely what
+the model was sent.
 
 ### Schema
 
@@ -145,6 +156,18 @@ Configuration lives at three levels, matching the three things it configures.
 Theme, fonts, window geometry, background image and tint, and the transcript
 rendering window. It also holds `auto_login` (reopen the last assistant at startup,
 or always show the picker).
+
+Some bundled themes are marked **(Translucent)**: their surfaces carry an alpha so
+the background image shows through. The standard controls (buttons, input fields,
+menus) and the code blocks honour that alpha as well, so nothing stays opaque on a
+translucent theme.
+
+The background image itself is painted by the **main window only** — dialogs,
+the assistant picker and the settings window keep a plain window-coloured canvas,
+so the image never shows behind a form. Two further colours, `conversation_background`
+and `input_background`, control the conversation surface and the composer field
+independently; the translucent themes set both fully transparent so the tinted
+image reaches them, while the opaque themes use the window colour.
 
 Sizing and spacing are **theme metrics** (`ThemeMetrics`): sidebar width, page
 margin, message spacing, composer height, title font size, session item height,
@@ -232,22 +255,31 @@ during a turn.
 
 ## Interface
 
-A two-pane shell:
+A two-pane shell, flat in the spirit of Zed: components are separated by hairlines
+and background bands, not by frames or heavy highlights.
 
-- **Sidebar** — a calm `Local Notebook` banner, a `SESSIONS` category label, the
-  session list (newest activity first, ordered by the time of the last message), a
-  `New Session` button, and the current-session block (name, `Session #id`, a settings
-  button). Each session row reveals an **edit** pencil and a **trash** action on hover;
-  deleting asks for confirmation. The selected row is only slightly brighter — no
-  strong accent highlight.
+- **Sidebar** — a top header band with the `Local Notebook` banner and an icon-only
+  **New Session** action, a `SESSIONS` category label, the session list (newest
+  activity first, ordered by the time of the last message), and the current-assistant
+  block at the foot (assistant name, model, a settings button). A single hairline
+  separates the sidebar from the chat pane; the sidebar sits on the `surface` colour
+  and the header band has a hairline beneath it. Session rows are flat and full-width —
+  the title on the first line and the last-message time on the second — with a hairline
+  above the assistant block and no rounded corners or gaps anywhere. Each row reveals an
+  **edit** pencil and a **trash** action on hover; deleting asks for confirmation. The
+  hovered and selected rows fill edge to edge with a slightly brighter shade — no strong
+  accent highlight.
 - **Chat pane** — a narrow title bar (session title and id on the left; context-token
-  usage and the last-message time on the right) above the transcript. All messages
+  usage and the last-message time on the right) on the same `surface` band as the
+  sidebar header, with a hairline beneath it, above the transcript. All messages
   share one width and one left edge, the way Zed's agent panel reads; the user's own
-  message is a rounded, bordered block matching the composer, and assistant replies are
+  message is a rounded, bordered block, and assistant replies are
   rendered Markdown with code blocks and a copy button. Hovering a message reveals its
   `#id` and its copy/edit/delete actions.
-- **Composer** — shares the conversation flow's background; the input field uses the
-  same surface as the user's message block. Enter behaviour is configurable
+- **Composer** — a block set off from the transcript by a single hairline, on the
+  conversation surface. The input field is bare (no border, no rounded corners) and
+  takes the theme's `input_background`; the **Send** action is flat and borderless,
+  sitting at the block's bottom-right. Enter behaviour is configurable
   (`enter_with_modifier`).
 
 Windows:
@@ -302,7 +334,7 @@ ctest --test-dir build/linux-x64-debug --output-on-failure
   cascade delete, and the summariser payload shape.
 - **`ui`** — offscreen (`QT_QPA_PLATFORM=offscreen`): window chrome invariants, the
   sidebar populating at startup, settings persistence, the shared assistant form, the
-  settings navigation, and the wheel-safe spin boxes.
+  settings navigation, and the wheel-safe spin boxes and font selectors.
 
 ## License
 

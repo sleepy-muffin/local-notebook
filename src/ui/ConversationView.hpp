@@ -67,12 +67,19 @@ private:
     bool code = false;
     QWidget* container = nullptr;
     QLabel* label = nullptr;
+    // The rounded frame of a code block, kept so a theme change can restyle it
+    // without rebuilding the block.
+    QFrame* frame = nullptr;
   };
 
   void apply_style();
   [[nodiscard]] std::vector<Segment> parse_segments(const QString& markdown) const;
   void set_markdown(const QString& markdown);
   void rebuild_blocks(const std::vector<Segment>& segments);
+
+  // Re-applies the code background to every code block, so a theme change reaches
+  // frames that are otherwise left untouched by an in-place text update.
+  void refresh_code_blocks();
 
   Role role_;
   bool markdown_ = false;
@@ -220,6 +227,7 @@ private:
   QPlainTextEdit* input_ = nullptr;
   QPushButton* send_button_ = nullptr;
   QPushButton* cancel_button_ = nullptr;
+  QWidget* composer_bar_ = nullptr;
 
   MessageRow* streaming_row_ = nullptr;
   QString streaming_status_;

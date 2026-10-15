@@ -9,7 +9,6 @@
 #include <QLabel>
 #include <QListView>
 #include <QMessageBox>
-#include <QPushButton>
 #include <QStackedWidget>
 #include <QStyle>
 #include <QTimer>
@@ -19,6 +18,7 @@
 #include <algorithm>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "app/application.hpp"
@@ -35,6 +35,15 @@ namespace ui {
 namespace {
 
 constexpr int kSessionListLimit = 500;
+
+// Horizontal inset of every sidebar band. It matches the delegate's text inset,
+// so the banner, the category label and the current-session name all line up with
+// the session-row titles.
+constexpr int kSidebarPadding = 12;
+
+// The narrow band height shared by the sidebar header and the chat title bar, so
+// the two read as one continuous strip across the window.
+constexpr int kBandHeight = 38;
 
 // How many recent messages are enough to estimate the next request's context
 // usage; the verbatim window is a suffix, so this bounds the work.
@@ -89,7 +98,7 @@ QString format_time(const std::optional<std::string>& iso) {
 } // namespace
 
 MainWindow::MainWindow(lnb::Application& app, QWidget* parent)
-    : BackgroundWidget(parent),
+    : BackgroundWidget(parent, /*use_background_image=*/true),
       app_(app) {
   setWindowTitle(QStringLiteral("Local Notebook"));
   resize(1080, 720);
@@ -166,9 +175,6 @@ void MainWindow::apply_window_style() {
 
   // Chrome is painted by hand; only the scoped, per-window rules below are
   // stylesheet driven (design-1.md §12).
-  QColor current_background = c.base;
-  current_background.setAlpha(150);
-
   setStyleSheet(
       QStringLiteral(
           "QLabel#Brand { color: %1; }"
@@ -176,16 +182,22 @@ void MainWindow::apply_window_style() {
           "QLabel#HeaderTitle { color: %1; }"
           "QLabel#HeaderSubtitle, QLabel#HeaderContext, QLabel#HeaderTime { color: %2; }"
           "QLabel#CurrentName { color: %1; }"
-          "QLabel#CurrentId { color: %2; }"
+          "QLabel#CurrentModel { color: %2; }"
           "QLabel#EmptyHint { color: %2; }"
+          "QWidget#Sidebar { background: %4; }"
+          "QWidget#SidebarHeader { background: transparent; border-bottom: 1px solid %3; }"
           "QWidget#SidebarSeparator { background: %3; }"
-          "QFrame#CurrentUser { background: %4; border-radius: 8px; }"
+          "QFrame#Header { background: %4; border: none; border-bottom: 1px solid %3; }"
+          "QFrame#CurrentUser { background: transparent; border: none;"
+          "  border-top: 1px solid %3; }"
           "QListView#Sessions { background: transparent; border: none; outline: none; }"
+          "QToolButton#NewSession { background: transparent; border: none; padding: 0; }"
+          "QToolButton#NewSession:hover { background: %5; border-radius: 4px; }"
           "QToolButton#CurrentSettings { background: transparent; border: none; padding: 0; }"
           "QToolButton#CurrentSettings:hover { background: %5; border-radius: 4px; }"
       )
-          .arg(c.text.name(), c.text_muted.name(), c.border.name(), rgba(current_background),
-               rgba(c.surface))
+          .arg(c.text.name(), c.text_muted.name(), c.border.name(), rgba(c.surface),
+               rgba(row_hover_background()))
   );
 
   // Labels that carry a font derived from the base one must be re-derived here,
@@ -209,12 +221,12 @@ void MainWindow::apply_window_style() {
     category_->setFont(font);
   }
 
-  if (current_id_ != nullptr) {
+  if (current_model_ != nullptr) {
     QFont font = ui_font();
     if (font.pointSizeF() > 1.5) {
       font.setPointSizeF(font.pointSizeF() - 1.0);
     }
-    current_id_->setFont(font);
+    current_model_->setFont(font);
   }
 
   if (header_title_ != nullptr) {
@@ -232,21 +244,72 @@ QWidget* MainWindow::build_sidebar() {
 
   auto* sidebar = new QWidget(this);
   sidebar->setObjectName(QStringLiteral("Sidebar"));
+  sidebar->setAttribute(Qt::WA_StyledBackground, true);
   sidebar->setFixedWidth(m.sidebar_width);
 
   auto* layout = new QVBoxLayout(sidebar);
-  layout->setContentsMargins(m.page_margin, m.page_margin, m.page_margin, m.page_margin);
-  layout->setSpacing(8);
+  layout->setContentsMargins(0, 0, 0, 0);
+  layout->setSpacing(0);
+
+  // ---- Sidebar header: the banner and the New Session action ----
+  // A flat band, like Zed's panel header: no page margin, so the hairline below
+  // it can run edge to edge.
+  auto* header = new QWidget(sidebar);
+  header->setObjectName(QStringLiteral("SidebarHeader"));
+  header->setAttribute(Qt::WA_StyledBackground, true);
+  header->setFixedHeight(kBandHeight);
+
+  auto* header_layout = new QHBoxLayout(header);
+  header_layout->setContentsMargins(kSidebarPadding, 0, kSidebarPadding - 4, 0);
+  header_layout->setSpacing(4);
 
   // The banner sits at the window's top-left. It is deliberately calm: a small
   // step up from the body text, no accent colour. Its font is derived in
   // apply_window_style().
-  brand_ = new QLabel(QStringLiteral("Local Notebook"), sidebar);
+  brand_ = new QLabel(QStringLiteral("Local Notebook"), header);
   brand_->setObjectName(QStringLiteral("Brand"));
 
+  // New Session is an icon-only action in the header, not a bordered button, so
+  // the sidebar stays flat.
+  new_session_button_ = new QToolButton(header);
+  new_session_button_->setObjectName(QStringLiteral("NewSession"));
+  new_session_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+  new_session_button_->setAutoRaise(true);
+  new_session_button_->setFocusPolicy(Qt::NoFocus);
+  new_session_button_->setFixedSize(26, 26);
+  new_session_button_->setIconSize(QSize(16, 16));
+  new_session_button_->setCursor(Qt::PointingHandCursor);
+  new_session_button_->setToolTip(QStringLiteral("New Session"));
+
+  QIcon add = QIcon::fromTheme(QStringLiteral("list-add"));
+  if (add.isNull()) {
+    add = QIcon::fromTheme(QStringLiteral("document-new"));
+  }
+  if (add.isNull()) {
+    add = style()->standardIcon(QStyle::SP_FileDialogNewFolder);
+  }
+  new_session_button_->setIcon(add);
+
+  connect(
+      new_session_button_, &QToolButton::clicked, this, [this]() { new_session(); }
+  );
+
+  header_layout->addWidget(brand_);
+  header_layout->addStretch(1);
+  header_layout->addWidget(new_session_button_);
+
+  // ---- SESSIONS category ----
   // "Sessions" is a category identifier, not a title: small, muted, spaced.
-  category_ = new QLabel(QStringLiteral("SESSIONS"), sidebar);
+  auto* category_row = new QWidget(sidebar);
+  auto* category_layout = new QHBoxLayout(category_row);
+  category_layout->setContentsMargins(kSidebarPadding, 10, kSidebarPadding, 4);
+  category_layout->setSpacing(0);
+
+  category_ = new QLabel(QStringLiteral("SESSIONS"), category_row);
   category_->setObjectName(QStringLiteral("SidebarCategory"));
+
+  category_layout->addWidget(category_);
+  category_layout->addStretch(1);
 
   sessions_view_ = new QListView(sidebar);
   sessions_view_->setObjectName(QStringLiteral("Sessions"));
@@ -307,21 +370,14 @@ QWidget* MainWindow::build_sidebar() {
       }
   );
 
-  new_session_button_ = new QPushButton(QStringLiteral("New Session"), sidebar);
-  new_session_button_->setObjectName(QStringLiteral("Secondary"));
-
-  connect(
-      new_session_button_, &QPushButton::clicked, this, [this]() { new_session(); }
-  );
-
-  // ---- Current session block (the ChatGPT-style account row) ----
+  // ---- Current assistant block (name, model, and the settings action) ----
   auto* current_user = new QFrame(sidebar);
   current_user->setObjectName(QStringLiteral("CurrentUser"));
   current_user->setAttribute(Qt::WA_StyledBackground, true);
   current_user->setFrameShape(QFrame::NoFrame);
 
   auto* current_layout = new QHBoxLayout(current_user);
-  current_layout->setContentsMargins(10, 8, 8, 8);
+  current_layout->setContentsMargins(kSidebarPadding, 8, kSidebarPadding - 4, 8);
   current_layout->setSpacing(8);
 
   auto* current_text = new QVBoxLayout();
@@ -331,11 +387,12 @@ QWidget* MainWindow::build_sidebar() {
   current_name_->setObjectName(QStringLiteral("CurrentName"));
   current_name_->setMinimumWidth(0);
 
-  current_id_ = new QLabel(current_user);
-  current_id_->setObjectName(QStringLiteral("CurrentId"));
+  current_model_ = new QLabel(current_user);
+  current_model_->setObjectName(QStringLiteral("CurrentModel"));
+  current_model_->setMinimumWidth(0);
 
   current_text->addWidget(current_name_);
-  current_text->addWidget(current_id_);
+  current_text->addWidget(current_model_);
 
   current_settings_ = new QToolButton(current_user);
   current_settings_->setObjectName(QStringLiteral("CurrentSettings"));
@@ -363,10 +420,9 @@ QWidget* MainWindow::build_sidebar() {
   current_layout->addLayout(current_text, 1);
   current_layout->addWidget(current_settings_);
 
-  layout->addWidget(brand_);
-  layout->addWidget(category_);
+  layout->addWidget(header);
+  layout->addWidget(category_row);
   layout->addWidget(sessions_view_, 1);
-  layout->addWidget(new_session_button_);
   layout->addWidget(current_user);
 
   return sidebar;
@@ -384,7 +440,8 @@ QWidget* MainWindow::build_right_pane() {
   // ---- Narrow, Zed-like title bar ----
   auto* header = new QFrame(pane);
   header->setObjectName(QStringLiteral("Header"));
-  header->setFixedHeight(38);
+  header->setAttribute(Qt::WA_StyledBackground, true);
+  header->setFixedHeight(kBandHeight);
 
   auto* header_layout = new QHBoxLayout(header);
   header_layout->setContentsMargins(16, 0, 16, 0);
@@ -435,6 +492,19 @@ void MainWindow::refresh_sessions() {
 
   std::vector<lnb::Session> sessions = app_.sessions().most_recent(kSessionListLimit);
 
+  // The newest message time of every session, in one query, aligned with the
+  // ordered snapshot for the rows' second line.
+  const std::unordered_map<std::uint32_t, std::string> last_times =
+      app_.db().session_last_times();
+
+  std::vector<std::string> row_times;
+  row_times.reserve(sessions.size());
+
+  for (const lnb::Session& session : sessions) {
+    const auto it = last_times.find(session.id_);
+    row_times.push_back(it == last_times.end() ? std::string{} : it->second);
+  }
+
   // Prune views for sessions that no longer exist.
   std::vector<std::uint32_t> removed;
 
@@ -468,15 +538,16 @@ void MainWindow::refresh_sessions() {
     }
   }
 
-  // Only reset the model when the order or the titles actually changed, so a new
-  // message does not clear and rebuild the list on every turn.
+  // Only reset the model when the order, the titles or the row times actually
+  // changed, so a new message does not clear and rebuild the list on every turn.
   bool same = static_cast<std::size_t>(sessions_model_->rowCount()) == sessions.size();
 
   if (same) {
     for (int row = 0; row < sessions_model_->rowCount(); ++row) {
       const lnb::Session stored = sessions_model_->session_at(row);
       if (stored.id_ != sessions[static_cast<std::size_t>(row)].id_ ||
-          stored.title_ != sessions[static_cast<std::size_t>(row)].title_) {
+          stored.title_ != sessions[static_cast<std::size_t>(row)].title_ ||
+          sessions_model_->last_time_at(row) != row_times[static_cast<std::size_t>(row)]) {
         same = false;
         break;
       }
@@ -484,7 +555,7 @@ void MainWindow::refresh_sessions() {
   }
 
   if (!same) {
-    sessions_model_->set_sessions(std::move(sessions));
+    sessions_model_->set_sessions(std::move(sessions), std::move(row_times));
   }
 
   // Re-select the current session (a model reset clears the selection).
@@ -567,6 +638,7 @@ void MainWindow::open_settings() {
 
       refresh_sessions();
       update_header();
+      update_current_block();
     });
   }
 
@@ -669,19 +741,15 @@ void MainWindow::update_header() {
 }
 
 void MainWindow::update_current_block() {
-  const auto session = app_.db().session(current_session_);
+  const lnb::Assistant& assistant = app_.assistant();
 
-  if (!session.has_value()) {
-    current_name_->setText(QStringLiteral("No session"));
-    current_id_->clear();
-    current_settings_->setEnabled(false);
-    return;
-  }
+  const QString name = from_utf8(assistant.name_);
+  current_name_->setText(name.isEmpty() ? QStringLiteral("Assistant") : name);
 
-  current_name_->setText(
-      session->title_.empty() ? QStringLiteral("New Session") : from_utf8(session->title_)
-  );
-  current_id_->setText(QStringLiteral("Session #%1").arg(session->id_));
+  const QString model = from_utf8(assistant.model_);
+  current_model_->setText(model);
+  current_model_->setVisible(!model.isEmpty());
+
   current_settings_->setEnabled(true);
 }
 

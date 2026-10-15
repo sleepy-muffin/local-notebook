@@ -21,6 +21,7 @@ namespace lnb::store {
 //   data/settings.json            app-global settings
 //   data/<uuid>/settings.json     assistant-level settings
 //   data/<uuid>/data.db           sessions + messages
+//   data/<uuid>/local-notebook.log  assistant-level log
 namespace paths {
 
 [[nodiscard]] std::filesystem::path data_root();
@@ -28,6 +29,7 @@ namespace paths {
 [[nodiscard]] std::filesystem::path assistant_dir(std::string_view uuid);
 [[nodiscard]] std::filesystem::path assistant_settings(std::string_view uuid);
 [[nodiscard]] std::filesystem::path assistant_db(std::string_view uuid);
+[[nodiscard]] std::filesystem::path assistant_log(std::string_view uuid);
 
 } // namespace paths
 

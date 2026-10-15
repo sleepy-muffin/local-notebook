@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "model.hpp"
@@ -53,6 +54,12 @@ public:
   [[nodiscard]] std::optional<std::string> last_message_time(
     std::uint32_t session_id
   ) const;
+
+  // The newest message time of every session, keyed by session id; sessions with
+  // no messages are absent. One query for the whole sidebar, so listing rows does
+  // not cost one query per row.
+  [[nodiscard]] std::unordered_map<std::uint32_t, std::string> session_last_times()
+    const;
 
 private:
   connection connection_;

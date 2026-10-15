@@ -6,7 +6,6 @@
 #include <QDoubleSpinBox>
 #include <QEventLoop>
 #include <QFont>
-#include <QFontComboBox>
 #include <QFormLayout>
 #include <QFrame>
 #include <QGridLayout>
@@ -269,7 +268,7 @@ QWidget* SettingsWindow::build_config_page() {
       pending_.theme = theme_box->currentText().toStdString();
     });
 
-    auto* ui_font_box = new QFontComboBox(content);
+    auto* ui_font_box = new FontComboBox(content);
     if (!pending_.ui_font.empty()) {
       ui_font_box->setCurrentFont(QFont(QString::fromStdString(pending_.ui_font)));
     }
@@ -285,7 +284,7 @@ QWidget* SettingsWindow::build_config_page() {
       pending_.ui_font_size = ui_font_size->value();
     });
 
-    auto* font_box = new QFontComboBox(content);
+    auto* font_box = new FontComboBox(content);
     if (!pending_.font.empty()) {
       font_box->setCurrentFont(QFont(QString::fromStdString(pending_.font)));
     }
@@ -301,7 +300,7 @@ QWidget* SettingsWindow::build_config_page() {
       pending_.font_size = font_size->value();
     });
 
-    auto* mono_box = new QFontComboBox(content);
+    auto* mono_box = new FontComboBox(content);
     if (!pending_.mono_font.empty()) {
       mono_box->setCurrentFont(QFont(QString::fromStdString(pending_.mono_font)));
     }
@@ -387,7 +386,7 @@ QWidget* SettingsWindow::build_config_page() {
     layout->addWidget(tint_check);
 
     const std::array<float, 4> initial = pending_.background_override.value_or(
-        std::array<float, 4>{0.12f, 0.05f, 0.10f, 0.25f}
+        std::array<float, 4>{0.094f, 0.098f, 0.149f, 0.85f}
     );
 
     auto* channels = new QHBoxLayout();

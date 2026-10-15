@@ -8,7 +8,7 @@ compile_commands.json
 .idea/
 .zed/
 .cache/
-.local-notes/
+docs/
 
 # Runtime state and local database
 /run/
