@@ -7,6 +7,7 @@
 
 #include "app/application.hpp"
 #include "app/assistant_io.hpp"
+#include "app/data_location.hpp"
 #include "store/util.hpp"
 #include "support/log.hpp"
 #include "ui/AssistantPicker.hpp"
@@ -21,6 +22,12 @@ int main(int argc, char** argv) {
   // The bundled artwork becomes the icon of every window (the picker, the main
   // window and any dialog), so the taskbar and the dock show it too.
   QApplication::setWindowIcon(ui::application_icon());
+
+  // Point the whole on-disk tree at the per-user application data directory, or at
+  // the --user-data override. This must run before the Application reads the
+  // global settings.
+  lnb::store::paths::set_data_root(lnb::app::resolve_data_root(app.arguments()));
+  lnb::log::info("data root: {}", lnb::store::paths::data_root().string());
 
   lnb::Application notebook;
 

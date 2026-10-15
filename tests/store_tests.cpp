@@ -69,6 +69,26 @@ void test_util() {
     lnb::store::paths::assistant_log("abc") ==
     std::filesystem::path("data") / "abc" / "local-notebook.log"
   );
+
+  // set_data_root() redirects every derived path; an empty path restores the
+  // built-in relative default.
+  lnb::store::paths::set_data_root("custom-root");
+  CHECK(lnb::store::paths::data_root() == std::filesystem::path("custom-root"));
+  CHECK(
+    lnb::store::paths::global_settings() ==
+    std::filesystem::path("custom-root") / "settings.json"
+  );
+  CHECK(
+    lnb::store::paths::assistant_dir("abc") ==
+    std::filesystem::path("custom-root") / "abc"
+  );
+  CHECK(
+    lnb::store::paths::assistant_db("abc") ==
+    std::filesystem::path("custom-root") / "abc" / "data.db"
+  );
+
+  lnb::store::paths::set_data_root({});
+  CHECK(lnb::store::paths::data_root() == std::filesystem::path("data"));
 }
 
 // --- Assistant log ------------------------------------------------------------

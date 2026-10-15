@@ -38,6 +38,8 @@ add_library(local-notebook-core STATIC
         src/app/settings.cpp
         src/app/assistant_io.hpp
         src/app/assistant_io.cpp
+        src/app/data_location.hpp
+        src/app/data_location.cpp
         src/app/application.hpp
         src/app/application.cpp
 

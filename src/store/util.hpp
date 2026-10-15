@@ -16,13 +16,22 @@ namespace lnb::store {
 // only to avoid directory collisions and never appears in the UI.
 [[nodiscard]] std::string make_uuid();
 
-// On-disk layout. All paths are relative to the process working directory:
+// On-disk layout. Every path is derived from a single data root:
 //
-//   data/settings.json            app-global settings
-//   data/<uuid>/settings.json     assistant-level settings
-//   data/<uuid>/data.db           sessions + messages
-//   data/<uuid>/local-notebook.log  assistant-level log
+//   <root>/settings.json              app-global settings
+//   <root>/<uuid>/settings.json       assistant-level settings
+//   <root>/<uuid>/data.db             sessions + messages
+//   <root>/<uuid>/local-notebook.log  assistant-level log
+//
+// The root defaults to the relative "data" so headless tests and the screenshot
+// tool can sandbox it by changing the working directory. The application calls
+// set_data_root() at startup with the per-user application data directory, or the
+// --user-data override; see app/data_location.hpp.
 namespace paths {
+
+// Points every derived path at `root`. main() calls this once before constructing
+// the Application; an empty path restores the built-in relative default.
+void set_data_root(std::filesystem::path root);
 
 [[nodiscard]] std::filesystem::path data_root();
 [[nodiscard]] std::filesystem::path global_settings();

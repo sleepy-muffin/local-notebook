@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <ctime>
 #include <random>
+#include <utility>
 
 namespace lnb::store {
 
@@ -49,8 +50,21 @@ std::string make_uuid() {
 
 namespace paths {
 
+namespace {
+
+// Mutable so main() can redirect the whole tree. Defaults to the historical
+// working-directory-relative location that the tests and the screenshot tool rely
+// on; the application overrides it before constructing the Application.
+std::filesystem::path g_data_root{"data"};
+
+} // namespace
+
+void set_data_root(std::filesystem::path root) {
+  g_data_root = root.empty() ? std::filesystem::path{"data"} : std::move(root);
+}
+
 std::filesystem::path data_root() {
-  return std::filesystem::path("data");
+  return g_data_root;
 }
 
 std::filesystem::path global_settings() {

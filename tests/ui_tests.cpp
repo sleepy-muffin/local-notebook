@@ -32,6 +32,7 @@
 #include <QSet>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QStandardPaths>
 #include <QStyleOptionViewItem>
 #include <QTimer>
 #include <QToolButton>
@@ -49,6 +50,7 @@
 #include <thread>
 
 #include "app/application.hpp"
+#include "app/data_location.hpp"
 #include "app/metrics.hpp"
 #include "app/settings.hpp"
 #include "model.hpp"
@@ -104,6 +106,35 @@ lnb::Assistant make_assistant() {
 }
 
 // --- Settings persistence -----------------------------------------------------
+
+// The data root defaults to the per-user application data directory and is
+// overridden by --user-data (in either spelling).
+void test_data_location() {
+  CHECK(
+    lnb::app::resolve_data_root(QStringList{
+        QStringLiteral("local-notebook"), QStringLiteral("--user-data"),
+        QStringLiteral("./run")
+    }) == std::filesystem::path("./run")
+  );
+  CHECK(
+    lnb::app::resolve_data_root(QStringList{
+        QStringLiteral("local-notebook"), QStringLiteral("--user-data=./run")
+    }) == std::filesystem::path("./run")
+  );
+
+  // Without the flag, Qt's per-user location is used; the relative default is
+  // only a last resort when Qt reports none.
+  const auto fallback = lnb::app::resolve_data_root(
+      QStringList{QStringLiteral("local-notebook")}
+  );
+  CHECK(!fallback.empty());
+
+  const QString expected =
+      QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+  if (!expected.isEmpty()) {
+    CHECK(fallback == std::filesystem::path(expected.toStdString()));
+  }
+}
 
 void test_settings_round_trip() {
   enter_scratch("settings");
@@ -1231,6 +1262,7 @@ int main(int argc, char** argv) {
   test_spin_box_wheel();
   test_font_combo_wheel();
   test_combo_box_wheel();
+  test_data_location();
 
   // Widgets read the theme, so it must be installed before any is created. The
   // sandbox has no theme.json, so this exercises the theme compiled into the

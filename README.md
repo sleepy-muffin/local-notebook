@@ -41,7 +41,7 @@ Qt Widgets, with no JavaScript anywhere in the stack.
 | **Many sessions per assistant** | Each session is an independent conversation with its own transcript, instructions, shared directory and budgets. |
 | **Two-level memory** | A **session memory** (this conversation) and an **assistant memory** (what the assistant has learned about you across *all* sessions). Both are generated summaries; both are visible and editable. |
 | **Single-sourced configuration** | Every tunable has exactly one home. A value never has two sources of truth; a second appearance may only ever be a *validation*. |
-| **Local first** | Everything lives under `data/`. Secrets are plaintext for now; no cloud account, no telemetry. |
+| **Local first** | Everything lives under one data root (the per-user application data directory by default). Secrets are plaintext for now; no cloud account, no telemetry. |
 
 ## Design principles
 
@@ -88,10 +88,19 @@ path.
 
 ## Data on disk
 
-All paths are relative to the process working directory:
+All state lives under a single **data root**. By default it is the per-user
+application data directory, resolved with Qt's `QStandardPaths`:
+
+| Platform | Default root |
+|---|---|
+| Linux | `~/.local/share/Local Notebook` (honours `XDG_DATA_HOME`) |
+| Windows | `%APPDATA%\Local Notebook` |
+
+Pass `--user-data <dir>` to override it (for example `--user-data ./run`), which is
+how the tests and the screenshot tool sandbox themselves.
 
 ```
-data/
+<root>/
   settings.json            app-global settings (shared by every assistant)
   <uuid>/
     settings.json          assistant-level settings (identity, connection, memory, budgets)
@@ -100,7 +109,7 @@ data/
 ```
 
 There is **no root registry**: the assistant picker discovers assistants by scanning
-`data/*/settings.json`. The `uuid` exists only to avoid directory collisions and
+`<root>/*/settings.json`. The `uuid` exists only to avoid directory collisions and
 never appears in the interface.
 
 ### Logging
@@ -397,12 +406,17 @@ QT_QPA_PLATFORM=offscreen \
 
 ## Running
 
-`data/` is resolved relative to the working directory, so run the binary from the
-directory that should hold the data:
+Data is stored in the per-user application data directory by default, so the binary
+can be launched from anywhere:
 
 ```sh
-cd run
-../build/linux-x64-debug/local-notebook
+./build/linux-x64-debug/local-notebook
+```
+
+To keep the data beside the repository instead (as the tests do), pass a root:
+
+```sh
+./build/linux-x64-debug/local-notebook --user-data ./run
 ```
 
 On first run the assistant picker appears. Create an assistant (name, model, API URL,
