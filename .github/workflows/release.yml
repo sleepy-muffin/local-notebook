@@ -1,13 +1,5 @@
-name: Release
 
-# Build and test the application for x86_64 on both a general Linux desktop and
-# Windows. The project targets Qt 6 Widgets, so the two jobs differ mainly in how
-# their dependencies are obtained: Linux takes Qt and SQLite from the distribution,
-# Windows takes Qt from the official binaries and SQLite from vcpkg.
-#
-# The local CMakePresets.json is machine-specific and deliberately not committed, so
-# the presets are not used here; the configure step passes the same settings (Ninja,
-# clang on Linux, Release) explicitly.
+name: Release
 
 on:
   push:
@@ -21,10 +13,8 @@ on:
         required: true
         type: string
 
-
-# A new push supersedes an in-flight run on the same branch.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: release-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -34,11 +24,29 @@ jobs:
   linux:
     name: Linux x86_64
     runs-on: ubuntu-24.04
+
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
 
-      # Ubuntu's CMake is older than the 3.31 the project requires, so a current
-      # CMake and Ninja are installed here.
+      - name: Determine version
+        id: version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          tag="$RELEASE_TAG"
+
+          if [ -z "$tag" ] || [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            tag="dev-${GITHUB_SHA::7}"
+          fi
+
+          tag="$(echo "$tag" | sed 's#[^A-Za-z0-9._-]#-#g')"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Building version: $tag"
+
       - name: Install CMake and Ninja
         uses: lukka/get-cmake@latest
 
@@ -46,7 +54,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang libsqlite3-dev qt6-base-dev qt6-qpa-plugins
+            clang \
+            libsqlite3-dev \
+            qt6-base-dev \
+            qt6-qpa-plugins \
+            librsvg2-bin \
+            wget \
+            file
 
       - name: Configure
         run: >
@@ -58,50 +72,127 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
 
-      - name: Rename executable with version tag
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Build AppImage
         shell: bash
         env:
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
-          tag="$RELEASE_TAG"
+          set -euo pipefail
 
-          if [ -z "$tag" ]; then
-            tag="dev-${GITHUB_SHA::7}"
-          fi
+          executable="build/local-notebook"
+          appdir="AppDir"
 
-          tag="$(echo "$tag" | sed 's#[^A-Za-z0-9._-]#-#g')"
-
-          src="build/local-notebook"
-          dst="build/local-notebook-${tag}"
-
-          if [ ! -f "$src" ]; then
-            echo "Executable not found: $src"
-            find build -type f -maxdepth 5 -print
+          if [ ! -f "$executable" ]; then
+            echo "Executable not found: $executable"
             exit 1
           fi
 
-          mv "$src" "$dst"
-          echo "Generated: $dst"
+          mkdir -p "$appdir/usr/bin"
 
-      - name: Test
-        run: ctest --test-dir build --output-on-failure
+          cp "$executable" "$appdir/usr/bin/local-notebook"
+
+          cat > local-notebook.desktop <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Local Notebook
+          Exec=local-notebook
+          Icon=local-notebook
+          Categories=Utility;
+          Terminal=false
+          EOF
+
+          cat > local-notebook.svg <<'EOF'
+          <svg xmlns="http://www.w3.org/2000/svg"
+               width="256" height="256" viewBox="0 0 256 256">
+            <rect x="24" y="24" width="208" height="208" rx="36"
+                  fill="#313244"/>
+            <path d="M76 68h104v120H76z" fill="#cba6f7"/>
+            <path d="M96 100h64M96 128h64M96 156h44"
+                  stroke="#313244" stroke-width="9"
+                  stroke-linecap="round"/>
+          </svg>
+          EOF
+
+          rsvg-convert -w 256 -h 256 local-notebook.svg \
+            > local-notebook.png
+
+          wget -q \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage \
+            -O linuxdeploy.AppImage
+
+          wget -q \
+            https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage \
+            -O linuxdeploy-plugin-qt.AppImage
+
+          chmod +x linuxdeploy.AppImage linuxdeploy-plugin-qt.AppImage
+
+          # Make the Qt deployment plugin discoverable.
+          sudo mv linuxdeploy-plugin-qt.AppImage /usr/local/bin/linuxdeploy-plugin-qt
+
+          export QMAKE="$(command -v qmake6)"
+          export APPIMAGE_EXTRACT_AND_RUN=1
+
+          ./linuxdeploy.AppImage \
+            --appdir "$appdir" \
+            --desktop-file local-notebook.desktop \
+            --icon-file local-notebook.png \
+            --plugin qt \
+            --output appimage
+
+          appimage="$(find . -maxdepth 1 -name '*.AppImage' \
+            ! -name 'linuxdeploy.AppImage' -print -quit)"
+
+          if [ -z "$appimage" ]; then
+            echo "AppImage generation failed"
+            exit 1
+          fi
+
+          mv "$appimage" \
+            "local-notebook-${RELEASE_TAG}-linux-x86_64.AppImage"
+
+          file "local-notebook-${RELEASE_TAG}-linux-x86_64.AppImage"
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
           name: local-notebook-linux-x86_64
-          path: build/local-notebook-${{ inputs.tag || github.ref_name }}
+          path: local-notebook-${{ steps.version.outputs.tag }}-linux-x86_64.AppImage
+          if-no-files-found: error
 
   windows:
     name: Windows x86_64
     runs-on: windows-latest
+
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Determine version
+        id: version
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          $tag = $env:RELEASE_TAG
+
+          if ([string]::IsNullOrWhiteSpace($tag) -or
+              $env:GITHUB_EVENT_NAME -eq "pull_request") {
+            $tag = "dev-$($env:GITHUB_SHA.Substring(0, 7))"
+          }
+
+          $tag = $tag -replace '[^A-Za-z0-9._-]', '-'
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+          Write-Host "Building version: $tag"
 
       - name: Install CMake and Ninja
         uses: lukka/get-cmake@latest
 
-      # Puts cl.exe (and the rest of the MSVC toolchain) on PATH for Ninja.
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
         with:
@@ -114,10 +205,10 @@ jobs:
           arch: win64_msvc2022_64
           cache: true
 
-      # vcpkg ships with the runner. The CMake toolchain below finds the installed
-      # sqlite3 through it, which satisfies the project's find_package(SQLite3).
       - name: Install SQLite
-        run: '& "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install sqlite3:x64-windows'
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install sqlite3:x64-windows
 
       - name: Configure
         run: |
@@ -129,39 +220,59 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
 
-      - name: Rename executable with version tag
-        shell: pwsh
-        env:
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-        run: |
-          $tag = $env:RELEASE_TAG
-
-          if ([string]::IsNullOrWhiteSpace($tag)) {
-            $tag = "dev-$($env:GITHUB_SHA.Substring(0, 7))"
-          }
-
-          $tag = $tag -replace '[^A-Za-z0-9._-]', '-'
-
-          $src = "build/local-notebook.exe"
-          $dst = "build/local-notebook-$tag.exe"
-
-          if (-not (Test-Path $src)) {
-            Write-Error "Executable not found: $src"
-            Get-ChildItem build -Recurse -File | Select-Object FullName
-            exit 1
-          }
-
-          Rename-Item -Path $src -NewName "local-notebook-$tag.exe"
-          Write-Host "Generated: $dst"
-
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+      - name: Deploy Windows dependencies
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $exe = "build/local-notebook.exe"
+          $release = "release"
+
+          if (-not (Test-Path $exe)) {
+            throw "Executable not found: $exe"
+          }
+
+          New-Item -ItemType Directory -Force -Path $release | Out-Null
+
+          $targetExe = "local-notebook-$env:RELEASE_TAG.exe"
+          Copy-Item $exe "$release/$targetExe"
+
+          # Deploy Qt DLLs, platform plugins and MSVC runtime.
+          & "$env:QT_ROOT_DIR/bin/windeployqt.exe" `
+            --release `
+            --compiler-runtime `
+            "$release/$targetExe"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "windeployqt failed"
+          }
+
+          # Deploy SQLite runtime.
+          $sqliteDll = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/sqlite3.dll"
+
+          if (-not (Test-Path $sqliteDll)) {
+            throw "SQLite DLL not found: $sqliteDll"
+          }
+
+          Copy-Item $sqliteDll $release
+
+          # Package the complete application directory.
+          Compress-Archive `
+            -Path "$release/*" `
+            -DestinationPath "local-notebook-$env:RELEASE_TAG-windows-x86_64.zip" `
+            -CompressionLevel Optimal
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: local-notebook-windows-x86_64
-          path: build/local-notebook-${{ inputs.tag || github.ref_name }}.exe
+          path: local-notebook-${{ steps.version.outputs.tag }}-windows-x86_64.zip
+          if-no-files-found: error
 
   release:
     name: Publish GitHub Release
@@ -183,10 +294,14 @@ jobs:
           name: local-notebook-windows-x86_64
           path: release
 
-      - name: Publish Release
+      - name: Generate SHA256SUMS
+        working-directory: release
+        run: sha256sum * > SHA256SUMS
+
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           generate_release_notes: true
           files: |
-            release/local-notebook-*
+            release/*
