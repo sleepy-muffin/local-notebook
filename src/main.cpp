@@ -18,6 +18,10 @@ int main(int argc, char** argv) {
   QApplication::setApplicationName(QStringLiteral("Local Notebook"));
   QApplication::setApplicationVersion(QStringLiteral("0.1.0"));
 
+  // The bundled artwork becomes the icon of every window (the picker, the main
+  // window and any dialog), so the taskbar and the dock show it too.
+  QApplication::setWindowIcon(ui::application_icon());
+
   lnb::Application notebook;
 
   // Install the theme before any window is created.

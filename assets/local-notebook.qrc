@@ -15,4 +15,18 @@
   <qresource prefix="/themes">
     <file alias="theme.json">../themes/theme.json</file>
   </qresource>
+
+  <!-- The application icon, in every size the desktop asks for. Unlike the
+       monochrome composer icons, these are full-colour, so they are embedded
+       as-is (no runtime recolouring). See appicon/make_app_icon.py. -->
+  <qresource prefix="/appicon">
+    <file alias="app-16.png">appicon/app-16.png</file>
+    <file alias="app-24.png">appicon/app-24.png</file>
+    <file alias="app-32.png">appicon/app-32.png</file>
+    <file alias="app-48.png">appicon/app-48.png</file>
+    <file alias="app-64.png">appicon/app-64.png</file>
+    <file alias="app-128.png">appicon/app-128.png</file>
+    <file alias="app-256.png">appicon/app-256.png</file>
+    <file alias="app-512.png">appicon/app-512.png</file>
+  </qresource>
 </RCC>

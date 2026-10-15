@@ -793,6 +793,25 @@ void test_bundled_resources() {
             .isNull());
 }
 
+// --- Application icon --------------------------------------------------------
+
+// The full-colour application icon is bundled at every size and assembled into a
+// single QIcon, so the window manager, the taskbar and the dock all have artwork.
+void test_app_icon() {
+  CHECK(QFile::exists(QStringLiteral(":/appicon/app-16.png")));
+  CHECK(QFile::exists(QStringLiteral(":/appicon/app-256.png")));
+  CHECK(QFile::exists(QStringLiteral(":/appicon/app-512.png")));
+
+  const QIcon icon = ui::application_icon();
+  CHECK(!icon.isNull());
+
+  // The assembled icon spans the small and the large ends of the set, so Qt can
+  // serve a crisp pixmap at any requested size.
+  CHECK(!icon.pixmap(16, 16).isNull());
+  CHECK(!icon.pixmap(256, 256).isNull());
+  CHECK(icon.availableSizes().size() >= 5);
+}
+
 // --- Composer ----------------------------------------------------------------
 
 // The expand toggle raises the field to composer_height_expanded and back, and
@@ -887,6 +906,7 @@ int main(int argc, char** argv) {
   test_code_block_restyles_on_theme_change(app);
   test_conversation_backgrounds(app);
   test_bundled_resources();
+  test_app_icon();
   test_composer_expand_toggle();
 
   if (g_failures != 0) {

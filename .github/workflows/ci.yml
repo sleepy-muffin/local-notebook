@@ -1,0 +1,95 @@
+name: CI
+
+# Build and test the application for x86_64 on both a general Linux desktop and
+# Windows. The project targets Qt 6 Widgets, so the two jobs differ mainly in how
+# their dependencies are obtained: Linux takes Qt and SQLite from the distribution,
+# Windows takes Qt from the official binaries and SQLite from vcpkg.
+#
+# The local CMakePresets.json is machine-specific and deliberately not committed, so
+# the presets are not used here; the configure step passes the same settings (Ninja,
+# clang on Linux, Release) explicitly.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push supersedes an in-flight run on the same branch.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux x86_64
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # Ubuntu's CMake is older than the 3.31 the project requires, so a current
+      # CMake and Ninja are installed here.
+      - name: Install CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang libsqlite3-dev qt6-base-dev qt6-qpa-plugins
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER=clang
+          -DCMAKE_CXX_COMPILER=clang++
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  windows:
+    name: Windows x86_64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      # Puts cl.exe (and the rest of the MSVC toolchain) on PATH for Ninja.
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          cache: true
+
+      # vcpkg ships with the runner. The CMake toolchain below finds the installed
+      # sqlite3 through it, which satisfies the project's find_package(SQLite3).
+      - name: Install SQLite
+        run: '& "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install sqlite3:x64-windows'
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR" `
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure

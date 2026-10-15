@@ -322,14 +322,23 @@ cmake --build build/linux-x64-debug -j 8
 
 A `linux-x64-release` preset is also provided.
 
-The composer icons and the default theme are compiled into the binaries through
-the Qt resource system (`assets/local-notebook.qrc`, `CMAKE_AUTORCC`), so a
-deployed build carries them without loose files beside the executable and without
-depending on the system icon theme. The artwork lives in `assets/icons/`: editable
-SVGs plus the PNGs actually embedded, and `assets/icons/rasterise.py` regenerates
-the PNGs from the SVGs (the PNG form is used because Qt's PNG support is built in,
-while decoding SVG needs the optional Qt SVG plugin). A `themes/theme.json` on disk
-still overrides the bundled default.
+The composer icons, the application icon and the default theme are compiled into
+the binaries through the Qt resource system (`assets/local-notebook.qrc`,
+`CMAKE_AUTORCC`), so a deployed build carries them without loose files beside the
+executable and without depending on the system icon theme.
+
+The chrome artwork lives in `assets/icons/`: editable SVGs plus the monochrome PNGs
+actually embedded, which are recoloured to the active theme at runtime. The PNG form
+is used because Qt's PNG support is built in, while decoding SVG needs the optional
+Qt SVG plugin; `assets/icons/rasterise.py` regenerates the PNGs from the SVGs.
+
+The application icon is different: it is full colour and must read from a 16px
+taskbar thumbnail up to a 512px launcher tile, so it is composed from primitives by
+`assets/appicon/make_app_icon.py`, which writes the `app-<size>.png` set (embedded
+under `:/appicon/`) plus a multi-resolution `app.ico` for Windows builds.
+`ui::application_icon()` assembles them into the window/taskbar icon.
+
+A `themes/theme.json` on disk still overrides the bundled default.
 
 ## Running
 

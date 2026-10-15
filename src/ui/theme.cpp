@@ -482,4 +482,19 @@ QIcon resource_icon(const QString& name, const QColor& color, const QColor& disa
   return icon;
 }
 
+QIcon application_icon() {
+  // Every embedded size, so the window manager, the taskbar and a high-DPI dock
+  // each pick the one that matches their scale. Missing sizes are simply skipped.
+  QIcon icon;
+
+  for (const int size : {16, 24, 32, 48, 64, 128, 256, 512}) {
+    const QPixmap pixmap(QStringLiteral(":/appicon/app-%1.png").arg(size));
+    if (!pixmap.isNull()) {
+      icon.addPixmap(pixmap);
+    }
+  }
+
+  return icon;
+}
+
 } // namespace ui

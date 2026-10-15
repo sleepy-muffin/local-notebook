@@ -123,4 +123,10 @@ QColor row_selected_background();
 // system icon theme or a standard icon.
 QIcon resource_icon(const QString& name, const QColor& color, const QColor& disabled);
 
+// The application's window/taskbar icon: the bundled full-colour artwork
+// (:/appicon/app-<size>.png) at every size, so the window manager and the dock
+// pick the crisp one. Independent of the theme, so it can be installed on the
+// QApplication before any window exists.
+QIcon application_icon();
+
 } // namespace ui
