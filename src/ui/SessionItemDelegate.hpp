@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QColor>
 #include <QIcon>
 #include <QSize>
 #include <QStyledItemDelegate>
@@ -16,9 +17,9 @@ namespace ui {
 // the second, plus two hover-only actions — an edit pencil that opens the session
 // editor and a trash can that deletes it.
 //
-// The action icons come from the icon theme (with standard-icon fallbacks),
-// exactly as the per-message actions in the transcript do, so the row does not
-// hand-paint its own artwork.
+// The action icons are bundled in the binary and recoloured to the active theme
+// at runtime (see ui::resource_icon), exactly as the per-message actions in the
+// transcript are, so the row does not depend on the system icon theme.
 class SessionItemDelegate : public QStyledItemDelegate {
 public:
   // Invoked with the row's model index when an action icon is clicked.
@@ -57,11 +58,16 @@ public:
   [[nodiscard]] QRect edit_button_rect(const QStyleOptionViewItem& option) const;
 
 private:
+  // Rebuilds the two action icons when the theme's muted colour changes, so a
+  // theme switch is picked up without an explicit refresh hook.
+  void ensure_icons() const;
+
   ActionHandler edit_handler_;
   ActionHandler delete_handler_;
 
-  QIcon edit_icon_;
-  QIcon delete_icon_;
+  mutable QIcon edit_icon_;
+  mutable QIcon delete_icon_;
+  mutable QColor icons_colour_;
 
   bool action_click_ = false;
 };

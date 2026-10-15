@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- Cog: the settings action. Six straight-line teeth with a round centre hole
+       (the second subpath, an even-odd hole), a tooth pointing straight up.
+       Monochrome; recoloured at runtime. -->
+  <path fill-rule="evenodd" d="M9.9 5.53 L9.62 1.67 L14.38 1.67 L14.1 5.53 L14.77 5.79 L15.4 6.11 L16 6.5 L16.55 6.95 L19.75 4.77 L22.14 8.9 L18.65 10.59 L18.76 11.29 L18.8 12 L18.76 12.71 L18.65 13.41 L22.14 15.1 L19.75 19.23 L16.55 17.05 L16 17.5 L15.4 17.89 L14.77 18.21 L14.1 18.47 L14.38 22.33 L9.62 22.33 L9.9 18.47 L9.23 18.21 L8.6 17.89 L8 17.5 L7.45 17.05 L4.25 19.23 L1.86 15.1 L5.35 13.41 L5.24 12.71 L5.2 12 L5.24 11.29 L5.35 10.59 L1.86 8.9 L4.25 4.77 L7.45 6.95 L8 6.5 L8.6 6.11 L9.23 5.79 Z M15.4 12 L15.28 12.88 L14.94 13.7 L14.4 14.4 L13.7 14.94 L12.88 15.28 L12 15.4 L11.12 15.28 L10.3 14.94 L9.6 14.4 L9.06 13.7 L8.72 12.88 L8.6 12 L8.72 11.12 L9.06 10.3 L9.6 9.6 L10.3 9.06 L11.12 8.72 L12 8.6 L12.88 8.72 L13.7 9.06 L14.4 9.6 L14.94 10.3 L15.28 11.12 Z" fill="#000000"/>
+</svg>

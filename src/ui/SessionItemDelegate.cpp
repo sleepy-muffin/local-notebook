@@ -42,16 +42,24 @@ QRect icon_rect(const QRect& button) {
 } // namespace
 
 SessionItemDelegate::SessionItemDelegate(QObject* parent)
-    : QStyledItemDelegate(parent) {
-  // Take the artwork from the icon theme, with a standard-icon fallback, exactly
-  // as ConversationView::MessageRow::add_action does for the message actions.
-  edit_icon_ = QIcon::fromTheme(QStringLiteral("document-edit"));
+    : QStyledItemDelegate(parent) {}
 
+void SessionItemDelegate::ensure_icons() const {
+  const QColor colour = theme().colors.text_muted;
+
+  if (!edit_icon_.isNull() && icons_colour_ == colour) {
+    return;
+  }
+
+  icons_colour_ = colour;
+  edit_icon_ = resource_icon(QStringLiteral("edit"), colour, colour);
+  delete_icon_ = resource_icon(QStringLiteral("delete"), colour, colour);
+
+  // A missing bundled resource falls back to a standard icon, as the per-message
+  // actions do.
   if (edit_icon_.isNull()) {
     edit_icon_ = QApplication::style()->standardIcon(QStyle::SP_FileIcon);
   }
-
-  delete_icon_ = QIcon::fromTheme(QStringLiteral("edit-delete"));
 
   if (delete_icon_.isNull()) {
     delete_icon_ = QApplication::style()->standardIcon(QStyle::SP_TrashIcon);
@@ -146,6 +154,8 @@ void SessionItemDelegate::paint(
   // The actions appear only while the row is hovered, so even the current
   // session's row stays calm at rest.
   if (hovered) {
+    ensure_icons();
+
     edit_icon_.paint(
         painter, icon_rect(edit_button_rect(option)), Qt::AlignCenter,
         QIcon::Active, QIcon::Off

@@ -9,6 +9,10 @@
     <file alias="collapse.png">icons/collapse.png</file>
     <file alias="stop.png">icons/stop.png</file>
     <file alias="new-session.png">icons/new-session.png</file>
+    <file alias="copy.png">icons/copy.png</file>
+    <file alias="edit.png">icons/edit.png</file>
+    <file alias="delete.png">icons/delete.png</file>
+    <file alias="settings.png">icons/settings.png</file>
   </qresource>
 
   <!-- The shipped default theme, so a build carries it even when no

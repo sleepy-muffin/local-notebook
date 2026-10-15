@@ -17,5 +17,9 @@ docs/plans/
 # Local backups of parked sources
 /backups/
 
+# Python bytecode from asset tooling
+__pycache__/
+*.pyc
+
 *.run.old-*/
 /src/.old/

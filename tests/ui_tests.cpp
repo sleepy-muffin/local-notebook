@@ -23,11 +23,13 @@
 #include <QListWidget>
 #include <QMouseEvent>
 #include <QMetaObject>
+#include <QPainter>
 #include <QPlainTextEdit>
 #include <QPoint>
 #include <QPushButton>
 #include <QRect>
 #include <QScrollArea>
+#include <QSet>
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QStyleOptionViewItem>
@@ -241,6 +243,29 @@ void test_main_window_invariants() {
   auto* new_session = window.findChild<QPushButton*>(QStringLiteral("NewSession"));
   CHECK(new_session != nullptr);
 
+  // Every chrome icon is bundled in the binary, so none of these is null (a null
+  // icon would leave an empty button wherever the system icon theme is absent).
+  if (new_session != nullptr) {
+    CHECK(!new_session->icon().isNull());
+  }
+
+  auto* settings_button =
+      window.findChild<QToolButton*>(QStringLiteral("CurrentSettings"));
+  CHECK(settings_button != nullptr);
+  if (settings_button != nullptr) {
+    CHECK(!settings_button->icon().isNull());
+  }
+
+  // The per-message hover actions (copy / edit / delete) carry the bundled icons:
+  // two on each of the three rows (user rows get edit, the assistant row copy,
+  // and every row gets delete).
+  const QList<QToolButton*> message_actions =
+      window.findChildren<QToolButton*>(QStringLiteral("MessageAction"));
+  CHECK(message_actions.size() == 6);
+  for (const QToolButton* action : message_actions) {
+    CHECK(!action->icon().isNull());
+  }
+
   // The foot-of-sidebar card shows the current assistant (name and model), not a
   // session.
   auto* current_name = window.findChild<QLabel*>(QStringLiteral("CurrentName"));
@@ -383,6 +408,42 @@ void test_session_action_click_flag() {
   QStyleOptionViewItem hint_option;
   const QSize hint = delegate.sizeHint(hint_option, QModelIndex());
   CHECK(hint.height() >= ui::metrics().session_item_height);
+}
+
+// The hover-only row actions are painted from the bundled icons, not the system
+// icon theme. Rendering a hovered row and counting the distinct colours inside
+// each action rect proves the artwork reached the delegate: a missing icon would
+// leave the rect a single flat fill colour.
+void test_session_row_action_icons(QApplication& app) {
+  enter_scratch("row-action-icons");
+  ui::apply_theme(app, lnb::Settings{});
+
+  ui::SessionItemDelegate delegate;
+
+  const QRect row(0, 0, 220, 40);
+  QStyleOptionViewItem option;
+  option.rect = row;
+  option.state = QStyle::State_MouseOver;
+
+  QImage image(row.size(), QImage::Format_ARGB32_Premultiplied);
+  image.fill(Qt::transparent);
+
+  QPainter painter(&image);
+  delegate.paint(&painter, option, QModelIndex());
+  painter.end();
+
+  const auto distinct_colours = [&](const QRect& rect) {
+    QSet<QRgb> seen;
+    for (int y = rect.top(); y <= rect.bottom(); ++y) {
+      for (int x = rect.left(); x <= rect.right(); ++x) {
+        seen.insert(image.pixel(x, y));
+      }
+    }
+    return seen.size();
+  };
+
+  CHECK(distinct_colours(delegate.edit_button_rect(option)) > 1);
+  CHECK(distinct_colours(delegate.delete_button_rect(option)) > 1);
 }
 
 // --- Settings window ----------------------------------------------------------
@@ -901,6 +962,10 @@ void test_bundled_resources() {
   CHECK(QFile::exists(QStringLiteral(":/icons/collapse.png")));
   CHECK(QFile::exists(QStringLiteral(":/icons/stop.png")));
   CHECK(QFile::exists(QStringLiteral(":/icons/new-session.png")));
+  CHECK(QFile::exists(QStringLiteral(":/icons/copy.png")));
+  CHECK(QFile::exists(QStringLiteral(":/icons/edit.png")));
+  CHECK(QFile::exists(QStringLiteral(":/icons/delete.png")));
+  CHECK(QFile::exists(QStringLiteral(":/icons/settings.png")));
   CHECK(QFile::exists(QStringLiteral(":/themes/theme.json")));
 
   // The bundled theme carries real content, not an empty stub.
@@ -920,6 +985,16 @@ void test_bundled_resources() {
   );
   CHECK(!new_session.isNull());
   CHECK(!new_session.pixmap(16, 16).isNull());
+
+  // Every chrome icon that used to come from the system icon theme is bundled
+  // too: the message actions and the settings cog.
+  for (const char* name : {"copy", "edit", "delete", "settings"}) {
+    const QIcon icon = ui::resource_icon(
+        QString::fromLatin1(name), QColor(255, 0, 0), QColor(0, 255, 0)
+    );
+    CHECK(!icon.isNull());
+    CHECK(!icon.pixmap(16, 16).isNull());
+  }
 
   // A name with no bundled artwork yields a null icon, so the caller falls back
   // to the system theme or a standard icon.
@@ -1166,6 +1241,7 @@ int main(int argc, char** argv) {
   test_session_list_populated_on_startup();
   test_assistant_log_file();
   test_session_action_click_flag();
+  test_session_row_action_icons(app);
   test_settings_window_nav(app);
   test_settings_reload_on_show(app);
   test_settings_restore_defaults(app);

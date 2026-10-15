@@ -102,13 +102,17 @@ public:
   [[nodiscard]] MessageBubble* bubble() const { return bubble_; }
 
   // Adds an icon-only action button and returns it so the caller can connect to
-  // it. The named icon theme icon is preferred; fallback_icon is used when the
-  // theme does not provide it.
+  // it. The bundled icon named `icon_name` is preferred; fallback_icon is used
+  // when the artwork is missing.
   QToolButton* add_action(
       const QString& icon_name, QStyle::StandardPixmap fallback_icon, const QString& tip
   );
 
   void set_actions_visible(bool visible);
+
+  // Re-applies the action icons for the active theme, so a theme change takes
+  // effect without rebuilding the transcript.
+  void refresh_action_icons();
 
   // Records the stored message id and shows it (as "#<id>") alongside the hover
   // actions. Ids of 0 (streaming/notice rows) leave the label empty.
@@ -119,12 +123,23 @@ protected:
   void leaveEvent(QEvent* event) override;
 
 private:
+  // One hover action's icon, remembered so the strip can be recoloured when the
+  // theme changes.
+  struct ActionIcon {
+    QToolButton* button = nullptr;
+    QString name;
+    QStyle::StandardPixmap fallback = QStyle::SP_CustomBase;
+  };
+
+  void apply_action_icon(ActionIcon& entry);
+
   MessageBubble::Role role_;
   MessageBubble* bubble_ = nullptr;
   QWidget* actions_ = nullptr;
   QLabel* message_id_label_ = nullptr;
   std::uint32_t message_id_ = 0;
   bool actions_visible_ = false;
+  std::vector<ActionIcon> action_icons_;
 };
 
 // The chat pane for one session: transcript on top, composer at the bottom. The

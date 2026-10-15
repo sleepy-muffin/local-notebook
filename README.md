@@ -368,10 +368,11 @@ cmake --build build/linux-x64-debug -j 8
 A `linux-x64-release` preset is also provided.
 
 The monochrome chrome icons (the composer actions and the sidebar's New Session
-glyph), the application icon and the default theme are compiled into the binaries
-through the Qt resource system (`assets/local-notebook.qrc`, `CMAKE_AUTORCC`), so a
-deployed build carries them without loose files beside the executable and without
-depending on the system icon theme.
+glyph, the message hover actions — copy, edit and delete — the session-row hover
+actions and the settings cog), the application icon and the default theme are
+compiled into the binaries through the Qt resource system (`assets/local-notebook.qrc`,
+`CMAKE_AUTORCC`), so a deployed build carries them without loose files beside the
+executable and without depending on the system icon theme.
 
 The chrome artwork lives in `assets/icons/`: editable SVGs plus the monochrome PNGs
 actually embedded, which are recoloured to the active theme at runtime. The PNG form

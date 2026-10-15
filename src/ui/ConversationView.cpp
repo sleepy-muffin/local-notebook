@@ -561,14 +561,8 @@ QToolButton* MessageRow::add_action(
   button->setFocusPolicy(Qt::NoFocus);
   button->setToolTip(tip);
 
-  QIcon icon = QIcon::fromTheme(icon_name);
-
-  // Fall back to a built-in standard icon when the icon theme is unavailable.
-  if (icon.isNull()) {
-    icon = style()->standardIcon(fallback_icon);
-  }
-
-  button->setIcon(icon);
+  action_icons_.push_back(ActionIcon{button, icon_name, fallback_icon});
+  apply_action_icon(action_icons_.back());
 
   auto* layout = static_cast<QHBoxLayout*>(actions_->layout());
 
@@ -582,6 +576,26 @@ QToolButton* MessageRow::add_action(
   button->setVisible(actions_visible_);
 
   return button;
+}
+
+void MessageRow::apply_action_icon(ActionIcon& entry) {
+  const QColor colour = theme().colors.text_muted;
+
+  // The bundled artwork is recoloured to the theme; a missing resource falls back
+  // to a built-in standard icon.
+  QIcon icon = resource_icon(entry.name, colour, colour);
+
+  if (icon.isNull()) {
+    icon = style()->standardIcon(entry.fallback);
+  }
+
+  entry.button->setIcon(icon);
+}
+
+void MessageRow::refresh_action_icons() {
+  for (ActionIcon& entry : action_icons_) {
+    apply_action_icon(entry);
+  }
 }
 
 void MessageRow::set_actions_visible(bool visible) {
@@ -916,6 +930,7 @@ void ConversationView::refresh_style() {
   for (MessageRow* row : rows_) {
     if (row != nullptr) {
       row->bubble()->refresh_style();
+      row->refresh_action_icons();
     }
   }
 }
@@ -1075,7 +1090,7 @@ MessageRow* ConversationView::make_row(
     // Markdown source, not the rendered rich text.
     if (role == MessageBubble::Role::Assistant) {
       auto* copy = row->add_action(
-          QStringLiteral("edit-copy"), QStyle::SP_DialogSaveButton,
+          QStringLiteral("copy"), QStyle::SP_DialogSaveButton,
           QStringLiteral("Copy message")
       );
 
@@ -1087,7 +1102,7 @@ MessageRow* ConversationView::make_row(
 
     if (editable) {
       auto* edit = row->add_action(
-          QStringLiteral("document-edit"), QStyle::SP_FileIcon,
+          QStringLiteral("edit"), QStyle::SP_FileIcon,
           QStringLiteral("Edit message")
       );
 
@@ -1098,7 +1113,7 @@ MessageRow* ConversationView::make_row(
     }
 
     auto* remove = row->add_action(
-        QStringLiteral("edit-delete"), QStyle::SP_TrashIcon,
+        QStringLiteral("delete"), QStyle::SP_TrashIcon,
         QStringLiteral("Delete message")
     );
 

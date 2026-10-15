@@ -11,15 +11,18 @@ script from anywhere:
 
     python3 assets/icons/rasterise.py
 
-It reads each SVG's polygon `d` attribute directly, so the two forms cannot
-drift apart. Requires Pillow.
+Every icon is authored with straight-line path commands only, on a shared 24x24
+grid, so the two forms cannot drift apart: the script reads each SVG's own `d`
+attribute. A path may hold several subpaths; they are filled with the even-odd
+rule, so a nested subpath becomes a hole (a gear's centre, an outlined sheet).
+Requires Pillow.
 """
 
 import glob
 import os
 import re
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 # The embedded size, and the factor the artwork is drawn at before downscaling
 # (supersampling keeps the edges smooth).
@@ -30,32 +33,123 @@ SUPERSAMPLE = 4
 VIEW_BOX = 24.0
 
 
-def polygon_points(svg_text):
-    """The vertices of the single polygon path an icon file declares."""
-    match = re.search(r'd="([^"]+)"', svg_text)
+def parse_path(d):
+    """The subpaths of an SVG path `d`, as lists of (x, y) points.
 
-    if match is None:
-        raise ValueError("no path `d` attribute found")
+    Supports the move, line, horizontal, vertical and close commands, absolute
+    and relative (M/m, L/l, H/h, V/v, Z/z); the icons use straight lines only.
+    Each subpath is one contour.
+    """
+    tokens = re.findall(r"[MmLlHhVvZz]|-?\d+(?:\.\d+)?", d)
 
-    numbers = [float(n) for n in re.findall(r"-?\d+(?:\.\d+)?", match.group(1))]
+    subpaths = []
+    current = []
+    x = y = 0.0
+    start = (0.0, 0.0)
+    command = None
+    index = 0
 
-    return list(zip(numbers[0::2], numbers[1::2]))
+    def flush():
+        if current:
+            subpaths.append(list(current))
+            current.clear()
+
+    while index < len(tokens):
+        token = tokens[index]
+
+        if token.isalpha():
+            command = token
+            index += 1
+
+            if command in "Zz":
+                flush()
+                x, y = start
+
+            continue
+
+        if command in "Mm":
+            nx, ny = float(tokens[index]), float(tokens[index + 1])
+            index += 2
+
+            if command == "m":
+                nx, ny = x + nx, y + ny
+
+            flush()
+            x, y = nx, ny
+            start = (x, y)
+            current.append((x, y))
+            # Further coordinate pairs after a move are implicit line-tos.
+            command = "L" if command == "M" else "l"
+        elif command in "Ll":
+            nx, ny = float(tokens[index]), float(tokens[index + 1])
+            index += 2
+
+            if command == "l":
+                nx, ny = x + nx, y + ny
+
+            x, y = nx, ny
+            current.append((x, y))
+        elif command in "Hh":
+            nx = float(tokens[index])
+            index += 1
+
+            if command == "h":
+                nx = x + nx
+
+            x = nx
+            current.append((x, y))
+        elif command in "Vv":
+            ny = float(tokens[index])
+            index += 1
+
+            if command == "v":
+                ny = y + ny
+
+            y = ny
+            current.append((x, y))
+        else:
+            raise ValueError(f"unsupported path command: {command!r}")
+
+    flush()
+    return subpaths
+
+
+def render(subpaths):
+    """A 64x64 black-on-transparent image of the subpaths, even-odd filled."""
+    scale = SIZE * SUPERSAMPLE / VIEW_BOX
+    size = SIZE * SUPERSAMPLE
+
+    # Even-odd fill: a pixel covered by an odd number of contours is opaque, so a
+    # contour nested inside another becomes a hole. XOR-ing the per-contour masks
+    # computes exactly that parity.
+    mask = Image.new("1", (size, size), 0)
+
+    for points in subpaths:
+        layer = Image.new("1", (size, size), 0)
+        ImageDraw.Draw(layer).polygon(
+            [(px * scale, py * scale) for px, py in points], fill=1
+        )
+        mask = ImageChops.logical_xor(mask, layer)
+
+    alpha = mask.convert("L").resize((SIZE, SIZE), Image.Resampling.LANCZOS)
+    image = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    image.paste(Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 255)), (0, 0), alpha)
+    return image
 
 
 def main():
     directory = os.path.dirname(os.path.abspath(__file__))
-    scale = SIZE * SUPERSAMPLE / VIEW_BOX
 
     for svg in sorted(glob.glob(os.path.join(directory, "*.svg"))):
         with open(svg, encoding="utf-8") as handle:
-            points = polygon_points(handle.read())
+            text = handle.read()
 
-        size = SIZE * SUPERSAMPLE
-        image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-        ImageDraw.Draw(image).polygon(
-            [(x * scale, y * scale) for x, y in points], fill=(0, 0, 0, 255)
-        )
-        image = image.resize((SIZE, SIZE), Image.Resampling.LANCZOS)
+        match = re.search(r'\bd="([^"]+)"', text)
+
+        if match is None:
+            raise ValueError(f"no path `d` attribute in {os.path.basename(svg)}")
+
+        image = render(parse_path(match.group(1)))
 
         out = os.path.splitext(svg)[0] + ".png"
         image.save(out)

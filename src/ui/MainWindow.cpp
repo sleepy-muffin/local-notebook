@@ -298,6 +298,21 @@ void MainWindow::apply_window_style() {
 
     new_session_button_->setIcon(add);
   }
+
+  // The settings cog is bundled and recoloured to the theme as well, and is
+  // re-applied here so a theme change reaches it without a restart.
+  if (current_settings_ != nullptr) {
+    QIcon gear = resource_icon(QStringLiteral("settings"), c.text_muted, c.text_muted);
+
+    if (gear.isNull()) {
+      gear = QIcon::fromTheme(QStringLiteral("settings-configure"));
+    }
+    if (gear.isNull()) {
+      gear = style()->standardIcon(QStyle::SP_FileDialogDetailedView);
+    }
+
+    current_settings_->setIcon(gear);
+  }
 }
 
 QWidget* MainWindow::build_sidebar() {
@@ -442,15 +457,6 @@ QWidget* MainWindow::build_sidebar() {
   current_settings_->setFixedSize(26, 26);
   current_settings_->setIconSize(QSize(16, 16));
   current_settings_->setCursor(Qt::PointingHandCursor);
-
-  QIcon gear = QIcon::fromTheme(QStringLiteral("settings-configure"));
-  if (gear.isNull()) {
-    gear = QIcon::fromTheme(QStringLiteral("preferences-system"));
-  }
-  if (gear.isNull()) {
-    gear = style()->standardIcon(QStyle::SP_FileDialogDetailedView);
-  }
-  current_settings_->setIcon(gear);
   current_settings_->setToolTip(QStringLiteral("Settings"));
 
   connect(
