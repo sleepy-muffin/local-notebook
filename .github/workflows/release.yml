@@ -86,6 +86,12 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-notebook-linux-x86_64
+          path: build/local-notebook-${{ inputs.tag || github.ref_name }}
+
   windows:
     name: Windows x86_64
     runs-on: windows-latest
@@ -150,3 +156,37 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-notebook-windows-x86_64
+          path: build/local-notebook-${{ inputs.tag || github.ref_name }}.exe
+
+  release:
+    name: Publish GitHub Release
+    needs: [linux, windows]
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: local-notebook-linux-x86_64
+          path: release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: local-notebook-windows-x86_64
+          path: release
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: |
+            release/local-notebook-*
