@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- Plus: the sidebar's "New Session" action. Monochrome; the app recolours it
+       to the theme's text colour at runtime. -->
+  <path d="M10.8 5 L13.2 5 L13.2 10.8 L19 10.8 L19 13.2 L13.2 13.2 L13.2 19 L10.8 19 L10.8 13.2 L5 13.2 L5 10.8 L10.8 10.8 Z" fill="#000000"/>
+</svg>

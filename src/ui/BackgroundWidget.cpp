@@ -22,15 +22,19 @@ void BackgroundWidget::ensure_scaled_background() {
 
   const QSize logical_size = size();
   const qreal dpr = devicePixelRatioF();
+  const qint64 image_key = image.cacheKey();
 
-  // The cache is only rebuilt when the logical size or the scale factor changes.
+  // The cache is rebuilt when the source image, the logical size or the scale
+  // factor changes. The image key matters because replacing the background with a
+  // different image of the same size must not keep showing the old one.
   if (!scaled_background_.isNull() && cached_size_ == logical_size &&
-      qFuzzyCompare(cached_dpr_, dpr)) {
+      qFuzzyCompare(cached_dpr_, dpr) && cached_image_key_ == image_key) {
     return;
   }
 
   cached_size_ = logical_size;
   cached_dpr_ = dpr;
+  cached_image_key_ = image_key;
 
   if (image.isNull() || logical_size.isEmpty()) {
     scaled_background_ = QPixmap{};

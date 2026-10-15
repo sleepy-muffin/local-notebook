@@ -630,7 +630,7 @@ std::string fold_session_memory(
     store::database& db, const Session& session, const std::string& model,
     const std::string& api_url, const std::string& api_key,
     const std::optional<std::string>& proxy, GenerationTask& task,
-    std::stop_token stop_token, bool force
+    std::stop_token stop_token, bool force, const SummaryApprover& approver
 ) {
   const std::vector<Message> messages = db.messages(session.id_);
 
@@ -661,6 +661,30 @@ std::string fold_session_memory(
   // The completion cap reserves room for the summariser's hidden reasoning.
   const std::size_t max_tokens =
       session.summary_token_budget_ + session.summary_reasoning_headroom_tokens_;
+
+  // Review the pass before anything leaves the machine. The plan describes the
+  // first request; a very large overflow continues in further batches, which is
+  // noted for the user. Declining returns the memory untouched, because nothing
+  // has been sent yet.
+  if (approver && window.start > 0) {
+    const std::vector<const Message*> first_batch = context::summary_candidates(
+        messages, 0, window.start, session.summary_trigger_tokens_
+    );
+
+    SummaryPlan plan;
+    plan.kind = "session memory";
+    plan.request =
+        context::session_summary_request(model, memory, first_batch, max_tokens);
+    plan.automatic = !force;
+    plan.more_requests = first_batch.size() < window.start;
+    plan.watermark_text =
+        "Session memory watermark: " + std::to_string(session.memory_watermark_) +
+        " -> " + std::to_string(messages[window.start - 1].id_);
+
+    if (!approver(plan)) {
+      return session.memory_;
+    }
+  }
 
   std::uint32_t watermark = 0;
   std::size_t first = 0;
@@ -792,7 +816,7 @@ std::string fold_assistant_memory(
     store::database& db, const Assistant& assistant, const std::string& model,
     const std::string& api_url, const std::string& api_key,
     const std::optional<std::string>& proxy, GenerationTask& task,
-    std::stop_token stop_token, bool strict
+    std::stop_token stop_token, bool strict, const SummaryApprover& approver
 ) {
   const std::vector<Session> sessions = db.sessions_by_recent();
 
@@ -885,6 +909,47 @@ std::string fold_assistant_memory(
       assistant.summary_token_budget_ + assistant.summary_reasoning_headroom_tokens_
   );
 
+  // Review the single request before it leaves the machine. Declining returns
+  // the memory untouched, because nothing has been sent yet.
+  if (approver) {
+    SummaryPlan plan;
+    plan.kind = "assistant memory";
+    plan.request = request;
+    plan.automatic = !strict;
+    plan.more_requests = false;
+
+    std::string watermarks;
+
+    for (const Session& session: sessions) {
+      const auto it = gather.gathered_ids.find(session.id_);
+
+      if (it == gather.gathered_ids.end()) {
+        continue;
+      }
+
+      watermarks += "Session ";
+      watermarks += std::to_string(session.id_);
+
+      if (!session.title_.empty()) {
+        watermarks += " (";
+        watermarks += session.title_;
+        watermarks += ")";
+      }
+
+      watermarks += " assistant watermark: ";
+      watermarks += std::to_string(session.assistant_memory_watermark_);
+      watermarks += " -> ";
+      watermarks += std::to_string(it->second);
+      watermarks += '\n';
+    }
+
+    plan.watermark_text = watermarks;
+
+    if (!approver(plan)) {
+      return assistant.memory_;
+    }
+  }
+
   GenerationTask silent_task;
   silent_task.start();
 
@@ -939,11 +1004,11 @@ std::string maybe_summarize_session(
     store::database& db, const Session& session, const std::string& model,
     const std::string& api_url, const std::string& api_key,
     const std::optional<std::string>& proxy, GenerationTask& task,
-    std::stop_token stop_token
+    std::stop_token stop_token, SummaryApprover approver
 ) {
   try {
     return fold_session_memory(
-        db, session, model, api_url, api_key, proxy, task, stop_token, false
+        db, session, model, api_url, api_key, proxy, task, stop_token, false, approver
     );
   } catch (const std::exception& error) {
     // Best effort: an automatic summarisation must never fail the user's turn,
@@ -960,10 +1025,10 @@ std::string summarize_session_now(
     store::database& db, const Session& session, const std::string& model,
     const std::string& api_url, const std::string& api_key,
     const std::optional<std::string>& proxy, GenerationTask& task,
-    std::stop_token stop_token
+    std::stop_token stop_token, SummaryApprover approver
 ) {
   return fold_session_memory(
-      db, session, model, api_url, api_key, proxy, task, stop_token, true
+      db, session, model, api_url, api_key, proxy, task, stop_token, true, approver
   );
 }
 
@@ -971,7 +1036,7 @@ std::string maybe_summarize_assistant(
     store::database& db, const Assistant& assistant, const std::string& model,
     const std::string& api_url, const std::string& api_key,
     const std::optional<std::string>& proxy, GenerationTask& task,
-    std::stop_token stop_token
+    std::stop_token stop_token, SummaryApprover approver
 ) {
   try {
     // Empty when the automatic trigger is not reached, so the caller only
@@ -981,7 +1046,7 @@ std::string maybe_summarize_assistant(
     }
 
     return fold_assistant_memory(
-        db, assistant, model, api_url, api_key, proxy, task, stop_token, false
+        db, assistant, model, api_url, api_key, proxy, task, stop_token, false, approver
     );
   } catch (const std::exception& error) {
     lnb::log::info("maybe_summarize_assistant: skipped: {}", error.what());
@@ -993,10 +1058,10 @@ std::string summarize_assistant_now(
     store::database& db, const Assistant& assistant, const std::string& model,
     const std::string& api_url, const std::string& api_key,
     const std::optional<std::string>& proxy, GenerationTask& task,
-    std::stop_token stop_token
+    std::stop_token stop_token, SummaryApprover approver
 ) {
   return fold_assistant_memory(
-      db, assistant, model, api_url, api_key, proxy, task, stop_token, true
+      db, assistant, model, api_url, api_key, proxy, task, stop_token, true, approver
   );
 }
 

@@ -15,10 +15,14 @@
 #include <QFile>
 #include <QFrame>
 #include <QIcon>
+#include <QImage>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QLabel>
 #include <QListView>
 #include <QListWidget>
 #include <QMouseEvent>
+#include <QMetaObject>
 #include <QPlainTextEdit>
 #include <QPoint>
 #include <QPushButton>
@@ -27,23 +31,30 @@
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QStyleOptionViewItem>
+#include <QTimer>
 #include <QToolButton>
 #include <QWheelEvent>
 #include <QWidget>
 
 #include <cstdio>
 #include <cstdlib>
+#include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <thread>
 
 #include "app/application.hpp"
 #include "app/metrics.hpp"
 #include "app/settings.hpp"
 #include "model.hpp"
+#include "net/client.hpp"
 #include "store/util.hpp"
+#include "support/generation_task.hpp"
 #include "ui/AssistantForm.hpp"
+#include "ui/BackgroundWidget.hpp"
 #include "ui/ConversationView.hpp"
 #include "ui/MainWindow.hpp"
 #include "ui/SessionEditor.hpp"
@@ -51,6 +62,7 @@
 #include "ui/SessionListModel.hpp"
 #include "ui/SettingsWindow.hpp"
 #include "ui/SpinBox.hpp"
+#include "ui/SummaryReviewDialog.hpp"
 #include "ui/theme.hpp"
 
 namespace {
@@ -375,7 +387,40 @@ void test_session_action_click_flag() {
 
 // --- Settings window ----------------------------------------------------------
 
-void test_settings_window_nav() {
+// Every settings page's content must fit its scroll area's viewport. The
+// horizontal scrollbar is hidden, so wider content would be clipped on the right.
+// This guards a Windows regression, where wider font metrics pushed four pages
+// past the viewport even though Linux was fine. Diagnostics are printed because
+// the CI log otherwise shows no numbers to compare.
+void check_settings_pages_fit(ui::SettingsWindow& window) {
+  auto* stack = window.findChild<QStackedWidget*>(QStringLiteral("SettingsStack"));
+  if (stack == nullptr) {
+    return;
+  }
+
+  // Each page is activated first: a hidden page in the stack is never laid out.
+  for (int i = 0; i < stack->count(); ++i) {
+    stack->setCurrentIndex(i);
+    QApplication::processEvents();
+
+    QWidget* page = stack->widget(i);
+    const QList<QScrollArea*> areas = page->findChildren<QScrollArea*>();
+    for (const QScrollArea* area : areas) {
+      const QWidget* inner = area->widget();
+      if (inner == nullptr || area->viewport()->width() <= 0) {
+        continue;
+      }
+      const int minimum = inner->minimumSizeHint().width();
+      const int viewport = area->viewport()->width();
+      if (minimum > viewport) {
+        std::fprintf(stderr, "page %d: content min %d > viewport %d\n", i, minimum, viewport);
+      }
+      CHECK(minimum <= viewport);
+    }
+  }
+}
+
+void test_settings_window_nav([[maybe_unused]] QApplication& app) {
   enter_scratch("settings-window");
 
   lnb::Application notebook;
@@ -409,25 +454,30 @@ void test_settings_window_nav() {
   window.show();
   QApplication::processEvents();
 
-  // No page's content may be wider than its viewport, or the (hidden) horizontal
-  // scrollbar would clip the right-hand column. Each page is activated first,
-  // since a hidden page in the stack is never laid out.
-  if (stack != nullptr) {
-    for (int i = 0; i < stack->count(); ++i) {
-      stack->setCurrentIndex(i);
-      QApplication::processEvents();
+  check_settings_pages_fit(window);
 
-      QWidget* page = stack->widget(i);
-      const QList<QScrollArea*> areas = page->findChildren<QScrollArea*>();
-      for (const QScrollArea* area : areas) {
-        const QWidget* inner = area->widget();
-        if (inner == nullptr || area->viewport()->width() <= 0) {
-          continue;
-        }
-        CHECK(inner->minimumSizeHint().width() <= area->viewport()->width());
-      }
-    }
+  // A doubled font size stands in for the wider default font metrics some
+  // platforms report, and keeps this check meaningful on Linux (whose default
+  // font is narrow). Windows already exercises that path through its own default
+  // metrics, and 22pt there would exceed any realistic window, so the extra pass
+  // is skipped rather than turned into a false failure.
+#ifndef Q_OS_WIN
+  {
+    lnb::Settings wide;
+    wide.ui_font_size = 22;
+    ui::apply_theme(app, wide);
   }
+
+  ui::SettingsWindow wide_window(notebook);
+  wide_window.resize(780, 580);
+  wide_window.show();
+  QApplication::processEvents();
+
+  check_settings_pages_fit(wide_window);
+
+  // Leave the default theme installed for the tests that follow.
+  ui::apply_theme(app, lnb::Settings{});
+#endif
 }
 
 // --- Settings window: reload, restore, presets -------------------------------
@@ -622,6 +672,34 @@ void test_font_combo_wheel() {
   CHECK(!down.isAccepted());
 }
 
+void test_combo_box_wheel() {
+  ui::ComboBox combo;
+  combo.addItem(QStringLiteral("Alpha"));
+  combo.addItem(QStringLiteral("Beta"));
+  combo.addItem(QStringLiteral("Gamma"));
+  combo.setCurrentIndex(1);
+
+  const auto wheel = [](int delta) {
+    return QWheelEvent(
+        QPointF(10, 10), QPointF(10, 10), QPoint(0, 0), QPoint(0, delta), Qt::NoButton,
+        Qt::NoModifier, Qt::NoScrollPhase, false
+    );
+  };
+
+  // Crossing the field while scrolling must never switch the current item, in
+  // either direction. This covers the theme, budget and summarization presets.
+  QWheelEvent up = wheel(120);
+  QApplication::sendEvent(&combo, &up);
+  CHECK(combo.currentIndex() == 1);
+
+  QWheelEvent down = wheel(-120);
+  QApplication::sendEvent(&combo, &down);
+  CHECK(combo.currentIndex() == 1);
+
+  CHECK(!up.isAccepted());
+  CHECK(!down.isAccepted());
+}
+
 // --- Translucent theme --------------------------------------------------------
 
 // Writes a theme file with one opaque and one translucent variant, so a theme
@@ -764,6 +842,54 @@ void test_conversation_backgrounds(QApplication& app) {
   CHECK(ui::theme().colors.input_background.alpha() == 0);
 }
 
+// --- Background image cache ---------------------------------------------------
+
+// Replacing the background image with a different one of the *same* size must be
+// reflected on the next paint. The widget caches the scaled cover-fit keyed by
+// the source pixmap's identity, so a stale cache would keep showing the old
+// image until the program restarted.
+void test_background_image_reload(QApplication& app) {
+  enter_scratch("background-image");
+
+  const auto write_solid = [](const QString& path, const QColor& colour) {
+    QImage image(64, 48, QImage::Format_ARGB32);
+    image.fill(colour);
+    CHECK(image.save(path));
+  };
+
+  write_solid(QStringLiteral("red.png"), QColor(200, 20, 20));
+  write_solid(QStringLiteral("blue.png"), QColor(20, 20, 200));
+
+  const auto apply = [&](const QString& path) {
+    lnb::Settings settings;
+    settings.background_url = path.toStdString();
+    // No tint, so the sampled pixel is the image itself.
+    settings.background_override = std::nullopt;
+    ui::apply_theme(app, settings);
+  };
+
+  // One widget across both themes, so the scaled-background cache is exercised
+  // rather than being rebuilt from scratch each time.
+  ui::BackgroundWidget widget(nullptr, true);
+  widget.resize(64, 48);
+
+  apply(QStringLiteral("red.png"));
+  const QImage red = widget.grab().toImage();
+  const QColor red_centre = red.pixelColor(red.width() / 2, red.height() / 2);
+  CHECK(red_centre.red() > 150);
+  CHECK(red_centre.blue() < 100);
+
+  // Same dimensions, different content: the cache must not keep the old image.
+  apply(QStringLiteral("blue.png"));
+  const QImage blue = widget.grab().toImage();
+  const QColor blue_centre = blue.pixelColor(blue.width() / 2, blue.height() / 2);
+  CHECK(blue_centre.blue() > 150);
+  CHECK(blue_centre.red() < 100);
+
+  // Leave the default theme installed for the tests that follow.
+  ui::apply_theme(app, lnb::Settings{});
+}
+
 // --- Bundled resources -------------------------------------------------------
 
 // The composer icons and the default theme are compiled into the binary, so a
@@ -774,6 +900,7 @@ void test_bundled_resources() {
   CHECK(QFile::exists(QStringLiteral(":/icons/expand.png")));
   CHECK(QFile::exists(QStringLiteral(":/icons/collapse.png")));
   CHECK(QFile::exists(QStringLiteral(":/icons/stop.png")));
+  CHECK(QFile::exists(QStringLiteral(":/icons/new-session.png")));
   CHECK(QFile::exists(QStringLiteral(":/themes/theme.json")));
 
   // The bundled theme carries real content, not an empty stub.
@@ -786,6 +913,13 @@ void test_bundled_resources() {
   );
   CHECK(!send.isNull());
   CHECK(!send.pixmap(16, 16).isNull());
+
+  // The sidebar's New Session glyph is bundled the same way as the composer icons.
+  const QIcon new_session = ui::resource_icon(
+      QStringLiteral("new-session"), QColor(255, 0, 0), QColor(0, 255, 0)
+  );
+  CHECK(!new_session.isNull());
+  CHECK(!new_session.pixmap(16, 16).isNull());
 
   // A name with no bundled artwork yields a null icon, so the caller falls back
   // to the system theme or a standard icon.
@@ -810,6 +944,140 @@ void test_app_icon() {
   CHECK(!icon.pixmap(16, 16).isNull());
   CHECK(!icon.pixmap(256, 256).isNull());
   CHECK(icon.availableSizes().size() >= 5);
+}
+
+// --- Summarization review ----------------------------------------------------
+
+// The review dialog renders the exact request as plain text, so the user can
+// read what will be sent before approving it.
+void test_summary_review_dialog() {
+  lnb::net::SummaryPlan plan;
+  plan.kind = "session memory";
+  plan.automatic = true;
+  plan.watermark_text = "Session memory watermark: 0 -> 3";
+
+  QJsonArray messages;
+  messages.append(QJsonObject{{"role", "system"}, {"content", "You keep a memory."}});
+  messages.append(QJsonObject{{"role", "user"}, {"content", "Fold this turn."}});
+  plan.request = QJsonObject{
+      {"model", "test-model"},
+      {"max_tokens", 4096},
+      {"messages", messages},
+  };
+
+  ui::SummaryReviewDialog dialog(plan);
+
+  auto* preview = dialog.findChild<QPlainTextEdit*>(QStringLiteral("SummaryPreview"));
+  CHECK(preview != nullptr);
+  if (preview != nullptr) {
+    const QString text = preview->toPlainText();
+    CHECK(text.contains(QStringLiteral("test-model")));
+    CHECK(text.contains(QStringLiteral("4096")));
+    CHECK(text.contains(QStringLiteral("system")));
+    CHECK(text.contains(QStringLiteral("You keep a memory.")));
+    CHECK(text.contains(QStringLiteral("Fold this turn.")));
+  }
+}
+
+// Declining the review cancels the pass: the memory is returned untouched and
+// the request is never posted. This exercises the approver without a network.
+void test_summary_review_decline() {
+  enter_scratch("summary-decline");
+
+  lnb::Application notebook;
+  notebook.open_assistant("77777777-7777-7777-7777-777777777777", make_assistant());
+
+  lnb::Session session;
+  // A one-token trigger keeps only the newest message verbatim, so the older
+  // messages become the overflow the pass would fold.
+  session.summary_trigger_tokens_ = 1;
+  session.memory_ = "Previous memory.";
+  const std::uint32_t session_id = notebook.sessions().create(session);
+
+  notebook.messages(session_id).append(lnb::Role::User, "First question.");
+  notebook.messages(session_id).append(lnb::Role::Assistant, "First answer.");
+  notebook.messages(session_id).append(lnb::Role::User, "Second question.");
+
+  const auto stored = notebook.db().session(session_id);
+  CHECK(stored.has_value());
+  if (!stored.has_value()) {
+    return;
+  }
+
+  bool called = false;
+  lnb::net::SummaryPlan seen;
+
+  const lnb::net::SummaryApprover approver =
+      [&called, &seen](const lnb::net::SummaryPlan& plan) {
+        called = true;
+        seen = plan;
+        return false; // decline
+      };
+
+  lnb::GenerationTask task;
+  task.start();
+
+  const std::string result = lnb::net::summarize_session_now(
+      notebook.db(), *stored, "test-model", "https://example.invalid/v1", "",
+      std::nullopt, task, std::stop_token{}, approver
+  );
+
+  CHECK(called);
+  CHECK(result == "Previous memory.");
+  CHECK(seen.kind == "session memory");
+  CHECK(!seen.automatic);
+  CHECK(seen.request.value("messages").toArray().size() == 2);
+  CHECK(!seen.watermark_text.empty());
+
+  // The stored memory is unchanged too.
+  const auto after = notebook.db().session(session_id);
+  CHECK(after.has_value());
+  if (after.has_value()) {
+    CHECK(after->memory_ == "Previous memory.");
+  }
+}
+
+// The review is shown from a worker thread and blocks it until the user decides.
+// This exercises the cross-thread marshalling end to end: the worker calls
+// review_summary, the dialog appears on this (interface) thread, and a timer
+// approves it, so the worker returns true.
+void test_summary_review_cross_thread() {
+  lnb::net::SummaryPlan plan;
+  plan.kind = "session memory";
+  plan.automatic = false; // no follow-up warning box on this path
+  plan.request = QJsonObject{
+      {"model", "test-model"},
+      {"max_tokens", 128},
+      {"messages", QJsonArray{}},
+  };
+
+  std::atomic<bool> done = false;
+  std::atomic<bool> approved = false;
+
+  std::thread worker([&plan, &done, &approved]() {
+    approved = ui::review_summary(plan);
+    done = true;
+  });
+
+  // Approve whichever modal dialog appears, as soon as it appears.
+  QTimer approve;
+  QObject::connect(&approve, &QTimer::timeout, []() {
+    QWidget* modal = QApplication::activeModalWidget();
+    if (modal != nullptr) {
+      QMetaObject::invokeMethod(modal, "accept");
+    }
+  });
+  approve.start(20);
+
+  for (int guard = 0; !done.load() && guard < 500; ++guard) {
+    QApplication::processEvents();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  approve.stop();
+  worker.join();
+
+  CHECK(approved.load());
 }
 
 // --- Composer ----------------------------------------------------------------
@@ -887,6 +1155,7 @@ int main(int argc, char** argv) {
   test_assistant_form_round_trip();
   test_spin_box_wheel();
   test_font_combo_wheel();
+  test_combo_box_wheel();
 
   // Widgets read the theme, so it must be installed before any is created. The
   // sandbox has no theme.json, so this exercises the theme compiled into the
@@ -897,7 +1166,7 @@ int main(int argc, char** argv) {
   test_session_list_populated_on_startup();
   test_assistant_log_file();
   test_session_action_click_flag();
-  test_settings_window_nav();
+  test_settings_window_nav(app);
   test_settings_reload_on_show(app);
   test_settings_restore_defaults(app);
   test_assistant_form_preset();
@@ -905,8 +1174,12 @@ int main(int argc, char** argv) {
   test_translucent_theme_buttons(app);
   test_code_block_restyles_on_theme_change(app);
   test_conversation_backgrounds(app);
+  test_background_image_reload(app);
   test_bundled_resources();
   test_app_icon();
+  test_summary_review_dialog();
+  test_summary_review_decline();
+  test_summary_review_cross_thread();
   test_composer_expand_toggle();
 
   if (g_failures != 0) {

@@ -3,6 +3,7 @@
 #include <QJsonObject>
 
 #include <cstddef>
+#include <functional>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -77,42 +78,63 @@ ChatCompletionResult generate_reply(
     const std::optional<std::string>& shared_directory, const Session& session
 );
 
+// A description of one summarisation request, built immediately before it is
+// transmitted so the interface can show the user exactly what will leave the
+// machine. `request` is the exact body; `kind` names the pass; `automatic` is
+// true when the token threshold triggered the pass rather than the user asking
+// for it.
+struct SummaryPlan {
+  std::string kind;
+  QJsonObject request;
+  std::string watermark_text;
+  bool automatic = false;
+  // True when the pass continues in further requests after this one (a large
+  // overflow is folded in several bounded batches).
+  bool more_requests = false;
+};
+
+// Called on the worker thread immediately before a summarisation request is
+// transmitted. Return true to send it, false to skip the pass. An empty
+// approver always proceeds, so headless callers and tests are unaffected.
+using SummaryApprover = std::function<bool(const SummaryPlan&)>;
+
 // Session summarisation (design-1.md §5). `maybe_*` is a no-op (returns the
 // unchanged memory) while the automatic trigger is not reached and swallows
 // failures (best effort); the `*_now` variant ignores the trigger, folds the
 // whole overflow and propagates failures. Both return the resulting session
-// memory (which is also persisted to the database).
+// memory (which is also persisted to the database). `approver`, when set, is
+// consulted before the request is sent and may cancel the pass.
 std::string maybe_summarize_session(
     store::database& db, const Session& session, const std::string& model,
     const std::string& api_url, const std::string& api_key,
     const std::optional<std::string>& proxy, GenerationTask& task,
-    std::stop_token stop_token
+    std::stop_token stop_token, SummaryApprover approver = {}
 );
 
 std::string summarize_session_now(
     store::database& db, const Session& session, const std::string& model,
     const std::string& api_url, const std::string& api_key,
     const std::optional<std::string>& proxy, GenerationTask& task,
-    std::stop_token stop_token
+    std::stop_token stop_token, SummaryApprover approver = {}
 );
 
 // Assistant summarisation across all sessions (design-1.md §6). `maybe_*` fires
 // only when the automatic trigger is reached; `*_now` folds on demand. Both
 // return the new assistant memory (empty when nothing happened); the caller
 // assigns it to `Assistant::memory_` and persists it, because the assistant is
-// passed by const reference.
+// passed by const reference. `approver` behaves as above.
 std::string maybe_summarize_assistant(
     store::database& db, const Assistant& assistant, const std::string& model,
     const std::string& api_url, const std::string& api_key,
     const std::optional<std::string>& proxy, GenerationTask& task,
-    std::stop_token stop_token
+    std::stop_token stop_token, SummaryApprover approver = {}
 );
 
 std::string summarize_assistant_now(
     store::database& db, const Assistant& assistant, const std::string& model,
     const std::string& api_url, const std::string& api_key,
     const std::optional<std::string>& proxy, GenerationTask& task,
-    std::stop_token stop_token
+    std::stop_token stop_token, SummaryApprover approver = {}
 );
 
 } // namespace lnb::net

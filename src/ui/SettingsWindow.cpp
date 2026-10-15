@@ -40,6 +40,7 @@
 #include "ui/AssistantForm.hpp"
 #include "ui/BackgroundWidget.hpp"
 #include "ui/SpinBox.hpp"
+#include "ui/SummaryReviewDialog.hpp"
 #include "ui/dialog_style.hpp"
 #include "ui/theme.hpp"
 
@@ -270,7 +271,7 @@ QWidget* SettingsWindow::build_config_page() {
   {
     auto* form = form_layout(content);
 
-    auto* theme_box = new QComboBox(content);
+    auto* theme_box = new ComboBox(content);
     theme_box->addItems(theme_names());
     const int theme_index = theme_box->findText(QString::fromStdString(pending_.theme));
     if (theme_index >= 0) {
@@ -353,8 +354,9 @@ QWidget* SettingsWindow::build_config_page() {
   // ---- Composer ----
   layout->addWidget(section_label(content, QStringLiteral("Composer")));
   {
-    auto* send_check = new QCheckBox(
-        QStringLiteral("Send with Ctrl+Enter (Enter inserts a new line)"), content
+    auto* send_check = new QCheckBox(QStringLiteral("Send with Ctrl+Enter"), content);
+    send_check->setToolTip(
+        QStringLiteral("When on, Ctrl+Enter sends and Enter inserts a new line.")
     );
     send_check->setChecked(pending_.enter_with_modifier);
     layout->addWidget(send_check);
@@ -427,7 +429,7 @@ QWidget* SettingsWindow::build_config_page() {
 
     layout->addLayout(form);
 
-    auto* tint_check = new QCheckBox(QStringLiteral("Tint the background image"), content);
+    auto* tint_check = new QCheckBox(QStringLiteral("Tint the image"), content);
     tint_check->setChecked(pending_.background_override.has_value());
     layout->addWidget(tint_check);
 
@@ -435,22 +437,30 @@ QWidget* SettingsWindow::build_config_page() {
         std::array<float, 4>{0.094f, 0.098f, 0.149f, 0.85f}
     );
 
-    auto* channels = new QHBoxLayout();
-    channels->setSpacing(8);
+    auto* channels = new QGridLayout();
+    channels->setHorizontalSpacing(12);
+    channels->setVerticalSpacing(8);
     const char* names[] = {"R", "G", "B", "A"};
     std::array<QDoubleSpinBox*, 4> spins{};
 
+    // Two channels per row: a single row of four fields is the widest content on
+    // any settings page, and would push the page past its viewport on platforms
+    // with wide font metrics.
     for (int i = 0; i < 4; ++i) {
       auto* spin = new DoubleSpinBox(content);
       spin->setRange(0.0, 1.0);
       spin->setSingleStep(0.05);
       spin->setDecimals(2);
+      spin->setMinimumWidth(64);
       spin->setValue(static_cast<double>(initial[static_cast<std::size_t>(i)]));
       spins[static_cast<std::size_t>(i)] = spin;
-      channels->addWidget(new QLabel(QString::fromUtf8(names[i]), content));
-      channels->addWidget(spin);
+
+      const int row = i / 2;
+      const int column = i % 2;
+      channels->addWidget(new QLabel(QString::fromUtf8(names[i]), content), row, column * 2);
+      channels->addWidget(spin, row, column * 2 + 1);
     }
-    channels->addStretch(1);
+    channels->setColumnStretch(4, 1);
     layout->addLayout(channels);
 
     config_writers_.push_back([this, tint_check, spins]() {
@@ -514,12 +524,10 @@ QWidget* SettingsWindow::build_metrics_page() {
 
   layout->addWidget(section_label(content, QStringLiteral("Layout")));
 
-  auto* grid = new QGridLayout();
-  grid->setHorizontalSpacing(16);
-  grid->setVerticalSpacing(10);
-
-  int row = 0;
-  int column = 0;
+  // One field per row, as on every other settings page: a two-column grid was the
+  // widest content in the window and could push the page past its viewport on
+  // platforms whose font metrics are wider than the developer's.
+  auto* form = form_layout(content);
 
   const auto add_metric = [&](
                               const QString& label, int value, int minimum, int maximum,
@@ -529,22 +537,11 @@ QWidget* SettingsWindow::build_metrics_page() {
     spin->setRange(minimum, maximum);
     spin->setSingleStep(step);
     spin->setValue(value);
-    // Keep the field able to shrink so the two-column grid never forces the page
-    // wider than its viewport.
     spin->setMinimumWidth(76);
     spin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-
-    grid->addWidget(field_label(content, label), row, column * 2);
-    grid->addWidget(spin, row, column * 2 + 1);
-
+    form->addRow(field_label(content, label), spin);
     metric_writers_.push_back([this, spin, field]() { pending_metrics_.*field = spin->value(); });
     metric_reloaders_.push_back([this, spin, field]() { spin->setValue(pending_metrics_.*field); });
-
-    ++column;
-    if (column == 2) {
-      column = 0;
-      ++row;
-    }
   };
 
   add_metric(
@@ -584,7 +581,7 @@ QWidget* SettingsWindow::build_metrics_page() {
       &lnb::ThemeMetrics::bubble_radius
   );
 
-  layout->addLayout(grid);
+  layout->addLayout(form);
   layout->addWidget(h_separator(content));
 
   layout->addWidget(section_label(content, QStringLiteral("Reading rhythm")));
@@ -592,12 +589,7 @@ QWidget* SettingsWindow::build_metrics_page() {
       content, QStringLiteral("Line heights are percentages (100 is single spacing)."), false
   ));
 
-  auto* rhythm = new QGridLayout();
-  rhythm->setHorizontalSpacing(16);
-  rhythm->setVerticalSpacing(10);
-
-  row = 0;
-  column = 0;
+  auto* rhythm = form_layout(content);
 
   const auto add_rhythm = [&](
                               const QString& label, int value, int minimum, int maximum,
@@ -609,15 +601,9 @@ QWidget* SettingsWindow::build_metrics_page() {
     spin->setValue(value);
     spin->setMinimumWidth(76);
     spin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    rhythm->addWidget(field_label(content, label), row, column * 2);
-    rhythm->addWidget(spin, row, column * 2 + 1);
+    rhythm->addRow(field_label(content, label), spin);
     metric_writers_.push_back([this, spin, field]() { pending_metrics_.*field = spin->value(); });
     metric_reloaders_.push_back([this, spin, field]() { spin->setValue(pending_metrics_.*field); });
-    ++column;
-    if (column == 2) {
-      column = 0;
-      ++row;
-    }
   };
 
   add_rhythm(
@@ -770,16 +756,15 @@ QWidget* SettingsWindow::build_account_page() {
     QVBoxLayout* body = card_body(startup_card);
 
     auto* auto_login = new QCheckBox(
-        QStringLiteral("Open this assistant automatically at startup"), startup_card
+        QStringLiteral("Open at startup"), startup_card
     );
     auto_login->setObjectName(QStringLiteral("AutoLogin"));
+    auto_login->setToolTip(
+        QStringLiteral("Open this assistant automatically at startup. When off, the "
+                       "assistant picker is shown every time.")
+    );
     auto_login->setChecked(pending_.auto_login);
     body->addWidget(auto_login);
-    body->addWidget(value_label(
-        startup_card,
-        QStringLiteral("When off, the assistant picker is shown every time."),
-        false
-    ));
 
     config_writers_.push_back([this, auto_login]() {
       pending_.auto_login = auto_login->isChecked();
@@ -993,20 +978,34 @@ void SettingsWindow::summarize_assistant_now() {
 
   std::string produced;
 
-  std::jthread worker([&produced, task, stop_token, db, assistant, model, url, key, proxy]() {
-    try {
-      produced = lnb::net::summarize_assistant_now(
-          *db, assistant, model, url, key, proxy, *task, stop_token
-      );
-      task->complete();
-    } catch (const std::exception& error) {
-      if (!stop_token.stop_requested()) {
-        task->fail(error.what());
+  // The review runs on the worker thread and blocks on the interface thread, so
+  // a decline is recorded here and read after the worker is joined.
+  bool declined = false;
+  const lnb::net::SummaryApprover approver =
+      [&declined](const lnb::net::SummaryPlan& plan) {
+        const bool approved = review_summary(plan);
+        if (!approved) {
+          declined = true;
+        }
+        return approved;
+      };
+
+  std::jthread worker(
+      [&produced, task, stop_token, db, assistant, model, url, key, proxy, approver]() {
+        try {
+          produced = lnb::net::summarize_assistant_now(
+              *db, assistant, model, url, key, proxy, *task, stop_token, approver
+          );
+          task->complete();
+        } catch (const std::exception& error) {
+          if (!stop_token.stop_requested()) {
+            task->fail(error.what());
+          }
+        } catch (...) {
+          task->fail("Unknown summarisation error");
+        }
       }
-    } catch (...) {
-      task->fail("Unknown summarisation error");
-    }
-  });
+  );
 
   // Keep the modal window responsive while the worker folds every session: the
   // nested loop only pumps events until the task reaches a terminal state.
@@ -1031,6 +1030,11 @@ void SettingsWindow::summarize_assistant_now() {
   assistant_summarizing_ = false;
   assistant_summarize_->setEnabled(true);
   assistant_summarize_->setText(QStringLiteral("Summarize now"));
+
+  // A declined review is a deliberate no-op: say nothing about it.
+  if (declined) {
+    return;
+  }
 
   const lnb::GenerationTask::Snapshot snapshot = task->snapshot();
 

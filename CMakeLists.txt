@@ -73,6 +73,8 @@ add_library(local-notebook-core STATIC
         src/ui/SettingsWindow.cpp
         src/ui/SessionEditor.hpp
         src/ui/SessionEditor.cpp
+        src/ui/SummaryReviewDialog.hpp
+        src/ui/SummaryReviewDialog.cpp
         src/ui/MainWindow.hpp
         src/ui/MainWindow.cpp
 )
@@ -136,3 +138,17 @@ target_link_libraries(
 
 add_test(NAME ui COMMAND local-notebook-ui-tests)
 set_tests_properties(ui PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The README screenshot generator. It is a development tool rather than a test:
+# it renders the windows under the offscreen platform plugin and writes PNGs to
+# the directory given on the command line (see tools/screenshots.cpp).
+add_executable(local-notebook-screenshots
+        tools/screenshots.cpp
+        assets/local-notebook.qrc
+)
+
+target_link_libraries(
+        local-notebook-screenshots
+        PRIVATE
+        local-notebook-core
+)

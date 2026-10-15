@@ -29,6 +29,7 @@
 #include "support/generation_task.hpp"
 #include "ui/BackgroundWidget.hpp"
 #include "ui/SpinBox.hpp"
+#include "ui/SummaryReviewDialog.hpp"
 #include "ui/dialog_style.hpp"
 #include "ui/theme.hpp"
 
@@ -268,7 +269,7 @@ QWidget* SessionEditor::build_content() {
     auto* preset_row = new QHBoxLayout();
     preset_row->setSpacing(8);
 
-    preset_ = new QComboBox(content);
+    preset_ = new ComboBox(content);
     preset_->addItem(QStringLiteral("Apply a preset..."));
     for (const BudgetPreset& budget_preset : kBudgetPresets) {
       preset_->addItem(QString::fromUtf8(budget_preset.name));
@@ -462,10 +463,22 @@ void SessionEditor::summarize_now() {
   const std::string key = app_.assistant().authentication_token_;
   const std::optional<std::string> proxy = app_.assistant().proxy_;
 
-  std::jthread worker([task, stop_token, db, session, model, url, key, proxy]() {
+  // The review runs on the worker thread and blocks on the interface thread, so
+  // a decline is recorded here and read after the worker is joined.
+  bool declined = false;
+  const lnb::net::SummaryApprover approver =
+      [&declined](const lnb::net::SummaryPlan& plan) {
+        const bool approved = review_summary(plan);
+        if (!approved) {
+          declined = true;
+        }
+        return approved;
+      };
+
+  std::jthread worker([task, stop_token, db, session, model, url, key, proxy, approver]() {
     try {
       lnb::net::summarize_session_now(
-          *db, session, model, url, key, proxy, *task, stop_token
+          *db, session, model, url, key, proxy, *task, stop_token, approver
       );
       task->complete();
     } catch (const std::exception& error) {
@@ -497,6 +510,11 @@ void SessionEditor::summarize_now() {
   summarize_button_->setText(QStringLiteral("Summarize now"));
   save_button_->setEnabled(true);
   cancel_button_->setEnabled(true);
+
+  // A declined review is a deliberate no-op: say nothing about it.
+  if (declined) {
+    return;
+  }
 
   const lnb::GenerationTask::Snapshot snapshot = task->snapshot();
 

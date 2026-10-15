@@ -35,6 +35,10 @@ private:
   QPixmap scaled_background_;
   QSize cached_size_;
   qreal cached_dpr_ = 0.0;
+  // Identity of the source pixmap the cache was built from, so replacing the
+  // background image with one of the same size rebuilds the cache instead of
+  // keeping the stale pixmap on screen.
+  qint64 cached_image_key_ = 0;
 };
 
 } // namespace ui

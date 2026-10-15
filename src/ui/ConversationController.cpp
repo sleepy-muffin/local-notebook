@@ -3,6 +3,7 @@
 #include "app/application.hpp"
 #include "net/client.hpp"
 #include "support/log.hpp"
+#include "ui/SummaryReviewDialog.hpp"
 
 #include <exception>
 #include <utility>
@@ -49,9 +50,11 @@ void ConversationController::send(std::string text) {
     const std::string& key = assistant.authentication_token_;
 
     // Best-effort session summarisation before the turn, so the request carries
-    // the freshest memory. A failure never blocks the reply.
+    // the freshest memory. A failure never blocks the reply. The user reviews
+    // the request first; declining leaves the memory untouched.
     const std::string folded = lnb::net::maybe_summarize_session(
-        app_.db(), current, model, url, key, assistant.proxy_, task, stop_token
+        app_.db(), current, model, url, key, assistant.proxy_, task, stop_token,
+        review_summary
     );
     if (!folded.empty()) {
       current.memory_ = folded;
@@ -71,9 +74,11 @@ void ConversationController::send(std::string text) {
     }
 
     // Assistant-level memory is shared across sessions, so it is folded after
-    // the turn and applied to the assistant on the UI thread.
+    // the turn and applied to the assistant on the UI thread. It is reviewed
+    // first, like the session pass above.
     const std::string assistant_memory = lnb::net::maybe_summarize_assistant(
-        app_.db(), assistant, model, url, key, assistant.proxy_, task, stop_token
+        app_.db(), assistant, model, url, key, assistant.proxy_, task, stop_token,
+        review_summary
     );
     if (!assistant_memory.empty()) {
       std::lock_guard lock(result_mutex_);

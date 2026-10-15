@@ -101,7 +101,7 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
   // ---- Summarisation ----
   content->addWidget(section_label(this, QStringLiteral("Summarisation")));
 
-  preset_ = new QComboBox(this);
+  preset_ = new ComboBox(this);
   preset_->addItem(QStringLiteral("Apply a preset..."));
   for (const SummaryPreset& summary_preset : kSummaryPresets) {
     preset_->addItem(QString::fromUtf8(summary_preset.name));

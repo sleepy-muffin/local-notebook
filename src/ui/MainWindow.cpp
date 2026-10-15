@@ -276,6 +276,28 @@ void MainWindow::apply_window_style() {
     }
     current_model_->setFont(font);
   }
+
+  // The plus glyph is embedded in the binary and recoloured to the theme, like
+  // the composer icons, so it follows the palette instead of a fixed system
+  // theme icon. It is re-applied here (not only at build time) so a theme change
+  // in the settings window takes effect without a restart. A missing resource
+  // falls back to the system icon theme, then a standard icon.
+  if (new_session_button_ != nullptr) {
+    QIcon add =
+        resource_icon(QStringLiteral("new-session"), c.text, c.text_muted);
+
+    if (add.isNull()) {
+      add = QIcon::fromTheme(QStringLiteral("list-add"));
+    }
+    if (add.isNull()) {
+      add = QIcon::fromTheme(QStringLiteral("document-new"));
+    }
+    if (add.isNull()) {
+      add = style()->standardIcon(QStyle::SP_FileDialogNewFolder);
+    }
+
+    new_session_button_->setIcon(add);
+  }
 }
 
 QWidget* MainWindow::build_sidebar() {
@@ -308,14 +330,6 @@ QWidget* MainWindow::build_sidebar() {
   new_session_button_->setFlat(true);
   new_session_button_->setToolTip(QStringLiteral("New Session"));
 
-  QIcon add = QIcon::fromTheme(QStringLiteral("list-add"));
-  if (add.isNull()) {
-    add = QIcon::fromTheme(QStringLiteral("document-new"));
-  }
-  if (add.isNull()) {
-    add = style()->standardIcon(QStyle::SP_FileDialogNewFolder);
-  }
-  new_session_button_->setIcon(add);
   new_session_button_->setIconSize(QSize(16, 16));
 
   connect(

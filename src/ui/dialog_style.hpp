@@ -123,12 +123,17 @@ inline QLabel* section_label(QWidget* parent, const QString& text) {
   auto* label = new QLabel(text, parent);
   label->setObjectName(QStringLiteral("SectionLabel"));
   label->setFont(scaled_font(0.0, true));
+  // Wrapping keeps a heading from forcing a page wider than its viewport on
+  // platforms with wide font metrics, where the settings pages are the tightest
+  // fit in the application.
+  label->setWordWrap(true);
   return label;
 }
 
 inline QLabel* field_label(QWidget* parent, const QString& text) {
   auto* label = new QLabel(text, parent);
   label->setObjectName(QStringLiteral("FieldLabel"));
+  label->setWordWrap(true);
   return label;
 }
 
