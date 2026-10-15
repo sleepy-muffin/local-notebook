@@ -97,7 +97,7 @@ lnb::Assistant make_assistant() {
   lnb::Assistant assistant;
   assistant.name_ = "Tester";
   assistant.model_ = "test-model";
-  assistant.api_url_ = "https://example.invalid/v1";
+  assistant.api_url_ = "https://example.invalid/v1/chat/completions";
   return assistant;
 }
 
@@ -151,7 +151,7 @@ void test_assistant_form_round_trip() {
   lnb::Assistant original;
   original.name_ = "Alpha";
   original.model_ = "model-x";
-  original.api_url_ = "https://example.invalid/v1";
+  original.api_url_ = "https://example.invalid/v1/chat/completions";
   original.authentication_token_ = "secret";
   original.proxy_ = "socks5h://127.0.0.1:1080";
   original.custom_instructions_ = "Be terse.";
@@ -172,7 +172,7 @@ void test_assistant_form_round_trip() {
 
   CHECK(written.name_ == "Alpha");
   CHECK(written.model_ == "model-x");
-  CHECK(written.api_url_ == "https://example.invalid/v1");
+  CHECK(written.api_url_ == "https://example.invalid/v1/chat/completions");
   CHECK(written.authentication_token_ == "secret");
   CHECK(written.proxy_.has_value() && *written.proxy_ == "socks5h://127.0.0.1:1080");
   CHECK(written.custom_instructions_ == "Be terse.");
@@ -1018,7 +1018,7 @@ void test_summary_review_decline() {
   task.start();
 
   const std::string result = lnb::net::summarize_session_now(
-      notebook.db(), *stored, "test-model", "https://example.invalid/v1", "",
+      notebook.db(), *stored, "test-model", "https://example.invalid/v1/chat/completions", "",
       std::nullopt, task, std::stop_token{}, approver
   );
 

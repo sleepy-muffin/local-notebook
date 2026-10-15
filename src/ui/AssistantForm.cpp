@@ -72,7 +72,7 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
     auto* form = form_layout(this);
 
     api_url_ = new QLineEdit(this);
-    api_url_->setPlaceholderText(QStringLiteral("https://api.example.com/v1"));
+    api_url_->setPlaceholderText(QStringLiteral("https://api.example.com/v1/chat/completions"));
 
     token_ = new QLineEdit(this);
     token_->setPlaceholderText(QStringLiteral("Authentication token"));

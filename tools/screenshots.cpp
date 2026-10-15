@@ -11,6 +11,8 @@
 // directory before constructing the application.
 
 #include <QApplication>
+#include <QFont>
+#include <QFontInfo>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QListWidget>
@@ -53,11 +55,23 @@ void shoot(QWidget& widget, const std::filesystem::path& path, const QSize& size
   std::cout << "wrote " << path << '\n';
 }
 
+// Warns when a requested font was not actually resolved but silently substituted
+// by Qt, so the screenshots never misrepresent the interface.
+void require_resolved_font(const QFont& font, const QString& expected) {
+  const QString actual = QFontInfo(font).family();
+
+  if (actual.compare(expected, Qt::CaseInsensitive) != 0) {
+    std::cerr << "warning: font \"" << expected.toStdString() << "\" resolved to \""
+              << actual.toStdString()
+              << "\"; the screenshots will not use the intended font\n";
+  }
+}
+
 lnb::Assistant make_assistant() {
   lnb::Assistant assistant;
   assistant.name_ = "Aurora";
   assistant.model_ = "gpt-5.6-luna";
-  assistant.api_url_ = "https://api.example.invalid/v1";
+  assistant.api_url_ = "https://api.example.invalid/v1/chat/completions";
   assistant.custom_instructions_ =
       "You are a careful engineering assistant. Answer concisely and precisely, "
       "and prefer showing the smallest correct change.";
@@ -153,7 +167,18 @@ int main(int argc, char** argv) {
       "session's own `summary_trigger_tokens_`; nothing else feeds it."
   );
 
-  ui::apply_theme(app, lnb::Settings{});
+  // The README screenshots use Carlito for the interface and chat text and
+  // JetBrains Mono for code, so the rendered UI is reproducible on any machine
+  // that has the fonts instead of following whatever the system default is.
+  lnb::Settings settings;
+  settings.ui_font = "Carlito";
+  settings.font = "Carlito";
+  settings.mono_font = "JetBrains Mono";
+  ui::apply_theme(app, settings);
+
+  require_resolved_font(ui::ui_font(), QStringLiteral("Carlito"));
+  require_resolved_font(ui::chat_font(), QStringLiteral("Carlito"));
+  require_resolved_font(ui::mono_font(), QStringLiteral("JetBrains Mono"));
 
   {
     ui::MainWindow window(notebook);
