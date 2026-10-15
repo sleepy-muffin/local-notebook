@@ -16,7 +16,10 @@ struct ThemeMetrics {
   int page_margin = 14;
 
   // Composer height, excluding the surrounding padding.
-  int composer_height = 76;
+  int composer_height = 96;
+
+  // Composer height when the expand toggle (the field's top-right button) is on.
+  int composer_height_expanded = 280;
 
   int title_font_size = 15;
 

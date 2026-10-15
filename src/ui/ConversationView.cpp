@@ -690,24 +690,17 @@ ConversationView::ConversationView(
 
   connect(load_older_, &QPushButton::clicked, this, [this]() { load_older(); });
 
-  // Reaching the top of the transcript pulls in the next page automatically; the
-  // button stays as an explicit, keyboard-reachable alternative. The same
-  // handler tracks whether the reader is parked at the bottom: auto-scroll only
-  // follows new content while they are, and resumes once they scroll back down.
+  // Paging in older history is deliberate: the "Load earlier messages" button is
+  // the only way to reveal it, so reaching the top never triggers a load on its
+  // own. This handler only tracks whether the reader is parked at the bottom:
+  // auto-scroll follows new content while they are, and resumes once they scroll
+  // back down.
   auto* scrollbar = scroll_->verticalScrollBar();
 
   connect(
       scrollbar, &QScrollBar::valueChanged, this,
       [this, scrollbar](int value) {
         stick_to_bottom_ = value >= scrollbar->maximum() - kStickToBottomSlack;
-
-        if (updating_ || value > 0) {
-          return;
-        }
-
-        if (rendered_count_ < messages_.size()) {
-          load_older();
-        }
       }
   );
 
@@ -757,25 +750,48 @@ ConversationView::ConversationView(
           : QStringLiteral("Type a message...  (Enter to send, Shift+Enter for a new line)")
   );
   input_->setTabChangesFocus(true);
-  input_->setFixedHeight(m.composer_height);
   input_->setFont(chat_font());
   input_->installEventFilter(this);
 
   auto* buttons = new QVBoxLayout();
   buttons->setSpacing(4);
 
-  send_button_ = new QPushButton(QStringLiteral("Send"), composer);
+  // The expand toggle sits at the field's top-right; the send and cancel actions
+  // at the block's bottom-right, the way Zed places its composer action. All three
+  // are icon-only, flat, and share the send button's 28x28 footprint.
+  expand_button_ = new QToolButton(composer);
+  expand_button_->setObjectName(QStringLiteral("ComposerExpand"));
+  expand_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+  expand_button_->setIconSize(QSize(16, 16));
+  expand_button_->setFixedSize(28, 28);
+  expand_button_->setAutoRaise(true);
+  expand_button_->setFocusPolicy(Qt::NoFocus);
+  expand_button_->setCursor(Qt::PointingHandCursor);
+
+  send_button_ = new QToolButton(composer);
   send_button_->setObjectName(QStringLiteral("SendButton"));
+  send_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+  send_button_->setIconSize(QSize(16, 16));
+  send_button_->setFixedSize(28, 28);
+  send_button_->setAutoRaise(true);
+  send_button_->setFocusPolicy(Qt::NoFocus);
   send_button_->setCursor(Qt::PointingHandCursor);
-  cancel_button_ = new QPushButton(QStringLiteral("Cancel"), composer);
-  cancel_button_->setObjectName(QStringLiteral("Secondary"));
+
+  // Cancel replaces the send action while a turn runs, so it is icon-only too.
+  cancel_button_ = new QToolButton(composer);
+  cancel_button_->setObjectName(QStringLiteral("CancelButton"));
+  cancel_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+  cancel_button_->setIconSize(QSize(16, 16));
+  cancel_button_->setFixedSize(28, 28);
+  cancel_button_->setAutoRaise(true);
+  cancel_button_->setFocusPolicy(Qt::NoFocus);
+  cancel_button_->setCursor(Qt::PointingHandCursor);
   cancel_button_->setVisible(false);
 
-  // The action sits at the bottom-right of the block, the way Zed places its
-  // composer action.
+  buttons->addWidget(expand_button_, 0, Qt::AlignTop | Qt::AlignRight);
   buttons->addStretch(1);
-  buttons->addWidget(send_button_);
-  buttons->addWidget(cancel_button_);
+  buttons->addWidget(send_button_, 0, Qt::AlignBottom | Qt::AlignRight);
+  buttons->addWidget(cancel_button_, 0, Qt::AlignBottom | Qt::AlignRight);
 
   composer_layout->addWidget(input_, 1);
   composer_layout->addLayout(buttons);
@@ -784,6 +800,7 @@ ConversationView::ConversationView(
   layout->addWidget(composer);
 
   apply_composer_style();
+  apply_composer_height();
 
   // Coalesces streaming updates so Markdown is re-rendered at a steady rate
   // instead of once per token.
@@ -793,9 +810,11 @@ ConversationView::ConversationView(
 
   connect(stream_timer_, &QTimer::timeout, this, [this]() { flush_streaming_text(); });
 
-  connect(send_button_, &QPushButton::clicked, this, [this]() { submit(); });
+  connect(expand_button_, &QToolButton::clicked, this, [this]() { toggle_composer_height(); });
 
-  connect(cancel_button_, &QPushButton::clicked, this, [this]() { controller_.cancel(); });
+  connect(send_button_, &QToolButton::clicked, this, [this]() { submit(); });
+
+  connect(cancel_button_, &QToolButton::clicked, this, [this]() { controller_.cancel(); });
 
   // The controller reports the turn's progress; the view renders it.
   controller_.set_on_changed([this]() {
@@ -1213,27 +1232,88 @@ void ConversationView::apply_composer_style() {
   );
 
   if (composer_bar_ != nullptr) {
+    // The action buttons are flat and borderless; a hover fill is the only chrome
+    // they carry, the way Zed's composer actions behave.
     composer_bar_->setStyleSheet(
         QStringLiteral(
             "QWidget#ComposerBar { background: transparent;"
             " border-top: 1px solid %1; }"
+            "QToolButton#SendButton, QToolButton#ComposerExpand,"
+            "QToolButton#CancelButton {"
+            "  background: transparent; border: none; border-radius: 4px; padding: 0; }"
+            "QToolButton#SendButton:hover, QToolButton#ComposerExpand:hover,"
+            "QToolButton#CancelButton:hover {"
+            "  background: %2; }"
         )
-            .arg(css_color(colors.border))
+            .arg(css_color(colors.border), css_color(row_hover_background()))
     );
   }
 
+  apply_composer_icons();
+}
+
+void ConversationView::apply_composer_icons() {
+  const ThemeColors& colors = theme().colors;
+
   if (send_button_ != nullptr) {
-    send_button_->setStyleSheet(
-        QStringLiteral(
-            "QPushButton#SendButton { background: transparent; border: none;"
-            " border-radius: 0; padding: 6px 10px; color: %1; }"
-            "QPushButton#SendButton:hover { background: %2; }"
-            "QPushButton#SendButton:disabled { color: %3; }"
-        )
-            .arg(css_color(colors.accent), css_color(row_hover_background()),
-                 css_color(colors.text_muted))
+    // The send arrow takes the accent colour; a busy composer mutes it through
+    // the icon's disabled pixmap.
+    QIcon icon = resource_icon(QStringLiteral("send"), colors.accent, colors.text_muted);
+
+    if (icon.isNull()) {
+      icon = style()->standardIcon(QStyle::SP_ArrowUp);
+    }
+
+    send_button_->setIcon(icon);
+    send_button_->setToolTip(QStringLiteral("Send"));
+  }
+
+  if (expand_button_ != nullptr) {
+    const bool expanded = composer_expanded_;
+    QIcon icon = resource_icon(
+        expanded ? QStringLiteral("collapse") : QStringLiteral("expand"), colors.text_muted,
+        colors.text_muted
+    );
+
+    if (icon.isNull()) {
+      icon = style()->standardIcon(expanded ? QStyle::SP_ArrowDown : QStyle::SP_ArrowUp);
+    }
+
+    expand_button_->setIcon(icon);
+    expand_button_->setToolTip(
+        expanded ? QStringLiteral("Shrink the composer")
+                 : QStringLiteral("Expand the composer")
     );
   }
+
+  if (cancel_button_ != nullptr) {
+    // The stop square shares the muted colour of the other chrome actions.
+    QIcon icon =
+        resource_icon(QStringLiteral("stop"), colors.text_muted, colors.text_muted);
+
+    if (icon.isNull()) {
+      icon = style()->standardIcon(QStyle::SP_MediaStop);
+    }
+
+    cancel_button_->setIcon(icon);
+    cancel_button_->setToolTip(QStringLiteral("Cancel"));
+  }
+}
+
+void ConversationView::apply_composer_height() {
+  if (input_ != nullptr) {
+    const lnb::ThemeMetrics& m = metrics();
+    input_->setFixedHeight(
+        composer_expanded_ ? m.composer_height_expanded : m.composer_height
+    );
+  }
+
+  apply_composer_icons();
+}
+
+void ConversationView::toggle_composer_height() {
+  composer_expanded_ = !composer_expanded_;
+  apply_composer_height();
 }
 
 void ConversationView::submit() {

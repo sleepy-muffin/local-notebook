@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- Chevron pointing up: "grow the composer". Monochrome; recoloured at runtime. -->
+  <path d="M12 7 L20 15 L17.6 17.4 L12 11.8 L6.4 17.4 L4 15 Z" fill="#000000"/>
+</svg>

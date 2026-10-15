@@ -20,6 +20,7 @@ QJsonObject metrics_to_json(const ThemeMetrics& metrics) {
   object["message_spacing"] = metrics.message_spacing;
   object["page_margin"] = metrics.page_margin;
   object["composer_height"] = metrics.composer_height;
+  object["composer_height_expanded"] = metrics.composer_height_expanded;
   object["title_font_size"] = metrics.title_font_size;
   object["session_item_height"] = metrics.session_item_height;
   object["line_height_other"] = metrics.line_height_other;
@@ -43,6 +44,7 @@ ThemeMetrics metrics_from_json(const QJsonObject& object, ThemeMetrics metrics) 
   read_int("message_spacing", metrics.message_spacing);
   read_int("page_margin", metrics.page_margin);
   read_int("composer_height", metrics.composer_height);
+  read_int("composer_height_expanded", metrics.composer_height_expanded);
   read_int("title_font_size", metrics.title_font_size);
   read_int("session_item_height", metrics.session_item_height);
   read_int("line_height_other", metrics.line_height_other);

@@ -12,11 +12,14 @@
 #include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
+#include <QFile>
 #include <QFrame>
+#include <QIcon>
 #include <QLabel>
 #include <QListView>
 #include <QListWidget>
 #include <QMouseEvent>
+#include <QPlainTextEdit>
 #include <QPoint>
 #include <QPushButton>
 #include <QRect>
@@ -102,6 +105,8 @@ void test_settings_round_trip() {
   metrics.bubble_radius = 13;
   metrics.line_height_self = 135;
   metrics.message_max_width = 512;
+  metrics.composer_height = 96;
+  metrics.composer_height_expanded = 280;
   original.metrics = metrics;
 
   lnb::save_settings(original);
@@ -118,6 +123,8 @@ void test_settings_round_trip() {
     CHECK(loaded.metrics->bubble_radius == 13);
     CHECK(loaded.metrics->line_height_self == 135);
     CHECK(loaded.metrics->message_max_width == 512);
+    CHECK(loaded.metrics->composer_height == 96);
+    CHECK(loaded.metrics->composer_height_expanded == 280);
   }
 
   // auto_login defaults to on when the key is absent.
@@ -757,6 +764,90 @@ void test_conversation_backgrounds(QApplication& app) {
   CHECK(ui::theme().colors.input_background.alpha() == 0);
 }
 
+// --- Bundled resources -------------------------------------------------------
+
+// The composer icons and the default theme are compiled into the binary, so a
+// deployed build needs neither loose files beside the executable nor the system
+// icon theme.
+void test_bundled_resources() {
+  CHECK(QFile::exists(QStringLiteral(":/icons/send.png")));
+  CHECK(QFile::exists(QStringLiteral(":/icons/expand.png")));
+  CHECK(QFile::exists(QStringLiteral(":/icons/collapse.png")));
+  CHECK(QFile::exists(QStringLiteral(":/icons/stop.png")));
+  CHECK(QFile::exists(QStringLiteral(":/themes/theme.json")));
+
+  // The bundled theme carries real content, not an empty stub.
+  QFile bundled_theme(QStringLiteral(":/themes/theme.json"));
+  CHECK(bundled_theme.open(QIODevice::ReadOnly));
+  CHECK(bundled_theme.readAll().contains("\"themes\""));
+
+  const QIcon send = ui::resource_icon(
+      QStringLiteral("send"), QColor(255, 0, 0), QColor(0, 255, 0)
+  );
+  CHECK(!send.isNull());
+  CHECK(!send.pixmap(16, 16).isNull());
+
+  // A name with no bundled artwork yields a null icon, so the caller falls back
+  // to the system theme or a standard icon.
+  CHECK(ui::resource_icon(QStringLiteral("no-such-icon"), QColor(0, 0, 0), QColor(0, 0, 0))
+            .isNull());
+}
+
+// --- Composer ----------------------------------------------------------------
+
+// The expand toggle raises the field to composer_height_expanded and back, and
+// both composer actions are icon-only buttons carrying the bundled artwork.
+void test_composer_expand_toggle() {
+  enter_scratch("composer-expand");
+
+  lnb::Application notebook;
+  notebook.open_assistant("11111111-1111-1111-1111-111111111111", make_assistant());
+  const std::uint32_t session_id = notebook.sessions().create(lnb::Session{});
+
+  ui::ConversationView view(notebook, session_id);
+
+  auto* input = view.findChild<QPlainTextEdit*>(QStringLiteral("Composer"));
+  auto* expand = view.findChild<QToolButton*>(QStringLiteral("ComposerExpand"));
+  auto* send = view.findChild<QToolButton*>(QStringLiteral("SendButton"));
+  auto* cancel = view.findChild<QToolButton*>(QStringLiteral("CancelButton"));
+
+  CHECK(input != nullptr);
+  CHECK(expand != nullptr);
+  CHECK(send != nullptr);
+  CHECK(cancel != nullptr);
+
+  if (input == nullptr || expand == nullptr || send == nullptr || cancel == nullptr) {
+    return;
+  }
+
+  // setFixedHeight pins both bounds, so this holds before the view is shown.
+  const int collapsed = ui::metrics().composer_height;
+  const int raised = ui::metrics().composer_height_expanded;
+
+  CHECK(input->minimumHeight() == collapsed);
+  CHECK(input->maximumHeight() == collapsed);
+
+  expand->click();
+  CHECK(input->minimumHeight() == raised);
+  CHECK(input->maximumHeight() == raised);
+
+  expand->click();
+  CHECK(input->minimumHeight() == collapsed);
+
+  // Both actions are icon-only and carry the bundled (non-null) artwork.
+  CHECK(!send->icon().isNull());
+  CHECK(!expand->icon().isNull());
+  CHECK(send->text().isEmpty());
+
+  // Cancel is the send action's peer: a same-sized icon-only tool button with
+  // its own bundled artwork, so the three read as one control cluster.
+  CHECK(!cancel->icon().isNull());
+  CHECK(cancel->text().isEmpty());
+  CHECK(send->size() == expand->size());
+  CHECK(send->size() == cancel->size());
+  CHECK(send->size() == QSize(28, 28));
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -778,8 +869,9 @@ int main(int argc, char** argv) {
   test_spin_box_wheel();
   test_font_combo_wheel();
 
-  // Widgets read the theme, so it must be installed before any is created. With
-  // no theme.json in the sandbox, this exercises the compiled-in fallback.
+  // Widgets read the theme, so it must be installed before any is created. The
+  // sandbox has no theme.json, so this exercises the theme compiled into the
+  // binary.
   ui::apply_theme(app, lnb::Settings{});
 
   test_main_window_invariants();
@@ -794,6 +886,8 @@ int main(int argc, char** argv) {
   test_translucent_theme_buttons(app);
   test_code_block_restyles_on_theme_change(app);
   test_conversation_backgrounds(app);
+  test_bundled_resources();
+  test_composer_expand_toggle();
 
   if (g_failures != 0) {
     std::fprintf(stderr, "%d check(s) failed\n", g_failures);

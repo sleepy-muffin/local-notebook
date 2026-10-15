@@ -170,10 +170,10 @@ independently; the translucent themes set both fully transparent so the tinted
 image reaches them, while the opaque themes use the window colour.
 
 Sizing and spacing are **theme metrics** (`ThemeMetrics`): sidebar width, page
-margin, message spacing, composer height, title font size, session item height,
-reading rhythm (line heights and paragraph spacing), flow max width and bubble
-radius. The theme file (`themes/theme.json`) supplies defaults; `settings.json`
-stores only overrides.
+margin, message spacing, composer height (and its expanded height), title font size,
+session item height, reading rhythm (line heights and paragraph spacing), flow max
+width and bubble radius. The theme file (`themes/theme.json`) supplies defaults;
+`settings.json` stores only overrides.
 
 ### Assistant — `data/<uuid>/settings.json`
 
@@ -283,9 +283,10 @@ heavy highlights.
   `#id` and its copy/edit/delete actions.
 - **Composer** — a block set off from the transcript by a single hairline, on the
   conversation surface. The input field is bare (no border, no rounded corners) and
-  takes the theme's `input_background`; the **Send** action is flat and borderless,
-  sitting at the block's bottom-right. Enter behaviour is configurable
-  (`enter_with_modifier`).
+  takes the theme's `input_background`; the **Send** action is a flat, icon-only
+  button at the block's bottom-right, and an **expand** toggle at the field's
+  top-right raises the field to `composer_height_expanded` and back. Enter behaviour
+  is configurable (`enter_with_modifier`).
 
 Windows:
 
@@ -320,6 +321,15 @@ cmake --build build/linux-x64-debug -j 8
 ```
 
 A `linux-x64-release` preset is also provided.
+
+The composer icons and the default theme are compiled into the binaries through
+the Qt resource system (`assets/local-notebook.qrc`, `CMAKE_AUTORCC`), so a
+deployed build carries them without loose files beside the executable and without
+depending on the system icon theme. The artwork lives in `assets/icons/`: editable
+SVGs plus the PNGs actually embedded, and `assets/icons/rasterise.py` regenerates
+the PNGs from the SVGs (the PNG form is used because Qt's PNG support is built in,
+while decoding SVG needs the optional Qt SVG plugin). A `themes/theme.json` on disk
+still overrides the bundled default.
 
 ## Running
 

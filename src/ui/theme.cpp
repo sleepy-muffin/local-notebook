@@ -6,10 +6,12 @@
 #include <QApplication>
 #include <QDir>
 #include <QFile>
+#include <QIcon>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QPainter>
 #include <QPalette>
 #include <QString>
 
@@ -115,6 +117,7 @@ lnb::ThemeMetrics parse_metrics(const QJsonObject& object) {
   read_int("message_spacing", metrics.message_spacing);
   read_int("page_margin", metrics.page_margin);
   read_int("composer_height", metrics.composer_height);
+  read_int("composer_height_expanded", metrics.composer_height_expanded);
   read_int("title_font_size", metrics.title_font_size);
   read_int("session_item_height", metrics.session_item_height);
   read_int("line_height_other", metrics.line_height_other);
@@ -133,6 +136,10 @@ std::optional<QJsonObject> read_theme_root() {
       QStringLiteral("../themes/theme.json"),
       QStringLiteral("theme.json"),
       QCoreApplication::applicationDirPath() + QStringLiteral("/themes/theme.json"),
+      // The theme compiled into the binary. It is the last candidate, so a file
+      // above it still wins and the theme stays overridable, but a build always
+      // has a usable default even when no file sits beside the executable.
+      QStringLiteral(":/themes/theme.json"),
   };
 
   for (const QString& candidate : candidates) {
@@ -447,6 +454,32 @@ QColor row_hover_background() {
 
 QColor row_selected_background() {
   return state().theme.colors.base;
+}
+
+QIcon resource_icon(const QString& name, const QColor& color, const QColor& disabled) {
+  const QPixmap artwork(QStringLiteral(":/icons/%1.png").arg(name));
+
+  if (artwork.isNull()) {
+    return QIcon();
+  }
+
+  // SourceIn keeps the artwork's own alpha (its shape) and takes the fill colour
+  // for every painted pixel, so a black-on-transparent PNG becomes a tinted icon.
+  const auto tint = [&artwork](const QColor& shade) {
+    QPixmap pixmap = artwork;
+
+    QPainter painter(&pixmap);
+    painter.setCompositionMode(QPainter::CompositionMode_SourceIn);
+    painter.fillRect(pixmap.rect(), shade);
+    painter.end();
+
+    return pixmap;
+  };
+
+  QIcon icon;
+  icon.addPixmap(tint(color), QIcon::Normal);
+  icon.addPixmap(tint(disabled), QIcon::Disabled);
+  return icon;
 }
 
 } // namespace ui

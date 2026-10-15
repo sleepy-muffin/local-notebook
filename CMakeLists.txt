@@ -9,6 +9,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # AUTOMOC stays off and the build is a plain C++23 compile.
 set(CMAKE_AUTOMOC OFF)
 
+# The composer icons and the default theme are compiled into the binaries, so a
+# deployed build carries them without loose files beside the executable.
+set(CMAKE_AUTORCC ON)
+
 find_package(SQLite3 REQUIRED)
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 
@@ -96,6 +100,7 @@ enable_testing()
 # executable can take the project's name.
 add_executable(local-notebook
         src/main.cpp
+        assets/local-notebook.qrc
 )
 
 target_link_libraries(
@@ -120,6 +125,7 @@ add_test(NAME store COMMAND local-notebook-tests)
 # form). They run against the offscreen platform plugin so no display is needed.
 add_executable(local-notebook-ui-tests
         tests/ui_tests.cpp
+        assets/local-notebook.qrc
 )
 
 target_link_libraries(

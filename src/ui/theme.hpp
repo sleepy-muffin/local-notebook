@@ -4,6 +4,7 @@
 
 #include <QColor>
 #include <QFont>
+#include <QIcon>
 #include <QPixmap>
 #include <QString>
 #include <QStringList>
@@ -114,5 +115,12 @@ const std::optional<QColor>& background_tint();
 // a slightly brighter selected row, the way Zed's chrome behaves.
 QColor row_hover_background();
 QColor row_selected_background();
+
+// Loads a bundled monochrome icon (:/icons/<name>.png) and recolours it to the
+// active theme: `color` for the normal state and `disabled` for the disabled
+// one, so the artwork follows the palette instead of a fixed tint. Returns a
+// null icon when the resource is missing, letting the caller fall back to the
+// system icon theme or a standard icon.
+QIcon resource_icon(const QString& name, const QColor& color, const QColor& disabled);
 
 } // namespace ui

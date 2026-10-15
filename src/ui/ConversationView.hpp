@@ -188,6 +188,14 @@ private:
   // Gives the composer field the same surface as the user's own message block.
   void apply_composer_style();
 
+  // Sets the composer field's height for the current expand state and refreshes
+  // the expand toggle's icon and tooltip.
+  void apply_composer_height();
+  void toggle_composer_height();
+
+  // (Re)applies the two composer action icons for the active theme.
+  void apply_composer_icons();
+
   lnb::Application& app_;
   std::uint32_t session_id_;
   ConversationController controller_;
@@ -225,9 +233,13 @@ private:
   int content_side_margin_ = -1;
 
   QPlainTextEdit* input_ = nullptr;
-  QPushButton* send_button_ = nullptr;
-  QPushButton* cancel_button_ = nullptr;
+  QToolButton* send_button_ = nullptr;
+  QToolButton* expand_button_ = nullptr;
+  QToolButton* cancel_button_ = nullptr;
   QWidget* composer_bar_ = nullptr;
+
+  // True while the composer field is raised to composer_height_expanded.
+  bool composer_expanded_ = false;
 
   MessageRow* streaming_row_ = nullptr;
   QString streaming_status_;

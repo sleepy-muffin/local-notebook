@@ -15,7 +15,7 @@
         "accent_active": [235, 160, 172, 1.0],
         "accent_text": [17, 17, 27, 1.0],
 
-        "bubble_user": [49, 50, 68, 1.0],
+        "bubble_user": [118, 100, 125, 1.0],
         "bubble_user_text": [205, 214, 244, 1.0],
         "bubble_assistant": [49, 50, 68, 1.0],
         "bubble_assistant_text": [205, 214, 244, 1.0],
@@ -46,7 +46,7 @@
         "accent_active": [238, 153, 160, 1.0],
         "accent_text": [24, 25, 38, 1.0],
 
-        "bubble_user": [54, 58, 79, 1.0],
+        "bubble_user": [121, 104, 132, 1.0],
         "bubble_user_text": [202, 211, 245, 1.0],
         "bubble_assistant": [54, 58, 79, 1.0],
         "bubble_assistant_text": [202, 211, 245, 1.0],
@@ -77,7 +77,7 @@
         "accent_active": [234, 150, 156, 1.0],
         "accent_text": [35, 38, 52, 1.0],
 
-        "bubble_user": [65, 69, 89, 1.0],
+        "bubble_user": [128, 109, 138, 1.0],
         "bubble_user_text": [198, 208, 245, 1.0],
         "bubble_assistant": [65, 69, 89, 1.0],
         "bubble_assistant_text": [198, 208, 245, 1.0],
@@ -108,7 +108,7 @@
         "accent_active": [230, 69, 83, 1.0],
         "accent_text": [255, 255, 255, 1.0],
 
-        "bubble_user": [204, 208, 218, 1.0],
+        "bubble_user": [215, 177, 213, 1.0],
         "bubble_user_text": [76, 79, 105, 1.0],
         "bubble_assistant": [204, 208, 218, 1.0],
         "bubble_assistant_text": [76, 79, 105, 1.0],
@@ -255,7 +255,8 @@
     "message_max_width": 640,
     "message_spacing": 12,
     "page_margin": 14,
-    "composer_height": 76,
+    "composer_height": 96,
+    "composer_height_expanded": 280,
     "title_font_size": 15,
     "session_item_height": 48,
     "line_height_other": 160,

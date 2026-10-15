@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- Paper plane: the composer's send action. Monochrome; the app recolours it
+       to the theme's accent at runtime. -->
+  <path d="M2 21 L23 12 L2 3 L2 10 L16 12 L2 14 Z" fill="#000000"/>
+</svg>

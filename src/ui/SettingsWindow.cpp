@@ -564,6 +564,10 @@ QWidget* SettingsWindow::build_metrics_page() {
       &lnb::ThemeMetrics::composer_height
   );
   add_metric(
+      QStringLiteral("Expanded height"), pending_metrics_.composer_height_expanded, 32, 800, 2,
+      &lnb::ThemeMetrics::composer_height_expanded
+  );
+  add_metric(
       QStringLiteral("Session item height"), pending_metrics_.session_item_height, 20, 120, 2,
       &lnb::ThemeMetrics::session_item_height
   );

@@ -1,0 +1,18 @@
+<RCC>
+  <!-- The composer icons. The PNGs are the embedded form (see rasterise.py for
+       how they are produced from the SVGs beside them). The alias keeps the
+       resource path flat: :/icons/send.png, not :/icons/icons/send.png. -->
+  <qresource prefix="/icons">
+    <file alias="send.png">icons/send.png</file>
+    <file alias="expand.png">icons/expand.png</file>
+    <file alias="collapse.png">icons/collapse.png</file>
+    <file alias="stop.png">icons/stop.png</file>
+  </qresource>
+
+  <!-- The shipped default theme, so a build carries it even when no
+       themes/theme.json sits next to the executable. A theme file on disk still
+       wins (see ui::read_theme_root). -->
+  <qresource prefix="/themes">
+    <file alias="theme.json">../themes/theme.json</file>
+  </qresource>
+</RCC>
