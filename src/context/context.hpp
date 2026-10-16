@@ -23,25 +23,35 @@ std::size_t message_tokens(const Message& message);
 std::size_t prompt_tokens(const std::string& text);
 
 // The verbatim window chosen for a request: the newest suffix of `messages`
-// whose tokens fit `window_tokens`. The newest message is always kept, even
-// when it alone exceeds the window, so a request never degenerates into "no
-// history".
+// whose cost fits `window_tokens`. The bound is the **conversation alone** — the
+// system prompt is never counted — so the same number means the same thing for
+// the request payload, the collapse and the title bar. The newest message is
+// always kept, even when it alone exceeds the window, so a request never
+// degenerates into "no history".
 struct Window {
   std::size_t start = 0;  // index of the first message in the window
   std::size_t tokens = 0; // estimated cost of the window's messages
 };
 
-Window plan_window(
-    const std::vector<Message>& messages, std::size_t system_tokens,
-    std::size_t window_tokens
+Window plan_window(const std::vector<Message>& messages, std::size_t window_tokens);
+
+// Automatic-collapse test: the unsummarised conversation (the messages with an
+// id above `watermark`) reaches `trigger_tokens`. Only the conversation is
+// counted; the system prompt (instructions and memory) is deliberately excluded
+// (see architecture.md), so the trigger and the title-bar readout are the same
+// quantity. The watermark is bookkeeping only (design §7) and never decides what
+// is sent.
+bool should_summarize(
+    const std::vector<Message>& messages, std::uint32_t watermark,
+    std::size_t trigger_tokens
 );
 
-// Automatic-collapse test: the system prompt plus the unsummarised transcript
-// (messages with an id above `watermark`) reaches `trigger_tokens`. The
-// watermark is bookkeeping only (design §7) and never decides what is sent.
-bool should_summarize(
-    const std::vector<Message>& messages, std::size_t system_tokens,
-    std::uint32_t watermark, std::size_t trigger_tokens
+// The estimated cost of the unsummarised conversation alone: every message whose
+// id is above `watermark`, with nothing else included. This is exactly the
+// quantity the automatic collapse compares against the trigger and the quantity
+// the title bar reports, so the two can never disagree.
+std::size_t transcript_tokens(
+    const std::vector<Message>& messages, std::uint32_t watermark
 );
 
 // The overflow to fold: messages in `[first, last)`, oldest first, bounded to

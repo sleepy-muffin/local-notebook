@@ -55,8 +55,10 @@ constexpr int kBandHeight = 38;
 // as a status strip rather than a second header.
 constexpr int kStatusBarHeight = 26;
 
-// How many recent messages are enough to estimate the next request's context
-// usage; the verbatim window is a suffix, so this bounds the work.
+// How many recent messages are read to estimate the conversation's token
+// usage. Reading the whole transcript on every header refresh would be
+// wasteful, and the count only needs the messages above the watermark — which
+// the collapse keeps within a trigger's worth — so the newest page suffices.
 constexpr std::size_t kContextSampleMessages = 400;
 
 QString from_utf8(const std::string& value) {
@@ -902,51 +904,106 @@ void MainWindow::update_task_indicator() {
     return;
   }
 
+  // The status bar counts only the turns actually in flight. This costs nothing:
+  // it never touches the database.
+  int running = 0;
+
+  for (const auto& [id, view] : conversations_) {
+    if (view != nullptr && view->busy()) {
+      ++running;
+    }
+  }
+
+  if (running != shown_task_count_) {
+    shown_task_count_ = running;
+
+    // An idle status bar stays calm: the glyph alone when nothing is running, the
+    // glyph beside the count otherwise.
+    task_indicator_->setText(running == 0 ? QString() : QString::number(running));
+    task_indicator_->setToolTip(
+        running == 0 ? QStringLiteral("No tasks running")
+        : running == 1 ? QStringLiteral("1 task running")
+                      : QStringLiteral("%1 tasks running").arg(running)
+    );
+  }
+
+  // Only build (and refresh) the full list while the window is on screen, so a
+  // hidden one costs nothing.
+  if (tasks_window_ == nullptr || !tasks_window_->isVisible()) {
+    return;
+  }
+
   std::vector<TasksWindow::Entry> entries;
 
   for (const auto& [id, view] : conversations_) {
-    if (view == nullptr || !view->busy()) {
+    if (view == nullptr) {
       continue;
     }
 
-    const ConversationController::Progress progress = view->progress();
+    const bool busy = view->busy();
+    // A finished turn stays listed until the next turn replaces it, so a failure
+    // (and its reason) is never dropped silently.
+    const bool finished = !busy && view->has_finished_task();
+
+    if (!busy && !finished) {
+      continue;
+    }
+
     const auto session = app_.db().session(id);
+    const QString title = session.has_value() && !session->title_.empty()
+        ? from_utf8(session->title_)
+        : QStringLiteral("Session #%1").arg(id);
 
     TasksWindow::Entry entry;
     entry.session_id = id;
-    entry.rounds = progress.rounds;
-    entry.elapsed_ms = progress.elapsed_ms;
-    entry.title = session.has_value() && !session->title_.empty()
-        ? from_utf8(session->title_)
-        : QStringLiteral("Session #%1").arg(id);
+    entry.title = title;
+    entry.running = busy;
+
+    if (busy) {
+      const ConversationController::Progress progress = view->progress();
+      entry.state = QStringLiteral("Running");
+      entry.rounds = progress.rounds;
+      entry.elapsed_ms = progress.elapsed_ms;
+    } else {
+      const lnb::GenerationTask::Snapshot snapshot = view->last_snapshot();
+      entry.rounds = snapshot.rounds;
+      entry.elapsed_ms = snapshot.elapsed_ms;
+      entry.error = from_utf8(snapshot.error);
+
+      switch (snapshot.status) {
+        case lnb::GenerationTask::Status::FAILED:
+          entry.state = QStringLiteral("Failed");
+          break;
+        case lnb::GenerationTask::Status::CANCELLED:
+          entry.state = QStringLiteral("Cancelled");
+          break;
+        default:
+          entry.state = QStringLiteral("Completed");
+          break;
+      }
+    }
 
     entries.push_back(std::move(entry));
   }
 
-  const int count = static_cast<int>(entries.size());
-
-  if (count != shown_task_count_) {
-    shown_task_count_ = count;
-
-    // An idle status bar stays calm: the glyph alone when nothing is running, the
-    // glyph beside the count otherwise.
-    task_indicator_->setText(count == 0 ? QString() : QString::number(count));
-    task_indicator_->setToolTip(
-        count == 0 ? QStringLiteral("No tasks running")
-        : count == 1 ? QStringLiteral("1 task running")
-                     : QStringLiteral("%1 tasks running").arg(count)
-    );
-  }
-
-  // Only refresh the window while it is on screen, so a hidden one costs nothing.
-  if (tasks_window_ != nullptr && tasks_window_->isVisible()) {
-    tasks_window_->set_entries(std::move(entries));
-  }
+  tasks_window_->set_entries(std::move(entries));
 }
 
 void MainWindow::open_tasks_window() {
   if (tasks_window_ == nullptr) {
     tasks_window_ = new TasksWindow(this);
+
+    // The log is only composed when the reader opens a task, so a hidden window
+    // never pays for the (potentially large) request bodies it recorded.
+    tasks_window_->set_log_provider([this](std::uint32_t session_id) -> QString {
+      const auto it = conversations_.find(session_id);
+
+      if (it == conversations_.end() || it->second == nullptr) {
+        return {};
+      }
+
+      return from_utf8(it->second->task_log());
+    });
   }
 
   tasks_window_->show();
@@ -1036,11 +1093,14 @@ void MainWindow::update_header() {
   const std::vector<lnb::Message> sample =
       app_.db().recent_messages(current_session_, kContextSampleMessages);
   const lnb::net::ContextUsage usage =
-      lnb::net::context_usage(app_.assistant(), *session, sample);
+      lnb::net::context_usage(*session, sample);
 
   header_context_->setText(format_tokens(usage.used_tokens, usage.limit_tokens));
   header_context_->setToolTip(
-      QStringLiteral("%1 / %2 tokens used by the next request")
+      QStringLiteral(
+          "%1 / %2 conversation tokens (system prompt excluded; the collapse "
+          "fires at the limit)"
+      )
           .arg(usage.used_tokens)
           .arg(usage.limit_tokens)
   );

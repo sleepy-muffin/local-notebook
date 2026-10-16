@@ -942,7 +942,7 @@ void test_session_editor_preset() {
   bool found_calls = false;
   const QList<QSpinBox*> spins = editor.findChildren<QSpinBox*>();
   for (const QSpinBox* spin : spins) {
-    if (spin->value() == 192000) {
+    if (spin->value() == 96000) {
       found_trigger = true;
     }
     if (spin->value() == 256) {
@@ -1435,6 +1435,50 @@ void test_summary_review_decline() {
   }
 }
 
+// A manual pass that has nothing to fold must not rewrite the stored watermark.
+// The old code persisted the batch-local watermark (0), regressing the frontier
+// even though no batch had run.
+void test_manual_summary_no_overflow_keeps_watermark() {
+  enter_scratch("summary-no-overflow");
+
+  lnb::Application notebook;
+  notebook.open_assistant("77777777-7777-7777-7777-777777777777", make_assistant());
+
+  lnb::Session session;
+  // A keep window far larger than the transcript holds everything verbatim, so
+  // there is nothing to fold.
+  session.summary_keep_tokens_ = 1000000;
+  session.memory_ = "Previous memory.";
+  session.memory_watermark_ = 5;
+  const std::uint32_t session_id = notebook.sessions().create(session);
+
+  notebook.messages(session_id).append(lnb::Role::User, "Only question.");
+  notebook.messages(session_id).append(lnb::Role::Assistant, "Only answer.");
+
+  const auto stored = notebook.db().session(session_id);
+  CHECK(stored.has_value());
+  if (!stored.has_value()) {
+    return;
+  }
+
+  lnb::GenerationTask task;
+  task.start();
+
+  const std::string result = lnb::net::summarize_session_now(
+      notebook.db(), *stored, "test-model", "https://example.invalid/v1/chat/completions", "",
+      std::nullopt, task, std::stop_token{}, lnb::net::SummaryApprover{}
+  );
+
+  CHECK(result == "Previous memory.");
+
+  const auto after = notebook.db().session(session_id);
+  CHECK(after.has_value());
+  if (after.has_value()) {
+    CHECK(after->memory_watermark_ == 5); // never regressed to 0
+    CHECK(after->memory_ == "Previous memory.");
+  }
+}
+
 // The review is shown from a worker thread and blocks it until the user decides.
 // This exercises the cross-thread marshalling end to end: the worker calls
 // review_summary, the dialog appears on this (interface) thread, and a timer
@@ -1585,6 +1629,7 @@ int main(int argc, char** argv) {
   test_app_icon();
   test_summary_review_dialog();
   test_summary_review_decline();
+  test_manual_summary_no_overflow_keeps_watermark();
   test_summary_review_cross_thread();
   test_composer_expand_toggle();
 

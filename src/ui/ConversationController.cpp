@@ -33,6 +33,25 @@ ConversationController::Progress ConversationController::progress() const {
   return Progress{snapshot.rounds, snapshot.elapsed_ms};
 }
 
+bool ConversationController::has_finished_task() const {
+  std::lock_guard lock(result_mutex_);
+  return last_snapshot_.has_value();
+}
+
+lnb::GenerationTask::Snapshot ConversationController::last_snapshot() const {
+  std::lock_guard lock(result_mutex_);
+  return last_snapshot_.value_or(lnb::GenerationTask::Snapshot{});
+}
+
+std::string ConversationController::task_log() const {
+  if (running_) {
+    return task_.log_text();
+  }
+
+  std::lock_guard lock(result_mutex_);
+  return last_task_log_;
+}
+
 void ConversationController::send(std::string text) {
   if (running_ || text.empty()) {
     return;
@@ -92,6 +111,28 @@ void ConversationController::send(std::string text) {
   });
 }
 
+void ConversationController::summarize() {
+  if (running_) {
+    return;
+  }
+
+  start([this](GenerationTask& task, std::stop_token stop_token) {
+    // Snapshot the assistant and session so the worker never reads state the UI
+    // thread may be mutating.
+    const lnb::Assistant assistant = app_.assistant();
+    const lnb::Session current = session();
+
+    // A manual pass folds the overflow into the session memory and persists it.
+    // It is the sole action of this turn: no chat request follows. The user
+    // reviews the request first; declining leaves the memory untouched.
+    lnb::net::summarize_session_now(
+        app_.db(), current, assistant.model_, assistant.api_url_,
+        assistant.authentication_token_, assistant.proxy_, task, stop_token,
+        review_summary
+    );
+  });
+}
+
 void ConversationController::cancel() {
   task_.cancel();
 }
@@ -124,9 +165,11 @@ void ConversationController::start(
 
   {
     // A late assistant-memory result from a cancelled turn must not leak into
-    // the next one.
+    // the next one; nor may the previous turn's retained outcome survive it.
     std::lock_guard lock(result_mutex_);
     pending_assistant_memory_.clear();
+    last_snapshot_.reset();
+    last_task_log_.clear();
   }
 
   worker_finished_.store(false, std::memory_order_relaxed);
@@ -204,6 +247,15 @@ void ConversationController::finish_worker() {
   running_ = false;
 
   const GenerationTask::Snapshot snapshot = task_.snapshot();
+
+  // Retain the outcome and the diagnostic log, so the tasks window can still
+  // show a failed (or cancelled) turn, with its reasoning, after the worker has
+  // gone and the task is about to be reused.
+  {
+    std::lock_guard lock(result_mutex_);
+    last_snapshot_ = snapshot;
+    last_task_log_ = task_.log_text();
+  }
 
   std::string assistant_memory;
   {

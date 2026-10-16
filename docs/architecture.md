@@ -46,6 +46,12 @@ Qt Widgets, with no JavaScript anywhere in the stack.
   computed request size. The input bound is the session's own
   `summary_trigger_tokens_`; the output bound is `response_token_budget_`. Nothing
   is derived, so nothing can drift.
+- **One conversation count.** Every conversation limit — the payload window, the
+  collapse trigger, the level a collapse retains, and the title-bar readout —
+  measures the **conversation alone**. The system prompt (instructions and both
+  memories) is never included, so the number means exactly one thing and no hidden
+  input can move it. The memory's own size is governed solely by the summariser
+  budgets, never by these limits.
 - **Watermarks are bookkeeping only.** They count what is new so the automatic
   summariser trigger can fire. They never decide what is sent, and never decide what
   a summariser reads — so repeated manual summarisation is idempotent.
@@ -70,8 +76,11 @@ src/
 The layering keeps the interesting rules in **pure, testable functions** rather than
 inside the request loop:
 
-- `context::plan_window` — the verbatim window (the newest messages that fit).
-- `context::should_summarize` — the watermark-counted automatic trigger.
+- `context::plan_window` — the verbatim window: the newest messages that fit a
+  conversation-token bound.
+- `context::should_summarize` / `context::transcript_tokens` — the unsummarised
+  conversation's estimated cost and the automatic trigger it drives (the same
+  number the title bar reports).
 - `context::summary_candidates` — the overflow to fold.
 - `context::session_summary_request` / `assistant_summary_request` — the internal
   summariser payloads.
@@ -213,23 +222,45 @@ A request for a prompt in session `S` of assistant `A` is assembled in order:
 1. **system** — `A.custom_instructions_` + `S.custom_instructions_`, under separate headers.
 2. **assistant memory** — `A.memory_`, shared across sessions.
 3. **session memory** — `S.memory_`.
-4. **verbatim window** — the newest messages of `S` that fit `S.summary_trigger_tokens_`,
-   with the message that crosses the boundary kept whole.
+4. **verbatim window** — the newest messages of `S` that fit
+   `S.summary_trigger_tokens_` (measured on the conversation alone), with the
+   message that crosses the boundary kept whole.
 5. **tools** — network tools always; filesystem tools when the session has a shared directory.
+
+### The conversation token count
+
+Every conversation bound and the title bar share **one number**: the estimated
+cost of the unsummarised conversation — every message above the watermark, plus a
+small fixed per-message overhead — and **nothing else**. The system prompt is not
+part of it. This is deliberate. With the memory counted too, the number had two
+controllers (the conversation *and* the memory), so a summarisation that grew the
+memory could hold the readout high and make a low `keep` inexplicable. Excluding
+the system prompt leaves exactly one controller and makes the readout identical to
+the quantity that fires the trigger. The estimate is conservative — about four
+ASCII characters per token, one token per non-ASCII codepoint — so a multibyte
+reply is counted, if anything, on the high side.
 
 ### Session summarisation
 
-Session summarisation has **two knobs with one job each**. `S.summary_trigger_tokens_`
-is the **input bound**: a request carries the system prompt plus the transcript, and
-the transcript is never allowed past it. `S.summary_keep_tokens_` is the **level the
-transcript collapses to**: once the input reaches the trigger, the summariser rewrites
-`S.memory_` from the previous memory plus everything older than the newest `keep`
-tokens, and the watermark advances past it. The transcript therefore sits at `keep`
-after a collapse and grows back towards the trigger, instead of the entire window
-staying above the watermark and re-triggering on the next turn. A large overflow is
+Session summarisation has **two knobs with one job each**, and both measure the
+conversation alone. `S.summary_trigger_tokens_` is the **input bound**: the
+unsummarised conversation is never allowed past it, and the automatic collapse
+fires the moment that conversation reaches it. `S.summary_keep_tokens_` is the
+**level the conversation collapses to**: the summariser rewrites `S.memory_` from
+the previous memory plus everything older than the newest `keep` tokens, and the
+watermark advances past it. The conversation therefore sits at `keep` after a
+collapse and grows back towards the trigger, instead of the entire window staying
+above the watermark and re-triggering on the next turn. A large overflow is
 folded in several calls (batched by the trigger), so nothing is silently dropped.
 Manual summarisation ignores the trigger but reads the same overflow — pressing it
 twice with no new messages produces the same memory.
+
+The system prompt is deliberately **outside** both bounds: the memory may grow
+without shrinking either the sent conversation or the retained one, and the
+title-bar readout stays exactly the quantity that drives the trigger. A larger
+memory does cost tokens, but that cost is the user's to set through the
+summariser budgets — never a hidden second input to the conversation limits, and
+the reason a low `keep` always means a small retained conversation.
 
 ### Assistant summarisation
 
@@ -281,9 +312,10 @@ heavy highlights.
 - **Title bar** — one full-width band across the very top of the window, on the
   `surface` colour with a hairline beneath it. The `Local Notebook` banner sits at
   its left (inset to line up with the sidebar content); the conversation-specific
-  information sits at its right — the session id, the context-token usage of the
-  next request, and the last-message time. The session title is not repeated here;
-  it lives only in the sidebar row.
+  information sits at its right — the session id, the conversation's estimated
+  token usage against the collapse trigger (the system prompt is not counted), and
+  the last-message time. The session title is not repeated here; it lives only in
+  the sidebar row.
 - **Sidebar** — no header band of its own: below the unified title bar, a flat
   full-width **New Session** row (styled like a list item: no border, a subtle hover
   fill) sitting above a `PINNED` category (shown only while a session is pinned) and
@@ -305,8 +337,9 @@ the `SESSIONS` category, the session list (newest
 - **Chat pane** — the transcript, below the unified title bar. All messages
   share one width and one left edge, the way Zed's agent panel reads; the user's own
   message is a rounded, bordered block, and assistant replies are
-  rendered Markdown with code blocks and a copy button. Hovering a message reveals its
-  `#id` and its copy/edit/delete actions.
+  rendered Markdown with code blocks and a copy button. Hovering a message reveals
+  its `#id`, its arrival time, the estimated token cost of that message and its
+  copy/edit/delete actions, all on one muted meta line.
 - **Composer** — a block set off from the transcript by a single hairline, on the
   conversation surface. The input field is bare (no border, no rounded corners) and
   takes the theme's `input_background`; the **Send** action is a flat, icon-only
@@ -387,7 +420,8 @@ cmake --build build/linux-x64-debug -j 8
 
 A `linux-x64-release` preset is also provided.
 
-The monochrome chrome icons (the composer actions and the sidebar's New Session
+The monochrome chrome icons (the composer actions — send, the collapse-into-memory
+summarize glyph, the expand toggle and stop — and the sidebar's New Session
 glyph, the message hover actions — copy, edit and delete — the session-row hover
 actions, the pin toggle, the status bar's sidebar toggle and running-task glyph, and
 the settings cog), the application icon and the default theme are

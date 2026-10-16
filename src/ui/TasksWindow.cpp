@@ -1,10 +1,18 @@
 #include "ui/TasksWindow.hpp"
 
+#include <QEvent>
+#include <QFontDatabase>
 #include <QFrame>
+#include <QHBoxLayout>
 #include <QLabel>
+#include <QMouseEvent>
+#include <QPlainTextEdit>
+#include <QPushButton>
 #include <QScrollArea>
 #include <QShowEvent>
+#include <QStyle>
 #include <QVBoxLayout>
+#include <QVariant>
 
 #include "ui/dialog_style.hpp"
 #include "ui/theme.hpp"
@@ -15,21 +23,65 @@ using namespace dialog_style;
 
 namespace {
 
-// The running time of a task, to one decimal of a second. A running turn is
-// short-lived, so seconds are enough; a long tool loop simply reads as more
-// seconds.
+// The running (or finished) time of a task, to one decimal of a second.
 QString format_elapsed(std::int64_t milliseconds) {
   return QStringLiteral("%1 s").arg(static_cast<double>(milliseconds) / 1000.0, 0, 'f', 1);
+}
+
+// A read-only, scrollable, plain-text dump of one task's log. It deliberately
+// never renders Markdown: the log is raw diagnostic text, and it carries detail
+// the transcript never shows (the exact request body, the tool calls, and the
+// hidden reasoning).
+void show_log(QWidget* parent, const QString& title, const QString& log) {
+  QDialog dialog(parent);
+  dialog.setObjectName(QStringLiteral("TaskLogDialog"));
+  dialog.setWindowTitle(title);
+  dialog.setModal(true);
+  dialog.resize(760, 560);
+  dialog.setMinimumSize(420, 300);
+  dialog.setFont(ui_font());
+
+  auto* root = new QVBoxLayout(&dialog);
+  root->setContentsMargins(16, 16, 16, 16);
+  root->setSpacing(12);
+
+  auto* heading = new QLabel(title, &dialog);
+  heading->setObjectName(QStringLiteral("DialogTitle"));
+  apply_derived_font(heading, 1.0, true);
+  root->addWidget(heading);
+
+  auto* view = new QPlainTextEdit(&dialog);
+  view->setObjectName(QStringLiteral("TaskLog"));
+  view->setReadOnly(true);
+  view->setLineWrapMode(QPlainTextEdit::NoWrap);
+  view->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+  view->setPlainText(log.isEmpty() ? QStringLiteral("This task produced no log.") : log);
+  root->addWidget(view, 1);
+
+  auto* footer = new QHBoxLayout();
+  footer->addStretch(1);
+
+  auto* close = new QPushButton(QStringLiteral("Close"), &dialog);
+  close->setObjectName(QStringLiteral("Secondary"));
+  QObject::connect(close, &QPushButton::clicked, &dialog, [&dialog]() { dialog.accept(); });
+  footer->addWidget(close);
+
+  root->addLayout(footer);
+
+  dialog.setStyleSheet(dialog_stylesheet(QStringLiteral("TaskLogDialog")));
+  reapply_derived_fonts(&dialog);
+
+  dialog.exec();
 }
 
 } // namespace
 
 TasksWindow::TasksWindow(QWidget* parent) : QDialog(parent) {
   setObjectName(QStringLiteral("TasksWindow"));
-  setWindowTitle(QStringLiteral("Running Tasks"));
+  setWindowTitle(QStringLiteral("Tasks"));
   setModal(false);
-  resize(420, 320);
-  setMinimumSize(320, 200);
+  resize(460, 360);
+  setMinimumSize(340, 220);
   setFont(ui_font());
 
   auto* root = new QVBoxLayout(this);
@@ -41,12 +93,16 @@ TasksWindow::TasksWindow(QWidget* parent) : QDialog(parent) {
   header_layout->setContentsMargins(20, 16, 20, 12);
   header_layout->setSpacing(2);
 
-  auto* title = new QLabel(QStringLiteral("Running Tasks"), header);
+  auto* title = new QLabel(QStringLiteral("Tasks"), header);
   title->setObjectName(QStringLiteral("PageTitle"));
   apply_derived_font(title, 1.0, true);
 
   auto* subtitle = new QLabel(
-      QStringLiteral("Generation tasks running in the background."), header
+      QStringLiteral(
+          "Running and recently finished generation tasks. "
+          "Select one to read its log."
+      ),
+      header
   );
   subtitle->setObjectName(QStringLiteral("PageSubtitle"));
   subtitle->setWordWrap(true);
@@ -65,7 +121,7 @@ TasksWindow::TasksWindow(QWidget* parent) : QDialog(parent) {
   list_layout_->setContentsMargins(16, 0, 16, 16);
   list_layout_->setSpacing(8);
 
-  empty_ = new QLabel(QStringLiteral("No tasks are running."), list_);
+  empty_ = new QLabel(QStringLiteral("No tasks yet."), list_);
   empty_->setObjectName(QStringLiteral("Muted"));
   empty_->setAlignment(Qt::AlignCenter);
   list_layout_->addWidget(empty_);
@@ -77,16 +133,62 @@ TasksWindow::TasksWindow(QWidget* parent) : QDialog(parent) {
   apply_style();
 }
 
+void TasksWindow::set_log_provider(std::function<QString(std::uint32_t)> provider) {
+  log_provider_ = std::move(provider);
+}
+
 void TasksWindow::showEvent(QShowEvent* event) {
   QDialog::showEvent(event);
   apply_style();
 }
 
+bool TasksWindow::eventFilter(QObject* watched, QEvent* event) {
+  if (event->type() == QEvent::MouseButtonRelease) {
+    auto* mouse = static_cast<QMouseEvent*>(event);
+
+    if (mouse->button() == Qt::LeftButton) {
+      const QVariant index = watched->property("lnbRowIndex");
+
+      if (index.isValid()) {
+        open_log(static_cast<std::size_t>(index.toInt()));
+        return true;
+      }
+    }
+  }
+
+  return QDialog::eventFilter(watched, event);
+}
+
+void TasksWindow::open_log(std::size_t index) {
+  if (index >= entries_.size()) {
+    return;
+  }
+
+  const Entry& entry = entries_[index];
+  const QString title = entry.title.isEmpty()
+      ? QStringLiteral("Session #%1").arg(entry.session_id)
+      : entry.title;
+
+  const QString log =
+      log_provider_ != nullptr ? log_provider_(entry.session_id) : QString();
+
+  show_log(this, title, log);
+}
+
 void TasksWindow::apply_style() {
   QString sheet = dialog_stylesheet(QStringLiteral("TasksWindow"));
+
+  const ThemeColors& c = theme().colors;
+
   sheet += QStringLiteral(
                "QFrame#Card { background: %1; border: 1px solid %2; border-radius: 8px; }")
-               .arg(colour_hex(theme().colors.surface), colour_hex(theme().colors.border));
+               .arg(colour_hex(c.surface), colour_hex(c.border));
+  // A clickable card: the border lifts to the accent while the pointer is over it.
+  sheet += QStringLiteral("QFrame#Card:hover { border: 1px solid %1; }")
+               .arg(colour_hex(c.accent));
+  sheet += QStringLiteral("QLabel#TaskError { color: %1; }").arg(colour_hex(c.danger));
+  sheet += QStringLiteral("QLabel#TaskState { color: %1; }").arg(colour_hex(c.accent));
+
   setStyleSheet(sheet);
 
   // The window is cached by the main window, so re-derive its fonts from the
@@ -110,6 +212,9 @@ void TasksWindow::rebuild_rows(std::size_t count) {
     auto* card = new QFrame(list_);
     card->setObjectName(QStringLiteral("Card"));
     card->setAttribute(Qt::WA_StyledBackground, true);
+    card->setCursor(Qt::PointingHandCursor);
+    card->setProperty("lnbRowIndex", static_cast<int>(i));
+    card->installEventFilter(this);
 
     auto* layout = new QVBoxLayout(card);
     layout->setContentsMargins(14, 10, 14, 10);
@@ -121,11 +226,21 @@ void TasksWindow::rebuild_rows(std::size_t count) {
     auto* row_detail = new QLabel(card);
     row_detail->setObjectName(QStringLiteral("Muted"));
 
+    auto* row_error = new QLabel(card);
+    row_error->setObjectName(QStringLiteral("TaskError"));
+    row_error->setWordWrap(true);
+
+    // The labels must not swallow the click; the card owns the press.
+    for (QLabel* label : {row_title, row_detail, row_error}) {
+      label->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    }
+
     layout->addWidget(row_title);
     layout->addWidget(row_detail);
+    layout->addWidget(row_error);
 
     list_layout_->insertWidget(static_cast<int>(i), card);
-    rows_[i] = Row{card, row_title, row_detail};
+    rows_[i] = Row{card, row_title, row_detail, row_error};
   }
 }
 
@@ -134,19 +249,39 @@ void TasksWindow::set_entries(std::vector<Entry> entries) {
     rebuild_rows(entries.size());
   }
 
-  for (std::size_t i = 0; i < entries.size(); ++i) {
-    const Entry& entry = entries[i];
+  entries_ = std::move(entries);
+
+  for (std::size_t i = 0; i < entries_.size(); ++i) {
+    const Entry& entry = entries_[i];
 
     rows_[i].title->setText(entry.title);
-    rows_[i].detail->setText(
-        QStringLiteral("Session #%1   ·   Round %2   ·   %3")
+
+    const QString detail =
+        QStringLiteral("Session #%1   ·   %2   ·   Round %3   ·   %4")
             .arg(entry.session_id)
+            .arg(entry.state)
             .arg(entry.rounds)
-            .arg(format_elapsed(entry.elapsed_ms))
-    );
+            .arg(format_elapsed(entry.elapsed_ms));
+
+    rows_[i].detail->setText(detail);
+
+    // The running row reads in the accent colour; a finished one stays muted. The
+    // object name is only touched when it actually changes, so a refresh does not
+    // force a re-polish on every tick.
+    const QString detail_name =
+        entry.running ? QStringLiteral("TaskState") : QStringLiteral("Muted");
+
+    if (rows_[i].detail->objectName() != detail_name) {
+      rows_[i].detail->setObjectName(detail_name);
+      rows_[i].detail->style()->unpolish(rows_[i].detail);
+      rows_[i].detail->style()->polish(rows_[i].detail);
+    }
+
+    rows_[i].error->setText(entry.error);
+    rows_[i].error->setVisible(!entry.error.isEmpty());
   }
 
-  empty_->setVisible(entries.empty());
+  empty_->setVisible(entries_.empty());
 }
 
 } // namespace ui

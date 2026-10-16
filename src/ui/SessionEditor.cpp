@@ -425,6 +425,38 @@ void SessionEditor::load_session() {
 }
 
 void SessionEditor::save_session() {
+  // Validate before anything is written. The two budgets are related: the reply
+  // must fit inside the input bound, and the retained level must sit below the
+  // trigger, or the collapse would fire again the moment it finished. A violated
+  // rule keeps the window open so the values can be corrected.
+  const std::size_t trigger = static_cast<std::size_t>(summary_trigger_->value());
+  const std::size_t keep = static_cast<std::size_t>(summary_keep_->value());
+  const std::size_t response = static_cast<std::size_t>(response_budget_->value());
+
+  if (response > trigger) {
+    QMessageBox::warning(
+        this, QStringLiteral("Invalid Budget"),
+        QStringLiteral(
+            "The response budget must not be greater than the summarization "
+            "trigger. A reply could otherwise never complete before the "
+            "conversation is collapsed again."
+        )
+    );
+    return;
+  }
+
+  if (keep >= trigger) {
+    QMessageBox::warning(
+        this, QStringLiteral("Invalid Budget"),
+        QStringLiteral(
+            "The retained-token level must be smaller than the summarization "
+            "trigger. Otherwise the collapse would be triggered again "
+            "immediately after it runs."
+        )
+    );
+    return;
+  }
+
   lnb::Session session = session_;
 
   session.title_ = title_->text().trimmed().toStdString();

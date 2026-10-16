@@ -40,17 +40,18 @@ QJsonObject build_session_payload(
     const std::vector<Message>& messages
 );
 
-// How much of the input bound the next request would occupy, in estimated
-// tokens. `limit_tokens` is `session.summary_trigger_tokens_`, the input bound
-// (design-1.md §1). Used to show context usage on the title bar.
+// The conversation-token readout the title bar reports against. `used_tokens` is
+// the estimated cost of the unsummarised conversation alone (the messages above
+// the session watermark) — never the system prompt — reported without trimming;
+// `limit_tokens` is `session.summary_trigger_tokens_`. `used_tokens` is exactly
+// the quantity the automatic collapse compares against the trigger.
 struct ContextUsage {
   std::size_t used_tokens = 0;
   std::size_t limit_tokens = 0;
 };
 
 ContextUsage context_usage(
-    const Assistant& assistant, const Session& session,
-    const std::vector<Message>& messages
+    const Session& session, const std::vector<Message>& messages
 );
 
 // Performs one streaming chat-completions request. Assistant text is streamed

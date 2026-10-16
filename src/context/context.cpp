@@ -62,17 +62,15 @@ std::size_t prompt_tokens(const std::string& text) {
   return estimate_tokens(text);
 }
 
-Window plan_window(
-    const std::vector<Message>& messages, std::size_t system_tokens,
-    std::size_t window_tokens
-) {
+Window plan_window(const std::vector<Message>& messages, std::size_t window_tokens) {
   Window window;
   window.start = messages.size();
 
-  std::size_t used = system_tokens;
+  std::size_t used = 0;
 
   // Walk from the newest message backwards, keeping messages until the window
-  // is exhausted.
+  // is exhausted. Only the conversation is measured; the system prompt is never
+  // part of the bound.
   for (std::size_t i = messages.size(); i-- > 0;) {
     const std::size_t cost = message_tokens(messages[i]);
 
@@ -86,15 +84,21 @@ Window plan_window(
     window.start = i;
   }
 
-  window.tokens = used - system_tokens;
+  window.tokens = used;
   return window;
 }
 
 bool should_summarize(
-    const std::vector<Message>& messages, std::size_t system_tokens,
-    std::uint32_t watermark, std::size_t trigger_tokens
+    const std::vector<Message>& messages, std::uint32_t watermark,
+    std::size_t trigger_tokens
 ) {
-  std::size_t total = system_tokens;
+  return transcript_tokens(messages, watermark) >= trigger_tokens;
+}
+
+std::size_t transcript_tokens(
+    const std::vector<Message>& messages, std::uint32_t watermark
+) {
+  std::size_t total = 0;
 
   for (const Message& message: messages) {
     if (message.id_ <= watermark) {
@@ -104,7 +108,7 @@ bool should_summarize(
     total += message_tokens(message);
   }
 
-  return total >= trigger_tokens;
+  return total;
 }
 
 std::vector<const Message*> summary_candidates(

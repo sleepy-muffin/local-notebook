@@ -123,6 +123,11 @@ public:
   // string leaves the label blank.
   void set_message_time(const QString& time);
 
+  // Records the estimated token cost of the message (its text plus the small
+  // per-message overhead — the same estimate the title bar sums) and shows it
+  // next to the time, so the strip reads "#3  2026-10-16 14:32  1.2k tok".
+  void set_message_tokens(std::size_t tokens);
+
 protected:
   void enterEvent(QEnterEvent* event) override;
   void leaveEvent(QEvent* event) override;
@@ -143,6 +148,7 @@ private:
   QWidget* actions_ = nullptr;
   QLabel* message_id_label_ = nullptr;
   QLabel* message_time_label_ = nullptr;
+  QLabel* message_tokens_label_ = nullptr;
   std::uint32_t message_id_ = 0;
   bool actions_visible_ = false;
   std::vector<ActionIcon> action_icons_;
@@ -178,6 +184,20 @@ public:
 
   // Re-applies theme colours to the composer and every rendered bubble.
   void refresh_style();
+
+  // True when the unsummarised transcript has reached the session trigger, so the
+  // composer's primary action is "summarize" rather than "send".
+  [[nodiscard]] bool summarize_due() const;
+
+  // The diagnostic log for the current (or last finished) turn, and the last
+  // finished turn's snapshot; both feed the tasks window.
+  [[nodiscard]] std::string task_log() const { return controller_.task_log(); }
+  [[nodiscard]] bool has_finished_task() const {
+    return controller_.has_finished_task();
+  }
+  [[nodiscard]] lnb::GenerationTask::Snapshot last_snapshot() const {
+    return controller_.last_snapshot();
+  }
 
   // Marks the view as needing a restyle without doing the work now. A hidden
   // view (another session's transcript) is restyled when it is next shown, so a
@@ -231,6 +251,10 @@ private:
   void apply_composer_height();
   void toggle_composer_height();
 
+  // Re-evaluates whether the primary composer action is "summarize" and, when it
+  // changed, swaps the send button's icon and tooltip.
+  void update_send_mode();
+
   // (Re)applies the two composer action icons for the active theme.
   void apply_composer_icons();
 
@@ -282,6 +306,10 @@ private:
 
   // True while the composer field is raised to composer_height_expanded.
   bool composer_expanded_ = false;
+
+  // True while the primary composer action is "summarize" (the transcript has
+  // reached the trigger), rather than "send".
+  bool summarize_mode_ = false;
 
   MessageRow* streaming_row_ = nullptr;
   QString streaming_status_;

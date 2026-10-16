@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -51,6 +52,20 @@ public:
 
   // Appends the user message, then starts a turn in the background.
   void send(std::string text);
+
+  // Folds the session's overflow into memory on demand. It is the sole action of
+  // the turn: no chat request follows. Used when the composer's primary action is
+  // the "summarize" variant, which replaces "Send" once the unsummarised
+  // transcript reaches the trigger.
+  void summarize();
+
+  // The last finished turn's outcome and diagnostic log, retained after the
+  // worker is gone so the tasks window can show a failure and dump its log.
+  [[nodiscard]] bool has_finished_task() const;
+  [[nodiscard]] lnb::GenerationTask::Snapshot last_snapshot() const;
+
+  // The diagnostic log for the current turn, or the last finished one when idle.
+  [[nodiscard]] std::string task_log() const;
 
   // Requests the worker to stop. The partial reply is discarded.
   void cancel();
@@ -100,8 +115,14 @@ private:
   std::atomic<bool> worker_finished_{false};
   bool running_ = false;
 
-  std::mutex result_mutex_;
+  mutable std::mutex result_mutex_;
   std::string pending_assistant_memory_;
+
+  // The last finished turn: its terminal snapshot and its diagnostic log. Guarded
+  // by result_mutex_, because poll/finish run on the interface thread while the
+  // tasks window may read them from a click handler.
+  std::optional<lnb::GenerationTask::Snapshot> last_snapshot_;
+  std::string last_task_log_;
 
   std::string last_display_;
   std::string last_status_;

@@ -32,6 +32,8 @@
 #include <algorithm>
 
 #include "app/application.hpp"
+#include "context/context.hpp"
+#include "net/client.hpp"
 #include "ui/theme.hpp"
 
 namespace ui {
@@ -65,6 +67,23 @@ QString format_message_time(const std::string& iso) {
   }
 
   return parsed.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm"));
+}
+
+// The estimated token cost of one message, on the same compact scale as the
+// title bar's readout, with a unit suffix so the value in the hover strip cannot
+// be mistaken for the id or the time.
+QString format_token_estimate(std::size_t tokens) {
+  if (tokens < 1000) {
+    return QStringLiteral("%1 tok").arg(static_cast<qulonglong>(tokens));
+  }
+
+  const double thousands = static_cast<double>(tokens) / 1000.0;
+
+  if (tokens % 1000 == 0 || tokens >= 100000) {
+    return QStringLiteral("%1k tok").arg(qRound(thousands));
+  }
+
+  return QStringLiteral("%1k tok").arg(thousands, 0, 'f', 1);
 }
 
 // Fixed height of every action strip, so revealing the buttons never reflows the
@@ -565,13 +584,25 @@ MessageRow::MessageRow(MessageBubble::Role role, QWidget* parent)
   );
   message_time_label_->setVisible(false);
 
+  // The estimated token cost of the message sits after the time, so the strip
+  // reads "#3  2026-10-16 14:32  1.2k tok  [copy] [delete]".
+  message_tokens_label_ = new QLabel(actions_);
+  message_tokens_label_->setObjectName(QStringLiteral("MessageTokens"));
+  message_tokens_label_->setStyleSheet(
+      QStringLiteral("QLabel#MessageTokens { color: %1; }")
+          .arg(css_color(theme().colors.text_muted))
+  );
+  message_tokens_label_->setVisible(false);
+
   if (role_ == MessageBubble::Role::User) {
     action_layout->addStretch(1);
     action_layout->addWidget(message_id_label_);
     action_layout->addWidget(message_time_label_);
+    action_layout->addWidget(message_tokens_label_);
   } else {
     action_layout->addWidget(message_id_label_);
     action_layout->addWidget(message_time_label_);
+    action_layout->addWidget(message_tokens_label_);
     action_layout->addStretch(1);
   }
 
@@ -648,6 +679,10 @@ void MessageRow::set_actions_visible(bool visible) {
   if (message_time_label_ != nullptr) {
     message_time_label_->setVisible(visible);
   }
+
+  if (message_tokens_label_ != nullptr) {
+    message_tokens_label_->setVisible(visible);
+  }
 }
 
 void MessageRow::set_message_id(std::uint32_t id) {
@@ -666,6 +701,14 @@ void MessageRow::set_message_time(const QString& time) {
   }
 
   message_time_label_->setText(time);
+}
+
+void MessageRow::set_message_tokens(std::size_t tokens) {
+  if (message_tokens_label_ == nullptr || tokens == 0) {
+    return;
+  }
+
+  message_tokens_label_->setText(format_token_estimate(tokens));
 }
 
 void MessageRow::enterEvent(QEnterEvent* event) {
@@ -978,6 +1021,7 @@ void ConversationView::reload() {
 
   update_load_older_visibility();
   set_busy(controller_.busy());
+  update_send_mode();
   updating_ = false;
 
   // Reposition once the rebuilt layout has settled. Following pins to the true
@@ -1057,8 +1101,10 @@ void ConversationView::render_message_at(std::size_t index, int layout_index) {
       from_self
   );
 
-  // The arrival time is shown in the hover strip next to the id.
+  // The arrival time is shown in the hover strip next to the id, and the
+  // estimated token cost of the message sits next to the time.
   row->set_message_time(format_message_time(message.made_at_));
+  row->set_message_tokens(lnb::context::message_tokens(message));
 
   row->bubble()->set_text(from_utf8(message.content_));
 
@@ -1386,16 +1432,33 @@ void ConversationView::apply_composer_icons() {
   const ThemeColors& colors = theme().colors;
 
   if (send_button_ != nullptr) {
-    // The send arrow takes the accent colour; a busy composer mutes it through
-    // the icon's disabled pixmap.
-    QIcon icon = resource_icon(QStringLiteral("send"), colors.accent, colors.text_muted);
+    if (summarize_mode_) {
+      // The action becomes a collapse-into-memory: fold the overflow now rather
+      // than send a message into an over-long request.
+      QIcon icon = resource_icon(
+          QStringLiteral("summarize"), colors.accent, colors.text_muted
+      );
 
-    if (icon.isNull()) {
-      icon = style()->standardIcon(QStyle::SP_ArrowUp);
+      if (icon.isNull()) {
+        icon = style()->standardIcon(QStyle::SP_DialogSaveButton);
+      }
+
+      send_button_->setIcon(icon);
+      send_button_->setToolTip(
+          QStringLiteral("Summarize the conversation into memory")
+      );
+    } else {
+      // The send arrow takes the accent colour; a busy composer mutes it through
+      // the icon's disabled pixmap.
+      QIcon icon = resource_icon(QStringLiteral("send"), colors.accent, colors.text_muted);
+
+      if (icon.isNull()) {
+        icon = style()->standardIcon(QStyle::SP_ArrowUp);
+      }
+
+      send_button_->setIcon(icon);
+      send_button_->setToolTip(QStringLiteral("Send"));
     }
-
-    send_button_->setIcon(icon);
-    send_button_->setToolTip(QStringLiteral("Send"));
   }
 
   if (expand_button_ != nullptr) {
@@ -1446,8 +1509,43 @@ void ConversationView::toggle_composer_height() {
   apply_composer_height();
 }
 
+bool ConversationView::summarize_due() const {
+  const lnb::Session session = controller_.session();
+
+  if (session.id_ == 0) {
+    return false;
+  }
+
+  // context_usage reports the unsummarised conversation cost against the
+  // trigger, so "used >= limit" is exactly the automatic-collapse condition.
+  const lnb::net::ContextUsage usage =
+      lnb::net::context_usage(session, messages_);
+
+  return usage.limit_tokens > 0 && usage.used_tokens >= usage.limit_tokens;
+}
+
+void ConversationView::update_send_mode() {
+  const bool due = summarize_due();
+
+  if (due == summarize_mode_) {
+    return;
+  }
+
+  summarize_mode_ = due;
+  apply_composer_icons();
+}
+
 void ConversationView::submit() {
   if (controller_.busy()) {
+    return;
+  }
+
+  if (summarize_mode_) {
+    // The send button has become a summarize button: fold the overflow into
+    // memory, sending nothing. A fresh pass lands at the bottom.
+    stick_to_bottom_ = true;
+    controller_.summarize();
+    set_busy(true);
     return;
   }
 

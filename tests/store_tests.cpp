@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <vector>
 
 #include "context/context.hpp"
 #include "model.hpp"
@@ -526,6 +527,45 @@ void test_summary_requests_stream() {
   CHECK(assistant_request.value("stream").toBool() == true);
 }
 
+// The conversation-only context readout (architecture.md): transcript_tokens
+// sums every message above the watermark and nothing else — the system prompt
+// is never part of it — and depends on no window or trigger, so a lowered
+// trigger can never shrink the reported total. should_summarize compares the
+// very same quantity.
+void test_transcript_tokens() {
+  std::vector<lnb::Message> messages;
+
+  for (std::uint32_t id = 1; id <= 5; ++id) {
+    lnb::Message message;
+    message.id_ = id;
+    message.session_id_ = 1;
+    message.role_ = (id % 2 == 1) ? lnb::Role::User : lnb::Role::Assistant;
+    message.content_ = "a short stored message";
+    messages.push_back(message);
+  }
+
+  std::size_t expected = 0;
+  for (const lnb::Message& message: messages) {
+    expected += lnb::context::message_tokens(message);
+  }
+
+  // No watermark: every message counts, and only the messages.
+  CHECK(lnb::context::transcript_tokens(messages, 0) == expected);
+
+  // The watermark excludes everything already folded, and only that.
+  std::size_t above = 0;
+  for (const lnb::Message& message: messages) {
+    if (message.id_ > 3) {
+      above += lnb::context::message_tokens(message);
+    }
+  }
+  CHECK(lnb::context::transcript_tokens(messages, 3) == above);
+
+  // should_summarize is exactly "transcript_tokens reached the trigger".
+  CHECK(lnb::context::should_summarize(messages, 0, expected));
+  CHECK(!lnb::context::should_summarize(messages, 0, expected + 1));
+}
+
 } // namespace
 
 int main() {
@@ -541,6 +581,7 @@ int main() {
   test_log_file_sink();
   test_scan_assistants();
   test_summary_requests_stream();
+  test_transcript_tokens();
   run(test_session_round_trip);
   run(test_messages);
   run(test_memory_bookkeeping);

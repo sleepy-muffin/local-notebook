@@ -219,6 +219,20 @@ private:
       full_reply_.append(token.constData(), static_cast<std::size_t>(token.size()));
     }
 
+    // Hidden reasoning (a reasoning model's "thinking") is kept out of the reply
+    // but recorded on the task, so the tasks window can show what the model was
+    // working through when a turn failed.
+    const QJsonValue reasoning = delta.contains("reasoning_content")
+        ? delta.value("reasoning_content")
+        : delta.value("reasoning");
+
+    if (reasoning.isString()) {
+      const QByteArray trace = reasoning.toString().toUtf8();
+      task_.append_thinking(
+          std::string_view(trace.constData(), static_cast<std::size_t>(trace.size()))
+      );
+    }
+
     // Tool calls arrive split across chunks; merge them per `index`.
     const QJsonArray calls = delta.value("tool_calls").toArray();
 
@@ -258,8 +272,8 @@ private:
 
 // Assembles the system prompt (design-1.md §4): the assistant and session
 // instructions first, each under its own header, then the shared assistant
-// memory and the session memory. Shared by build_session_payload() and
-// context_usage() so the reported cost matches the request actually sent.
+// memory and the session memory. Used by build_session_payload(); the memory it
+// carries is deliberately never part of any conversation-token count.
 std::string build_system_prompt(const Assistant& assistant, const Session& session) {
   std::string prompt;
 
@@ -289,24 +303,6 @@ std::string build_system_prompt(const Assistant& assistant, const Session& sessi
   return prompt;
 }
 
-// The session-only part of the system prompt. The session summariser has no
-// access to the assistant, so it plans its window against the session's own
-// instructions and memory; this is a close estimate of the real prompt.
-std::string session_system_prompt(const Session& session, const std::string& memory) {
-  std::string prompt = session.custom_instructions_;
-
-  if (!memory.empty()) {
-    if (!prompt.empty()) {
-      prompt += "\n\n";
-    }
-
-    prompt += "[CONVERSATION MEMORY]\n";
-    prompt += memory;
-  }
-
-  return prompt;
-}
-
 } // namespace
 
 QJsonObject build_session_payload(
@@ -314,14 +310,12 @@ QJsonObject build_session_payload(
     const std::vector<Message>& messages
 ) {
   const std::string system_prompt = build_system_prompt(assistant, session);
-  const std::size_t system_tokens = context::prompt_tokens(system_prompt);
 
   // The request carries at most the session's input bound: the newest messages
   // that fit `summary_trigger_tokens_`, the boundary message kept whole. The
-  // collapse below keeps the transcript beneath this bound.
-  const context::Window window = context::plan_window(
-      messages, system_tokens, session.summary_trigger_tokens_
-  );
+  // bound is the conversation alone, so the system prompt never eats into it.
+  const context::Window window =
+      context::plan_window(messages, session.summary_trigger_tokens_);
 
   QJsonArray payload_messages;
   payload_messages.append(
@@ -348,21 +342,16 @@ QJsonObject build_session_payload(
 }
 
 ContextUsage context_usage(
-    const Assistant& assistant, const Session& session,
-    const std::vector<Message>& messages
+    const Session& session, const std::vector<Message>& messages
 ) {
   ContextUsage usage;
 
-  const std::string system_prompt = build_system_prompt(assistant, session);
-  const std::size_t system_tokens = context::prompt_tokens(system_prompt);
-
-  // Mirrors build_session_payload(): the same prompt cost and input bound pick
-  // the same verbatim messages, so the reported usage matches the sent request.
-  const context::Window window = context::plan_window(
-      messages, system_tokens, session.summary_trigger_tokens_
-  );
-
-  usage.used_tokens = system_tokens + window.tokens;
+  // Report the unsummarised conversation alone — never the system prompt — so
+  // the readout is exactly the quantity the automatic collapse compares against
+  // the trigger. Trimming to the trigger made the readout shrink whenever the
+  // trigger was lowered, which contradicts the collapse rule.
+  usage.used_tokens =
+      context::transcript_tokens(messages, session.memory_watermark_);
   usage.limit_tokens = session.summary_trigger_tokens_;
 
   return usage;
@@ -407,6 +396,10 @@ ChatCompletionResult send_message_once(
   // the model was actually sent.
   const QByteArray body = QJsonDocument(payload).toJson(QJsonDocument::Compact);
   lnb::log::info("request {}: {}", kind, body.toStdString());
+
+  // The same body goes into the task's own log, so the tasks window can dump the
+  // exact bytes that were posted when a turn is inspected.
+  task.append_log("[request " + std::string(kind) + "]\n" + body.toStdString());
 
   QNetworkReply* reply = manager.post(request, body);
 
@@ -518,6 +511,12 @@ ChatCompletionResult send_message_once(
       result.finish_reason
   );
 
+  task.append_log(
+      "[response " + std::string(kind) + "] finish_reason=" +
+      (result.finish_reason.empty() ? std::string("none") : result.finish_reason) +
+      " tool_calls=" + std::to_string(result.tool_calls.size())
+  );
+
   return result;
 }
 
@@ -539,6 +538,8 @@ ChatCompletionResult generate_reply(
     }
 
     lnb::log::info("generate_reply round={}", round);
+
+    task.append_log("generate_reply round=" + std::to_string(round));
 
     // Publish the round so the running-task readout can show progress.
     task.set_rounds(round);
@@ -593,6 +594,11 @@ ChatCompletionResult generate_reply(
           call.id.toStdString(), call.arguments.left(400).toStdString()
       );
 
+      task.append_log(
+          "tool call: " + call.name.toStdString() + "(" +
+          call.arguments.left(2000).toStdString() + ")"
+      );
+
       QString output = execute_local_tool(call, shared_directory, proxy);
 
       // Bound each tool result so the in-turn loop cannot grow the context
@@ -604,6 +610,11 @@ ChatCompletionResult generate_reply(
       lnb::log::debug(
           "generate_reply: tool result: name={} -> {} chars", call.name.toStdString(),
           output.size()
+      );
+
+      task.append_log(
+          "tool result: " + call.name.toStdString() + " -> " +
+          output.left(8000).toStdString()
       );
 
       messages.append(QJsonObject{
@@ -652,20 +663,23 @@ std::string fold_session_memory(
 
   std::string memory = session.memory_;
 
-  // The collapse retains the newest messages that fit the keep window; the
-  // memory is part of the system prompt, so it is counted when planning that
-  // window. Everything before the window floor is the overflow to fold.
-  const std::size_t system_tokens =
-      context::prompt_tokens(session_system_prompt(session, memory));
-  const context::Window window = context::plan_window(
-      messages, system_tokens, session.summary_keep_tokens_
-  );
+  // The collapse retains the newest conversation messages that fit the keep
+  // window; only the conversation is measured, so the memory's own size never
+  // shrinks the retained transcript. Everything before the window floor is the
+  // overflow to fold.
+  const context::Window window =
+      context::plan_window(messages, session.summary_keep_tokens_);
 
   if (!force &&
       !context::should_summarize(
-          messages, system_tokens, session.memory_watermark_,
-          session.summary_trigger_tokens_
+          messages, session.memory_watermark_, session.summary_trigger_tokens_
       )) {
+    return memory;
+  }
+
+  // Nothing has overflowed the retained window, so there is nothing to fold and
+  // nothing to persist (leaving the stored watermark untouched).
+  if (window.start == 0) {
     return memory;
   }
 
@@ -697,8 +711,12 @@ std::string fold_session_memory(
     }
   }
 
-  std::uint32_t watermark = 0;
+  // The watermark advances only once the whole overflow has been folded; a pass
+  // that stops early leaves the stored memory and its watermark exactly as they
+  // were, so a failed (or empty) job never regresses the frontier.
+  std::uint32_t watermark = session.memory_watermark_;
   std::size_t first = 0;
+  bool complete = true;
 
   // Fold the overflow oldest-first in batches bounded by the trigger, advancing
   // `first` until the whole prefix is consumed. Batching keeps a large overflow
@@ -714,6 +732,7 @@ std::string fold_session_memory(
     );
 
     if (batch.empty()) {
+      complete = false;
       break; // defensive: no progress is possible
     }
 
@@ -748,12 +767,20 @@ std::string fold_session_memory(
         );
       }
 
+      complete = false;
       break;
     }
 
     memory = text;
     watermark = batch.back()->id_;
     first += batch.size();
+  }
+
+  // Persist only when every batch succeeded. A partial pass is discarded: the
+  // local `memory` is dropped and the caller keeps the stored one, so memory and
+  // watermark can never disagree.
+  if (!complete) {
+    return session.memory_;
   }
 
   db.set_session_memory(session.id_, memory, watermark);
