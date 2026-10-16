@@ -8,11 +8,6 @@ The interface is a flat, IDE-like shell in the spirit of [Zed](https://zed.dev) 
 low contrast, hand-drawn chrome, no speech bubbles or centred column — built with
 Qt Widgets, with no JavaScript anywhere in the stack.
 
-> **Status.** The application has been reconstructed from the ground up. The design
-> is frozen in `.local-notes/design-1.md`; the previous implementation is parked,
-> unbuilt, under `src/.old/`. The data format is new: no migration from the old
-> database or settings file is performed.
-
 ---
 
 ## Contents
@@ -135,6 +130,7 @@ CREATE TABLE session (
   memory_watermark                  INTEGER NOT NULL DEFAULT 0,
   assistant_memory_watermark        INTEGER NOT NULL DEFAULT 0,
   shared_directory                  TEXT,
+  pinned                            INTEGER NOT NULL DEFAULT 0,
   summary_trigger_tokens            INTEGER NOT NULL DEFAULT 16000,
   summary_token_budget              INTEGER NOT NULL DEFAULT 4000,
   summary_reasoning_headroom_tokens INTEGER NOT NULL DEFAULT 12000,
@@ -155,7 +151,10 @@ CREATE TABLE message (
 
 A session's position in the sidebar is a **query** (`MAX(made_at)` per session), not
 a stored column. `made_at` is required because the assistant memory gathers messages
-from every session, interleaved by time.
+from every session, interleaved by time. `pinned` only lifts a session into the
+`PINNED` category; the ordering within a category is still that query. The schema is
+versioned through `PRAGMA user_version`, and an older file is migrated forward when it
+is opened.
 
 ## Configuration
 
@@ -282,15 +281,22 @@ heavy highlights.
   it lives only in the sidebar row.
 - **Sidebar** — no header band of its own: below the unified title bar, a flat
   full-width **New Session** row (styled like a list item: no border, a subtle hover
-  fill) sitting above the `SESSIONS` category label, the session list (newest
+  fill) sitting above a `PINNED` category (shown only while a session is pinned) and
+the `SESSIONS` category, the session list (newest
   activity first, ordered by the time of the last message), and the current-assistant
   block at the foot (assistant name, model, a settings button). A single hairline
   separates the sidebar from the chat pane; the sidebar sits on the `surface` colour.
   Session rows are flat and full-width — the title on the first line and the
   last-message time on the second — with a hairline above the assistant block and no
-  rounded corners or gaps anywhere. Each row reveals an **edit** pencil and a
-  **trash** action on hover; deleting asks for confirmation. The hovered and selected
+  rounded corners or gaps anywhere. Each row reveals a **pin** toggle, an **edit**
+  pencil and a **trash** action on hover; the pin moves the session between the two
+  categories, and deleting asks for confirmation. The hovered and selected
   rows fill edge to edge with a slightly brighter shade — no strong accent highlight.
+- **Status bar** — a narrow strip along the very bottom, on the `surface` colour with
+  a hairline above it. At its left, an icon toggles the sidebar's visibility; at its
+  right, the number of running generation tasks is shown, and clicking it opens a
+  modeless **Running Tasks** window listing each task's session, tool-call round and
+  elapsed time.
 - **Chat pane** — the transcript, below the unified title bar. All messages
   share one width and one left edge, the way Zed's agent panel reads; the user's own
   message is a rounded, bordered block, and assistant replies are
@@ -378,7 +384,8 @@ A `linux-x64-release` preset is also provided.
 
 The monochrome chrome icons (the composer actions and the sidebar's New Session
 glyph, the message hover actions — copy, edit and delete — the session-row hover
-actions and the settings cog), the application icon and the default theme are
+actions, the pin toggle, the status bar's sidebar toggle and running-task glyph, and
+the settings cog), the application icon and the default theme are
 compiled into the binaries through the Qt resource system (`assets/local-notebook.qrc`,
 `CMAKE_AUTORCC`), so a deployed build carries them without loose files beside the
 executable and without depending on the system icon theme.
@@ -431,10 +438,13 @@ ctest --test-dir build/linux-x64-debug --output-on-failure
 ```
 
 - **`store`** — headless: the store layer, session/message round-trips, ordering,
-  cascade delete, and the summariser payload shape.
+  pinned ordering and the version-1 migration, cascade delete, and the summariser
+  payload shape.
 - **`ui`** — offscreen (`QT_QPA_PLATFORM=offscreen`): window chrome invariants, the
-  sidebar populating at startup, settings persistence, the shared assistant form, the
-  settings navigation, settings reload-on-show and restore-to-defaults, the budget and
+  sidebar populating at startup, the pinned category split, the transcript's render
+  budget, settings persistence, the shared assistant form, the
+  settings navigation, settings reload-on-show and restyling on a theme change, and
+  restore-to-defaults, the budget and
   summarisation presets, the wheel-safe spin boxes, combo boxes and font selectors, the
   background-image cache, the summarisation review window (including its cross-thread
   marshalling), and the composer.

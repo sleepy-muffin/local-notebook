@@ -12,6 +12,7 @@
 #include <QSizePolicy>
 #include <QSpinBox>
 #include <QString>
+#include <QVariant>
 #include <QWidget>
 
 #include <cstddef>
@@ -119,10 +120,35 @@ inline QFont scaled_font(double delta, bool bold) {
   return font;
 }
 
+// Sets a label's font from the base UI font and tags it, so a window that is
+// cached across shows (the settings window, the running-tasks window) can
+// re-derive the font after a font change instead of keeping the one it was built
+// with. The tag is a relative size (in points) plus a bold flag.
+inline QLabel* apply_derived_font(QLabel* label, double delta, bool bold) {
+  label->setProperty("lnbFontDelta", delta);
+  label->setProperty("lnbFontBold", bold);
+  label->setFont(scaled_font(delta, bold));
+  return label;
+}
+
+// Re-derives the font of every tagged label in `root` from the current base UI
+// font. Labels that were never tagged are left alone.
+inline void reapply_derived_fonts(QWidget* root) {
+  for (QLabel* label : root->findChildren<QLabel*>()) {
+    const QVariant delta = label->property("lnbFontDelta");
+
+    if (!delta.isValid()) {
+      continue;
+    }
+
+    label->setFont(scaled_font(delta.toDouble(), label->property("lnbFontBold").toBool()));
+  }
+}
+
 inline QLabel* section_label(QWidget* parent, const QString& text) {
   auto* label = new QLabel(text, parent);
   label->setObjectName(QStringLiteral("SectionLabel"));
-  label->setFont(scaled_font(0.0, true));
+  apply_derived_font(label, 0.0, true);
   // Wrapping keeps a heading from forcing a page wider than its viewport on
   // platforms with wide font metrics, where the settings pages are the tightest
   // fit in the application.

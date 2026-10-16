@@ -12,6 +12,7 @@
 #include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
+#include <QEvent>
 #include <QFile>
 #include <QFrame>
 #include <QIcon>
@@ -475,6 +476,94 @@ void test_session_row_action_icons(QApplication& app) {
 
   CHECK(distinct_colours(delegate.edit_button_rect(option)) > 1);
   CHECK(distinct_colours(delegate.delete_button_rect(option)) > 1);
+  CHECK(distinct_colours(delegate.pin_button_rect(option)) > 1);
+}
+
+// --- Pinned category ----------------------------------------------------------
+
+// A pinned session is listed in its own category above SESSIONS; an unpinned one
+// stays in SESSIONS. The band is present exactly while something is pinned.
+void test_pinned_category() {
+  enter_scratch("pinned-category");
+
+  lnb::Application notebook;
+  notebook.open_assistant("99999999-9999-9999-9999-999999999999", make_assistant());
+
+  lnb::Session pinned_session;
+  pinned_session.title_ = "Pinned one";
+  pinned_session.pinned_ = true;
+  notebook.sessions().create(pinned_session);
+
+  lnb::Session plain_session;
+  plain_session.title_ = "Plain one";
+  notebook.sessions().create(plain_session);
+
+  ui::MainWindow window(notebook);
+  window.resize(1080, 720);
+  window.show();
+  QApplication::processEvents();
+
+  auto* pinned_view = window.findChild<QListView*>(QStringLiteral("PinnedSessions"));
+  CHECK(pinned_view != nullptr);
+  if (pinned_view != nullptr) {
+    CHECK(pinned_view->model() != nullptr);
+    CHECK(pinned_view->model()->rowCount() == 1);
+    CHECK(pinned_view->isVisible());
+  }
+
+  auto* sessions_view = window.findChild<QListView*>(QStringLiteral("Sessions"));
+  CHECK(sessions_view != nullptr);
+  if (sessions_view != nullptr) {
+    CHECK(sessions_view->model() != nullptr);
+    CHECK(sessions_view->model()->rowCount() == 1);
+  }
+
+  // Both lists share the row delegate, whose pin action is the only affordance
+  // for moving a session between the two categories.
+  CHECK(dynamic_cast<ui::SessionItemDelegate*>(pinned_view->itemDelegate()) != nullptr);
+  CHECK(dynamic_cast<ui::SessionItemDelegate*>(sessions_view->itemDelegate()) != nullptr);
+}
+
+// --- Render budget ------------------------------------------------------------
+
+// The transcript keeps no more than the configured initial rendering amount once
+// new content arrives: a streaming row reserves its place by unloading the oldest
+// rendered history first.
+void test_render_limit_unloads_history() {
+  enter_scratch("render-limit");
+
+  lnb::Application notebook;
+  notebook.open_assistant("12121212-1212-1212-1212-121212121212", make_assistant());
+
+  const std::uint32_t session_id = notebook.sessions().create(lnb::Session{});
+
+  for (int i = 0; i < 10; ++i) {
+    notebook.messages(session_id).append(
+        lnb::Role::User, (QStringLiteral("message %1").arg(i)).toStdString()
+    );
+  }
+
+  notebook.settings().rendered_message_limit = 3;
+
+  ui::ConversationView view(notebook, session_id);
+
+  const auto rendered = [&view]() {
+    // The oldest rows are dropped with deleteLater, so process the deferred
+    // deletions before counting what is still in the widget tree.
+    QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    return view.findChildren<QFrame*>(QStringLiteral("MessageBubble")).size();
+  };
+
+  CHECK(rendered() == 3);
+
+  // A new row arriving needs one slot: the transcript makes room for it and stays
+  // within the configured amount.
+  view.enforce_render_limit(1);
+  CHECK(rendered() == 2);
+
+  // Without new content there is nothing more to unload.
+  view.enforce_render_limit(0);
+  CHECK(rendered() == 2);
 }
 
 // --- Settings window ----------------------------------------------------------
@@ -573,6 +662,67 @@ void test_settings_window_nav([[maybe_unused]] QApplication& app) {
 }
 
 // --- Settings window: reload, restore, presets -------------------------------
+
+// A theme change reaches the settings window's own scoped stylesheet on the next
+// show. The scoped sheet outranks the application sheet for this dialog's
+// subtree, so without rebuilding it the controls and cards would keep the colours
+// they were built with until the application restarted.
+void test_settings_window_restyles_on_show(QApplication& app) {
+  enter_scratch("settings-restyle");
+
+  lnb::Application notebook;
+  notebook.open_assistant("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", make_assistant());
+
+  lnb::Settings first;
+  first.theme = QStringLiteral("Catppuccin Mocha").toStdString();
+  ui::apply_theme(app, first);
+
+  ui::SettingsWindow window(notebook);
+  window.resize(780, 580);
+  window.show();
+  QApplication::processEvents();
+
+  const QString mocha = window.styleSheet();
+  CHECK(mocha.contains(QStringLiteral("QFrame#Card")));
+
+  // Switching the theme must rebuild the scoped sheet on the next show. Hiding
+  // first makes the following show() deliver a fresh showEvent.
+  lnb::Settings second;
+  second.theme = QStringLiteral("Catppuccin Latte").toStdString();
+  ui::apply_theme(app, second);
+
+  window.hide();
+  QApplication::processEvents();
+  window.show();
+  QApplication::processEvents();
+
+  const QString latte = window.styleSheet();
+  CHECK(latte.contains(QStringLiteral("QFrame#Card")));
+  CHECK(latte != mocha);
+
+  // A font change is reflected too: the derived fonts are re-applied on show,
+  // since a stylesheet cannot refresh a programmatically set font.
+  lnb::Settings bigger;
+  bigger.ui_font_size = 20;
+  ui::apply_theme(app, bigger);
+
+  window.hide();
+  QApplication::processEvents();
+  window.show();
+  QApplication::processEvents();
+
+  auto* heading = window.findChild<QLabel*>(QStringLiteral("PageTitle"));
+  CHECK(heading != nullptr);
+  if (heading != nullptr) {
+    // The page heading is the base size plus four points.
+    CHECK(heading->font().pointSizeF() >= 24.0);
+  }
+
+  window.close();
+
+  // Leave the default theme installed for the tests that follow.
+  ui::apply_theme(app, lnb::Settings{});
+}
 
 // A cancelled edit must not survive into the next visit: every show re-reads the
 // stored settings.
@@ -1274,8 +1424,11 @@ int main(int argc, char** argv) {
   test_assistant_log_file();
   test_session_action_click_flag();
   test_session_row_action_icons(app);
+  test_pinned_category();
+  test_render_limit_unloads_history();
   test_settings_window_nav(app);
   test_settings_reload_on_show(app);
+  test_settings_window_restyles_on_show(app);
   test_settings_restore_defaults(app);
   test_assistant_form_preset();
   test_session_editor_preset();

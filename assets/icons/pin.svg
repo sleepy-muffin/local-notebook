@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- Pin: the session row's pin/unpin action. A map pin (an octagonal head with
+       a tapered tip) whose inner octagon is an even-odd hole. Straight lines
+       only, so rasterise.py can render it. Monochrome; recoloured at runtime. -->
+  <path fill-rule="evenodd" d="M12 4 L15.5 5.5 L17 9 L15.5 12.5 L12 20 L8.5 12.5 L7 9 L8.5 5.5 Z M12 7 L13.5 7.6 L14 9 L13.5 10.4 L12 11 L10.5 10.4 L10 9 L10.5 7.6 Z" fill="#000000"/>
+</svg>

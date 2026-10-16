@@ -539,6 +539,9 @@ ChatCompletionResult generate_reply(
 
     lnb::log::info("generate_reply round={}", round);
 
+    // Publish the round so the running-task readout can show progress.
+    task.set_rounds(round);
+
     result = send_message_once(
         payload, task, stop_token, api_url, api_key, proxy, "chat"
     );

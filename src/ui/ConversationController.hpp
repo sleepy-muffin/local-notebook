@@ -38,6 +38,16 @@ public:
 
   [[nodiscard]] bool busy() const { return running_; }
 
+  // Progress of the in-flight turn, for the running-task readout: the tool-call
+  // round reached and how long the turn has been running. Both zero when no turn
+  // is running.
+  struct Progress {
+    std::size_t rounds = 0;
+    std::int64_t elapsed_ms = 0;
+  };
+
+  [[nodiscard]] Progress progress() const;
+
   // Appends the user message, then starts a turn in the background.
   void send(std::string text);
 

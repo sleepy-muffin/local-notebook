@@ -29,6 +29,7 @@
 #include "ui/SessionListModel.hpp"
 #include "ui/SettingsWindow.hpp"
 #include "ui/SessionEditor.hpp"
+#include "ui/TasksWindow.hpp"
 #include "ui/theme.hpp"
 
 namespace ui {
@@ -49,6 +50,10 @@ constexpr int kNewSessionPadding = 4;
 // The narrow band height of the unified title bar, so the chrome reads as one
 // continuous strip across the top of the window.
 constexpr int kBandHeight = 38;
+
+// The status bar's height. It is a touch shorter than the title bar, so it reads
+// as a status strip rather than a second header.
+constexpr int kStatusBarHeight = 26;
 
 // How many recent messages are enough to estimate the next request's context
 // usage; the verbatim window is a suffix, so this bounds the work.
@@ -137,6 +142,9 @@ MainWindow::MainWindow(lnb::Application& app, QWidget* parent)
   connect(poll_timer_, &QTimer::timeout, this, [this]() { poll_conversations(); });
 
   poll_timer_->start(33);
+
+  // Seed the status bar's running-task readout so it does not start blank.
+  update_task_indicator();
 }
 
 MainWindow::~MainWindow() = default;
@@ -167,21 +175,71 @@ void MainWindow::build_ui() {
   body->setContentsMargins(0, 0, 0, 0);
   body->setSpacing(0);
 
-  body->addWidget(build_sidebar());
+  sidebar_ = build_sidebar();
+  body->addWidget(sidebar_);
 
-  auto* separator = new QWidget(this);
-  separator->setObjectName(QStringLiteral("SidebarSeparator"));
-  separator->setAttribute(Qt::WA_StyledBackground, true);
-  separator->setFixedWidth(1);
-  body->addWidget(separator);
+  sidebar_separator_ = new QWidget(this);
+  sidebar_separator_->setObjectName(QStringLiteral("SidebarSeparator"));
+  sidebar_separator_->setAttribute(Qt::WA_StyledBackground, true);
+  sidebar_separator_->setFixedWidth(1);
+  body->addWidget(sidebar_separator_);
 
   body->addWidget(build_right_pane(), 1);
 
   root->addLayout(body, 1);
 
+  // The status strip closes the window: the sidebar toggle on the left, the
+  // running-task indicator on the right.
+  root->addWidget(build_status_bar());
+
   // Applied last, so the scoped rules and the derived fonts reach the widgets
   // that now exist.
   apply_window_style();
+}
+
+QWidget* MainWindow::build_status_bar() {
+  auto* bar = new QFrame(this);
+  bar->setObjectName(QStringLiteral("StatusBar"));
+  bar->setAttribute(Qt::WA_StyledBackground, true);
+  bar->setFixedHeight(kStatusBarHeight);
+
+  auto* layout = new QHBoxLayout(bar);
+  layout->setContentsMargins(6, 0, 10, 0);
+  layout->setSpacing(8);
+
+  // Left: the sidebar toggle, flat and borderless like the composer actions.
+  sidebar_toggle_ = new QToolButton(bar);
+  sidebar_toggle_->setObjectName(QStringLiteral("SidebarToggle"));
+  sidebar_toggle_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+  sidebar_toggle_->setAutoRaise(true);
+  sidebar_toggle_->setFocusPolicy(Qt::NoFocus);
+  sidebar_toggle_->setCursor(Qt::PointingHandCursor);
+  sidebar_toggle_->setFixedSize(20, 20);
+  sidebar_toggle_->setIconSize(QSize(15, 15));
+  sidebar_toggle_->setToolTip(QStringLiteral("Toggle sidebar"));
+
+  connect(
+      sidebar_toggle_, &QToolButton::clicked, this, [this]() { toggle_sidebar(); }
+  );
+
+  // Right: the running-task count, clickable to open the tasks window.
+  task_indicator_ = new QToolButton(bar);
+  task_indicator_->setObjectName(QStringLiteral("TaskIndicator"));
+  task_indicator_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+  task_indicator_->setAutoRaise(true);
+  task_indicator_->setFocusPolicy(Qt::NoFocus);
+  task_indicator_->setCursor(Qt::PointingHandCursor);
+  task_indicator_->setIconSize(QSize(15, 15));
+
+  connect(
+      task_indicator_, &QToolButton::clicked, this, [this]() { open_tasks_window(); }
+  );
+
+  layout->addWidget(sidebar_toggle_);
+  layout->addStretch(1);
+  layout->addWidget(task_indicator_);
+
+  return bar;
 }
 
 QWidget* MainWindow::build_title_bar() {
@@ -235,6 +293,12 @@ void MainWindow::apply_window_style() {
           "QWidget#SidebarSeparator { background: %3; }"
           "QFrame#TitleBar { background: %4; border: none;"
           "  border-bottom: 1px solid %3; }"
+          "QFrame#StatusBar { background: %4; border: none;"
+          "  border-top: 1px solid %3; }"
+          "QToolButton#SidebarToggle, QToolButton#TaskIndicator { background: transparent;"
+          "  border: none; border-radius: 4px; padding: 0 4px; color: %2; }"
+          "QToolButton#SidebarToggle:hover, QToolButton#TaskIndicator:hover {"
+          "  background: %5; }"
           "QFrame#CurrentUser { background: transparent; border: none;"
           "  border-top: 1px solid %3; }"
           "QListView#Sessions { background: transparent; border: none; outline: none; }"
@@ -313,6 +377,90 @@ void MainWindow::apply_window_style() {
 
     current_settings_->setIcon(gear);
   }
+
+  // The status bar's two icons follow the theme as well.
+  if (sidebar_toggle_ != nullptr) {
+    QIcon icon = resource_icon(QStringLiteral("sidebar"), c.text_muted, c.text_muted);
+    if (icon.isNull()) {
+      icon = style()->standardIcon(QStyle::SP_FileDialogListView);
+    }
+    sidebar_toggle_->setIcon(icon);
+  }
+
+  if (task_indicator_ != nullptr) {
+    QIcon icon = resource_icon(QStringLiteral("tasks"), c.text_muted, c.text_muted);
+    if (icon.isNull()) {
+      icon = style()->standardIcon(QStyle::SP_FileDialogDetailedView);
+    }
+    task_indicator_->setIcon(icon);
+  }
+}
+
+QListView* MainWindow::build_session_list(
+    QWidget* parent, const QString& object_name, SessionListModel*& model,
+    SessionItemDelegate*& delegate
+) {
+  auto* view = new QListView(parent);
+  view->setObjectName(object_name);
+  view->setSelectionMode(QAbstractItemView::SingleSelection);
+  view->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  view->setFrameShape(QFrame::NoFrame);
+  view->setFrameShadow(QFrame::Plain);
+  view->setLineWidth(0);
+  view->setMidLineWidth(0);
+  view->setSpacing(0);
+  view->setUniformItemSizes(true);
+  view->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+  view->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  view->setSelectionRectVisible(false);
+  view->setMouseTracking(true);
+  view->viewport()->setMouseTracking(true);
+  view->viewport()->setAutoFillBackground(false);
+  view->setMinimumWidth(0);
+
+  model = new SessionListModel(view);
+  view->setModel(model);
+
+  delegate = new SessionItemDelegate(view);
+  view->setItemDelegate(delegate);
+
+  // Bind the model and delegate by value: they outlive this call, but the
+  // reference parameters do not.
+  SessionListModel* const bound_model = model;
+  SessionItemDelegate* const bound_delegate = delegate;
+
+  bound_delegate->set_pin_handler([this, bound_model](const QModelIndex& index) {
+    pin_session(bound_model->session_id_at(index.row()));
+  });
+  bound_delegate->set_edit_handler([this, bound_model](const QModelIndex& index) {
+    edit_session(bound_model->session_id_at(index.row()));
+  });
+  bound_delegate->set_delete_handler([this, bound_model](const QModelIndex& index) {
+    delete_session(bound_model->session_id_at(index.row()));
+  });
+
+  // A press starts a fresh interaction, so drop any stale action-click mark.
+  connect(
+      view, &QListView::pressed, this,
+      [bound_delegate](const QModelIndex&) { bound_delegate->clear_action_click(); }
+  );
+
+  connect(
+      view, &QListView::clicked, this,
+      [this, bound_model, bound_delegate](const QModelIndex& index) {
+        // Clicking a row's action icon must not also switch to that session; the
+        // delegate flags such a click before `clicked` is emitted.
+        if (bound_delegate->take_action_click()) {
+          return;
+        }
+
+        if (index.isValid()) {
+          open_conversation(bound_model->session_id_at(index.row()));
+        }
+      }
+  );
+
+  return view;
 }
 
 QWidget* MainWindow::build_sidebar() {
@@ -353,6 +501,36 @@ QWidget* MainWindow::build_sidebar() {
 
   new_session_layout->addWidget(new_session_button_);
 
+  // ---- PINNED category + list ----
+  // Above SESSIONS, and hidden entirely while no session is pinned. The list
+  // sizes to its rows, so the SESSIONS category slides up under the New Session
+  // row whenever the band disappears.
+  pinned_band_ = new QWidget(sidebar);
+  auto* pinned_layout = new QVBoxLayout(pinned_band_);
+  pinned_layout->setContentsMargins(0, 0, 0, 0);
+  pinned_layout->setSpacing(0);
+
+  {
+    auto* pinned_category_row = new QWidget(pinned_band_);
+    auto* pinned_category_layout = new QHBoxLayout(pinned_category_row);
+    pinned_category_layout->setContentsMargins(kSidebarPadding, 10, kSidebarPadding, 4);
+    pinned_category_layout->setSpacing(0);
+
+    auto* pinned_category = new QLabel(QStringLiteral("PINNED"), pinned_category_row);
+    pinned_category->setObjectName(QStringLiteral("SidebarCategory"));
+
+    pinned_category_layout->addWidget(pinned_category);
+    pinned_category_layout->addStretch(1);
+    pinned_layout->addWidget(pinned_category_row);
+  }
+
+  pinned_view_ = build_session_list(
+      pinned_band_, QStringLiteral("PinnedSessions"), pinned_model_, pinned_delegate_
+  );
+  pinned_view_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  pinned_layout->addWidget(pinned_view_);
+  pinned_band_->setVisible(false);
+
   // ---- SESSIONS category ----
   // "Sessions" is a category identifier, not a title: small, muted, spaced.
   auto* category_row = new QWidget(sidebar);
@@ -366,63 +544,8 @@ QWidget* MainWindow::build_sidebar() {
   category_layout->addWidget(category_);
   category_layout->addStretch(1);
 
-  sessions_view_ = new QListView(sidebar);
-  sessions_view_->setObjectName(QStringLiteral("Sessions"));
-  sessions_view_->setSelectionMode(QAbstractItemView::SingleSelection);
-  sessions_view_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-  sessions_view_->setFrameShape(QFrame::NoFrame);
-  sessions_view_->setFrameShadow(QFrame::Plain);
-  sessions_view_->setLineWidth(0);
-  sessions_view_->setMidLineWidth(0);
-  sessions_view_->setSpacing(0);
-  sessions_view_->setUniformItemSizes(true);
-  sessions_view_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
-  sessions_view_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-  sessions_view_->setSelectionRectVisible(false);
-  sessions_view_->setMouseTracking(true);
-  sessions_view_->viewport()->setMouseTracking(true);
-  sessions_view_->viewport()->setAutoFillBackground(false);
-  sessions_view_->setMinimumWidth(0);
-
-  sessions_model_ = new SessionListModel(sessions_view_);
-  sessions_view_->setModel(sessions_model_);
-
-  sessions_delegate_ = new SessionItemDelegate(sessions_view_);
-  sessions_view_->setItemDelegate(sessions_delegate_);
-  sessions_delegate_->set_edit_handler(
-      [this](const QModelIndex& index) {
-        edit_session(sessions_model_->session_id_at(index.row()));
-      }
-  );
-  sessions_delegate_->set_delete_handler(
-      [this](const QModelIndex& index) {
-        delete_session(sessions_model_->session_id_at(index.row()));
-      }
-  );
-
-  // A press starts a fresh interaction, so drop any stale action-click mark.
-  connect(
-      sessions_view_, &QListView::pressed, this,
-      [this](const QModelIndex&) {
-        if (sessions_delegate_ != nullptr) {
-          sessions_delegate_->clear_action_click();
-        }
-      }
-  );
-
-  connect(
-      sessions_view_, &QListView::clicked, this,
-      [this](const QModelIndex& index) {
-        // Clicking a row's edit/delete icon must not also switch to that
-        // session; the delegate flags such a click before `clicked` is emitted.
-        if (sessions_delegate_ != nullptr && sessions_delegate_->take_action_click()) {
-          return;
-        }
-
-        if (index.isValid()) {
-          open_conversation(sessions_model_->session_id_at(index.row()));
-        }
-      }
+  sessions_view_ = build_session_list(
+      sidebar, QStringLiteral("Sessions"), sessions_model_, sessions_delegate_
   );
 
   // ---- Current assistant block (name, model, and the settings action) ----
@@ -467,6 +590,7 @@ QWidget* MainWindow::build_sidebar() {
   current_layout->addWidget(current_settings_);
 
   layout->addWidget(new_session_row);
+  layout->addWidget(pinned_band_);
   layout->addWidget(category_row);
   layout->addWidget(sessions_view_, 1);
   layout->addWidget(current_user);
@@ -502,7 +626,7 @@ QWidget* MainWindow::build_right_pane() {
 }
 
 void MainWindow::refresh_sessions() {
-  if (sessions_model_ == nullptr) {
+  if (sessions_model_ == nullptr || pinned_model_ == nullptr) {
     return;
   }
 
@@ -513,12 +637,25 @@ void MainWindow::refresh_sessions() {
   const std::unordered_map<std::uint32_t, std::string> last_times =
       app_.db().session_last_times();
 
-  std::vector<std::string> row_times;
-  row_times.reserve(sessions.size());
+  // Split into the two categories. most_recent() already returns pinned sessions
+  // first and each group keeps its newest-message order, so no extra sort is
+  // needed.
+  std::vector<lnb::Session> pinned;
+  std::vector<lnb::Session> rest;
+  std::vector<std::string> pinned_times;
+  std::vector<std::string> rest_times;
 
   for (const lnb::Session& session : sessions) {
     const auto it = last_times.find(session.id_);
-    row_times.push_back(it == last_times.end() ? std::string{} : it->second);
+    const std::string time = it == last_times.end() ? std::string{} : it->second;
+
+    if (session.pinned_) {
+      pinned.push_back(session);
+      pinned_times.push_back(time);
+    } else {
+      rest.push_back(session);
+      rest_times.push_back(time);
+    }
   }
 
   // Prune views for sessions that no longer exist.
@@ -554,32 +691,65 @@ void MainWindow::refresh_sessions() {
     }
   }
 
-  // Only reset the model when the order, the titles or the row times actually
-  // changed, so a new message does not clear and rebuild the list on every turn.
-  bool same = static_cast<std::size_t>(sessions_model_->rowCount()) == sessions.size();
+  // Only reset a model when its order, titles, times or pin states actually
+  // changed, so a new message does not clear and rebuild the lists on every turn.
+  const auto unchanged = [](
+                             const SessionListModel* model,
+                             const std::vector<lnb::Session>& rows,
+                             const std::vector<std::string>& times
+                         ) {
+    if (static_cast<std::size_t>(model->rowCount()) != rows.size()) {
+      return false;
+    }
 
-  if (same) {
-    for (int row = 0; row < sessions_model_->rowCount(); ++row) {
-      const lnb::Session stored = sessions_model_->session_at(row);
-      if (stored.id_ != sessions[static_cast<std::size_t>(row)].id_ ||
-          stored.title_ != sessions[static_cast<std::size_t>(row)].title_ ||
-          sessions_model_->last_time_at(row) != row_times[static_cast<std::size_t>(row)]) {
-        same = false;
-        break;
+    for (int row = 0; row < model->rowCount(); ++row) {
+      const lnb::Session stored = model->session_at(row);
+      const lnb::Session& wanted = rows[static_cast<std::size_t>(row)];
+
+      if (stored.id_ != wanted.id_ || stored.title_ != wanted.title_ ||
+          stored.pinned_ != wanted.pinned_ ||
+          model->last_time_at(row) != times[static_cast<std::size_t>(row)]) {
+        return false;
       }
     }
+
+    return true;
+  };
+
+  if (!unchanged(pinned_model_, pinned, pinned_times)) {
+    pinned_model_->set_sessions(std::move(pinned), std::move(pinned_times));
   }
 
-  if (!same) {
-    sessions_model_->set_sessions(std::move(sessions), std::move(row_times));
+  if (!unchanged(sessions_model_, rest, rest_times)) {
+    sessions_model_->set_sessions(std::move(rest), std::move(rest_times));
   }
 
-  // Re-select the current session (a model reset clears the selection).
-  const int row = sessions_model_->row_for(current_session_);
-  if (row >= 0) {
-    sessions_view_->setCurrentIndex(sessions_model_->index(row, 0));
-  } else {
+  // The pinned band sizes to its rows and disappears entirely when empty.
+  int pinned_height = 0;
+
+  for (int row = 0; row < pinned_model_->rowCount(); ++row) {
+    pinned_height += std::max(0, pinned_view_->sizeHintForRow(row));
+  }
+
+  pinned_view_->setFixedHeight(pinned_height);
+  pinned_band_->setVisible(pinned_model_->rowCount() > 0);
+
+  // Re-select the current session (a model reset clears the selection). It lives
+  // in exactly one of the two lists.
+  const int pinned_row = pinned_model_->row_for(current_session_);
+
+  if (pinned_row >= 0) {
+    pinned_view_->setCurrentIndex(pinned_model_->index(pinned_row, 0));
     sessions_view_->clearSelection();
+  } else {
+    pinned_view_->clearSelection();
+
+    const int row = sessions_model_->row_for(current_session_);
+    if (row >= 0) {
+      sessions_view_->setCurrentIndex(sessions_model_->index(row, 0));
+    } else {
+      sessions_view_->clearSelection();
+    }
   }
 
   update_current_block();
@@ -613,9 +783,18 @@ void MainWindow::open_conversation(std::uint32_t session_id) {
   current_session_ = session_id;
   workspace_->setCurrentWidget(it->second);
 
-  const int row = sessions_model_->row_for(session_id);
-  if (row >= 0 && sessions_view_->currentIndex().row() != row) {
-    sessions_view_->setCurrentIndex(sessions_model_->index(row, 0));
+  // The row lives in one of the two lists; select it there.
+  const int pinned_row = pinned_model_->row_for(session_id);
+
+  if (pinned_row >= 0) {
+    if (pinned_view_->currentIndex().row() != pinned_row) {
+      pinned_view_->setCurrentIndex(pinned_model_->index(pinned_row, 0));
+    }
+  } else {
+    const int row = sessions_model_->row_for(session_id);
+    if (row >= 0 && sessions_view_->currentIndex().row() != row) {
+      sessions_view_->setCurrentIndex(sessions_model_->index(row, 0));
+    }
   }
 
   update_header();
@@ -680,6 +859,99 @@ void MainWindow::poll_conversations() {
   for (ConversationView* view : views) {
     view->poll();
   }
+
+  update_task_indicator();
+}
+
+void MainWindow::toggle_sidebar() {
+  sidebar_visible_ = !sidebar_visible_;
+
+  if (sidebar_ != nullptr) {
+    sidebar_->setVisible(sidebar_visible_);
+  }
+
+  if (sidebar_separator_ != nullptr) {
+    sidebar_separator_->setVisible(sidebar_visible_);
+  }
+}
+
+void MainWindow::update_task_indicator() {
+  if (task_indicator_ == nullptr) {
+    return;
+  }
+
+  std::vector<TasksWindow::Entry> entries;
+
+  for (const auto& [id, view] : conversations_) {
+    if (view == nullptr || !view->busy()) {
+      continue;
+    }
+
+    const ConversationController::Progress progress = view->progress();
+    const auto session = app_.db().session(id);
+
+    TasksWindow::Entry entry;
+    entry.session_id = id;
+    entry.rounds = progress.rounds;
+    entry.elapsed_ms = progress.elapsed_ms;
+    entry.title = session.has_value() && !session->title_.empty()
+        ? from_utf8(session->title_)
+        : QStringLiteral("Session #%1").arg(id);
+
+    entries.push_back(std::move(entry));
+  }
+
+  const int count = static_cast<int>(entries.size());
+
+  if (count != shown_task_count_) {
+    shown_task_count_ = count;
+
+    // An idle status bar stays calm: the glyph alone when nothing is running, the
+    // glyph beside the count otherwise.
+    task_indicator_->setText(count == 0 ? QString() : QString::number(count));
+    task_indicator_->setToolTip(
+        count == 0 ? QStringLiteral("No tasks running")
+        : count == 1 ? QStringLiteral("1 task running")
+                     : QStringLiteral("%1 tasks running").arg(count)
+    );
+  }
+
+  // Only refresh the window while it is on screen, so a hidden one costs nothing.
+  if (tasks_window_ != nullptr && tasks_window_->isVisible()) {
+    tasks_window_->set_entries(std::move(entries));
+  }
+}
+
+void MainWindow::open_tasks_window() {
+  if (tasks_window_ == nullptr) {
+    tasks_window_ = new TasksWindow(this);
+  }
+
+  tasks_window_->show();
+  tasks_window_->raise();
+  tasks_window_->activateWindow();
+
+  // The window is visible now, so this populates it immediately rather than
+  // waiting for the next poll tick.
+  update_task_indicator();
+}
+
+void MainWindow::pin_session(std::uint32_t session_id) {
+  if (session_id == 0) {
+    return;
+  }
+
+  const auto stored = app_.db().session(session_id);
+
+  if (!stored.has_value()) {
+    return;
+  }
+
+  lnb::Session updated = *stored;
+  updated.pinned_ = !updated.pinned_;
+  app_.sessions().save(updated);
+
+  refresh_sessions();
 }
 
 void MainWindow::edit_session(std::uint32_t session_id) {

@@ -28,6 +28,11 @@ lnb::Session ConversationController::session() const {
   return stored.value_or(lnb::Session{});
 }
 
+ConversationController::Progress ConversationController::progress() const {
+  const GenerationTask::Snapshot snapshot = task_.snapshot();
+  return Progress{snapshot.rounds, snapshot.elapsed_ms};
+}
+
 void ConversationController::send(std::string text) {
   if (running_ || text.empty()) {
     return;

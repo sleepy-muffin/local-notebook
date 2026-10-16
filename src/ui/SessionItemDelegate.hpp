@@ -14,8 +14,8 @@ namespace ui {
 
 // Paints one session row: a flat, full-width hover or selected shading (the way
 // Zed's chrome behaves), the title on the first line and the last-message time on
-// the second, plus two hover-only actions — an edit pencil that opens the session
-// editor and a trash can that deletes it.
+// the second, plus three hover-only actions — a pin toggle, an edit pencil that
+// opens the session editor and a trash can that deletes it.
 //
 // The action icons are bundled in the binary and recoloured to the active theme
 // at runtime (see ui::resource_icon), exactly as the per-message actions in the
@@ -27,6 +27,7 @@ public:
 
   explicit SessionItemDelegate(QObject* parent = nullptr);
 
+  void set_pin_handler(ActionHandler handler);
   void set_edit_handler(ActionHandler handler);
   void set_delete_handler(ActionHandler handler);
 
@@ -52,19 +53,23 @@ public:
   [[nodiscard]] bool take_action_click();
   void clear_action_click();
 
-  // The two action hit areas within a row. Public so hit-testing is possible
+  // The three action hit areas within a row. Public so hit-testing is possible
   // without duplicating the layout constants.
   [[nodiscard]] QRect delete_button_rect(const QStyleOptionViewItem& option) const;
   [[nodiscard]] QRect edit_button_rect(const QStyleOptionViewItem& option) const;
+  [[nodiscard]] QRect pin_button_rect(const QStyleOptionViewItem& option) const;
 
 private:
-  // Rebuilds the two action icons when the theme's muted colour changes, so a
+  // Rebuilds the action icons when the theme's muted colour changes, so a
   // theme switch is picked up without an explicit refresh hook.
   void ensure_icons() const;
 
+  ActionHandler pin_handler_;
   ActionHandler edit_handler_;
   ActionHandler delete_handler_;
 
+  mutable QIcon pin_icon_;         // muted, for an unpinned row
+  mutable QIcon pin_active_icon_;  // accent, for a pinned row
   mutable QIcon edit_icon_;
   mutable QIcon delete_icon_;
   mutable QColor icons_colour_;

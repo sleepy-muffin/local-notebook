@@ -77,6 +77,8 @@ add_library(local-notebook-core STATIC
         src/ui/SessionEditor.cpp
         src/ui/SummaryReviewDialog.hpp
         src/ui/SummaryReviewDialog.cpp
+        src/ui/TasksWindow.hpp
+        src/ui/TasksWindow.cpp
         src/ui/MainWindow.hpp
         src/ui/MainWindow.cpp
 )

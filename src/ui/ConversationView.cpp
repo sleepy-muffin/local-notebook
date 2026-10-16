@@ -840,7 +840,10 @@ ConversationView::ConversationView(
 
   controller_.set_on_stream([this](const std::string& text) {
     // Create the reply row on the first token so the reply has a place to land.
+    // Make room first: the transcript must never keep more than the configured
+    // amount of rendered history once new content starts arriving.
     if (streaming_row_ == nullptr) {
+      enforce_render_limit(1);
       streaming_row_ = add_row(MessageBubble::Role::Assistant, 0, false);
     }
 
@@ -856,6 +859,7 @@ ConversationView::ConversationView(
     streaming_status_ = from_utf8(status);
 
     if (streaming_row_ == nullptr) {
+      enforce_render_limit(1);
       streaming_row_ = add_row(MessageBubble::Role::Assistant, 0, false);
     }
 
@@ -920,6 +924,43 @@ void ConversationView::reload() {
   scroll_to_bottom();
   set_busy(controller_.busy());
   updating_ = false;
+}
+
+void ConversationView::enforce_render_limit(std::size_t reserved) {
+  const std::size_t limit = static_cast<std::size_t>(
+      std::max(1, app_.settings().rendered_message_limit)
+  );
+
+  bool changed = false;
+
+  // The rendered rows are a suffix of messages_ laid out in chronological order
+  // after the leading stretch (index 0) and the load-older button (index 1), so
+  // the oldest rendered row is always the first widget at index 2. Dropping it is
+  // exactly reducing the suffix, so rendered_count_ stays authoritative.
+  while (rendered_count_ + reserved > limit && rendered_count_ > 0) {
+    QLayoutItem* item = transcript_layout_->itemAt(2);
+    QWidget* widget = item != nullptr ? item->widget() : nullptr;
+    auto* row = dynamic_cast<MessageRow*>(widget);
+
+    if (row == nullptr || row == streaming_row_) {
+      break;
+    }
+
+    const auto it = std::find(rows_.begin(), rows_.end(), row);
+
+    if (it != rows_.end()) {
+      rows_.erase(it);
+    }
+
+    transcript_layout_->takeAt(2);
+    row->deleteLater();
+    --rendered_count_;
+    changed = true;
+  }
+
+  if (changed) {
+    update_load_older_visibility();
+  }
 }
 
 void ConversationView::refresh_style() {

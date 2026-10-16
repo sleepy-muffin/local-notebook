@@ -174,6 +174,7 @@ void test_session_round_trip(const std::filesystem::path& path) {
   session.memory_watermark_ = 7;
   session.assistant_memory_watermark_ = 3;
   session.shared_directory_ = "/tmp/shared";
+  session.pinned_ = true;
   session.summary_trigger_tokens_ = 111;
   session.summary_token_budget_ = 222;
   session.summary_reasoning_headroom_tokens_ = 333;
@@ -195,6 +196,7 @@ void test_session_round_trip(const std::filesystem::path& path) {
   CHECK(loaded->assistant_memory_watermark_ == 3);
   CHECK(loaded->shared_directory_.has_value());
   CHECK(*loaded->shared_directory_ == "/tmp/shared");
+  CHECK(loaded->pinned_);
   CHECK(loaded->summary_trigger_tokens_ == 111);
   CHECK(loaded->summary_token_budget_ == 222);
   CHECK(loaded->summary_reasoning_headroom_tokens_ == 333);
@@ -210,14 +212,17 @@ void test_session_round_trip(const std::filesystem::path& path) {
   const auto loaded_no_dir = db.session(no_dir_id);
   CHECK(loaded_no_dir.has_value());
   CHECK(!loaded_no_dir->shared_directory_.has_value());
+  CHECK(!loaded_no_dir->pinned_);  // unpinned by default
 
   // Update round-trips.
   loaded->title_ = "Renamed";
   loaded->memory_ = "New memory";
+  loaded->pinned_ = false;
   db.update_session(*loaded);
   const auto reloaded = db.session(id);
   CHECK(reloaded->title_ == "Renamed");
   CHECK(reloaded->memory_ == "New memory");
+  CHECK(!reloaded->pinned_);
 
   // Missing session.
   CHECK(!db.session(9999).has_value());
@@ -357,6 +362,87 @@ void test_sessions_by_recent(const std::filesystem::path& path) {
   CHECK(times.find(empty_id) == times.end());
 }
 
+// Pinned sessions are listed first, regardless of the time of their newest
+// message; within a group the newest message still wins.
+void test_pinned_ordering(const std::filesystem::path& path) {
+  lnb::store::database db(path.string());
+
+  lnb::Session pinned_old;
+  pinned_old.title_ = "Pinned old";
+  pinned_old.pinned_ = true;
+  const std::uint32_t pinned_id = db.insert_session(pinned_old);
+
+  lnb::Session plain_new;
+  plain_new.title_ = "Plain new";
+  const std::uint32_t plain_id = db.insert_session(plain_new);
+
+  auto append = [&db](std::uint32_t session_id, const std::string& made_at) {
+    lnb::Message message;
+    message.session_id_ = session_id;
+    message.role_ = lnb::Role::User;
+    message.content_ = "x";
+    message.made_at_ = made_at;
+    (void)db.insert_message(message);
+  };
+
+  // The pinned session is older, but still sorts first.
+  append(pinned_id, "2026-01-01T00:00:00Z");
+  append(plain_id, "2026-01-02T00:00:00Z");
+
+  const auto ordered = db.sessions_by_recent();
+  CHECK(ordered.size() == 2);
+  CHECK(ordered.size() == 2 && ordered[0].id_ == pinned_id);
+  CHECK(ordered.size() == 2 && ordered[1].id_ == plain_id);
+}
+
+// Opening a version-1 database (no `pinned` column) migrates it forward: the
+// column is added and the existing rows read as unpinned.
+void test_pinned_migration(const std::filesystem::path& path) {
+  {
+    lnb::store::connection conn(path.string());
+    conn.exec(R"sql(
+PRAGMA user_version = 1;
+CREATE TABLE session (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL DEFAULT '',
+  custom_instructions TEXT NOT NULL DEFAULT '',
+  memory TEXT NOT NULL DEFAULT '',
+  memory_watermark INTEGER NOT NULL DEFAULT 0,
+  assistant_memory_watermark INTEGER NOT NULL DEFAULT 0,
+  shared_directory TEXT,
+  summary_trigger_tokens INTEGER NOT NULL DEFAULT 16000,
+  summary_token_budget INTEGER NOT NULL DEFAULT 4000,
+  summary_reasoning_headroom_tokens INTEGER NOT NULL DEFAULT 12000,
+  max_tool_rounds INTEGER NOT NULL DEFAULT 8,
+  max_tool_calls INTEGER NOT NULL DEFAULT 32,
+  tool_output_max_tokens INTEGER NOT NULL DEFAULT 8000,
+  response_token_budget INTEGER NOT NULL DEFAULT 8000
+);
+CREATE TABLE message (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  role INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  made_at TEXT NOT NULL
+);
+INSERT INTO session (title) VALUES ('Legacy');
+)sql");
+  }
+
+  lnb::store::database db(path.string());
+
+  const auto ordered = db.sessions_by_recent();
+  CHECK(ordered.size() == 1);
+  CHECK(ordered.size() == 1 && ordered[0].title_ == "Legacy");
+  CHECK(ordered.size() == 1 && !ordered[0].pinned_);
+
+  // The migrated column is writable.
+  lnb::Session session = ordered[0];
+  session.pinned_ = true;
+  db.update_session(session);
+  CHECK(db.session(session.id_)->pinned_);
+}
+
 void test_cascade_delete(const std::filesystem::path& path) {
   lnb::store::database db(path.string());
 
@@ -453,6 +539,8 @@ int main() {
   run(test_messages);
   run(test_memory_bookkeeping);
   run(test_sessions_by_recent);
+  run(test_pinned_ordering);
+  run(test_pinned_migration);
   run(test_cascade_delete);
   run(test_managers);
 

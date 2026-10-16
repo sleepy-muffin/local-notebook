@@ -1,5 +1,8 @@
 #pragma once
 
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <mutex>
 #include <stop_token>
 #include <string>
@@ -32,6 +35,10 @@ public:
     // A non-fatal notice to show after a completed turn (for example, the reply
     // was cut off). Never persisted.
     std::string warning;
+    // Progress of a running turn: the tool-call round reached and how long it has
+    // been running. Both are zero for a task that has not started.
+    std::size_t rounds = 0;
+    std::int64_t elapsed_ms = 0;
   };
 
   GenerationTask() = default;
@@ -51,6 +58,8 @@ public:
     }
 
     status_ = Status::RUNNING;
+    started_at_ = std::chrono::steady_clock::now();
+    rounds_ = 0;
     return true;
   }
 
@@ -65,6 +74,7 @@ public:
     operation_status_.clear();
     error_.clear();
     warning_.clear();
+    rounds_ = 0;
     stop_source_ = std::stop_source{};
   }
 
@@ -91,6 +101,19 @@ public:
     }
 
     operation_status_.assign(status);
+    return true;
+  }
+
+  // Records the tool-call round the worker has reached, for the running-task
+  // readout. Ignored unless the task is running.
+  bool set_rounds(std::size_t rounds) {
+    std::lock_guard lock(mutex_);
+
+    if (status_ != Status::RUNNING) {
+      return false;
+    }
+
+    rounds_ = rounds;
     return true;
   }
 
@@ -160,6 +183,17 @@ public:
   Snapshot snapshot() const {
     std::lock_guard lock(mutex_);
 
+    // Elapsed time is only meaningful while the turn is in flight; a finished or
+    // not-yet-started task reports zero.
+    std::int64_t elapsed_ms = 0;
+
+    if (status_ == Status::RUNNING) {
+      elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - started_at_
+                   )
+                       .count();
+    }
+
     return Snapshot{
       status_,
       content_,
@@ -167,6 +201,8 @@ public:
       operation_status_,
       error_,
       warning_,
+      rounds_,
+      elapsed_ms,
     };
   }
 
@@ -191,6 +227,10 @@ private:
   std::string operation_status_;
   std::string error_;
   std::string warning_;
+
+  // Progress bookkeeping for the running-task readout.
+  std::chrono::steady_clock::time_point started_at_ = std::chrono::steady_clock::now();
+  std::size_t rounds_ = 0;
 };
 
 } // namespace lnb

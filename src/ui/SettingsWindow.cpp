@@ -58,15 +58,12 @@ QString rgba(const QColor& color) {
       .arg(color.alphaF());
 }
 
-// A titled card used by the Account and About pages.
+// A titled card used by the Account and About pages. Its frame is styled by the
+// window's own scoped sheet (see apply_style), so a theme change reaches it.
 QWidget* make_card(QWidget* parent, const QString& heading) {
   auto* card = new QFrame(parent);
   card->setObjectName(QStringLiteral("Card"));
   card->setAttribute(Qt::WA_StyledBackground, true);
-  card->setStyleSheet(
-      QStringLiteral("QFrame#Card { background: %1; border: 1px solid %2; border-radius: 8px; }")
-          .arg(rgba(theme().colors.base), rgba(theme().colors.border))
-  );
 
   auto* layout = new QVBoxLayout(card);
   layout->setContentsMargins(16, 14, 16, 14);
@@ -75,7 +72,7 @@ QWidget* make_card(QWidget* parent, const QString& heading) {
   if (!heading.isEmpty()) {
     auto* label = new QLabel(heading, card);
     label->setObjectName(QStringLiteral("SectionLabel"));
-    label->setFont(scaled_font(0.0, true));
+    apply_derived_font(label, 0.0, true);
     layout->addWidget(label);
     layout->addSpacing(4);
   }
@@ -96,7 +93,7 @@ QVBoxLayout* card_body(QWidget* card) {
 QLabel* value_label(QWidget* parent, const QString& text, bool prominent) {
   auto* label = new QLabel(text, parent);
   label->setObjectName(prominent ? QStringLiteral("PageTitle") : QStringLiteral("Muted"));
-  label->setFont(prominent ? scaled_font(1.0, true) : ui_font());
+  apply_derived_font(label, prominent ? 1.0 : 0.0, prominent);
   label->setWordWrap(true);
   return label;
 }
@@ -200,9 +197,27 @@ SettingsWindow::SettingsWindow(lnb::Application& app, QWidget* parent)
 
   outer->addWidget(footer);
 
+  apply_style();
+
+  connect(nav_, &QListWidget::currentRowChanged, this, [this](int row) {
+    if (row >= 0) {
+      stack_->setCurrentIndex(row);
+    }
+  });
+  nav_->setCurrentRow(0);
+
+  connect(close_button, &QPushButton::clicked, this, [this]() { reject(); });
+  connect(save_button, &QPushButton::clicked, this, [this]() { save(); });
+}
+
+void SettingsWindow::apply_style() {
   // Scoped chrome plus the navigation's own row states, so the rail reads like
-  // the sidebar session list.
+  // the sidebar session list. The card frame is styled here too (rather than on
+  // the widget) so a theme change reaches every card on the next show.
   QString sheet = dialog_stylesheet(QStringLiteral("SettingsWindow"));
+  sheet += QStringLiteral(
+               "QFrame#Card { background: %1; border: 1px solid %2; border-radius: 8px; }")
+               .arg(rgba(theme().colors.base), rgba(theme().colors.border));
   sheet += QStringLiteral(
                "QListWidget#SettingsNav::item { color: %1; padding: 7px 10px;"
                " border-radius: 6px; margin: 1px 0; }")
@@ -214,15 +229,10 @@ SettingsWindow::SettingsWindow(lnb::Application& app, QWidget* parent)
   sheet += QStringLiteral("QStackedWidget#SettingsStack { background: transparent; }");
   setStyleSheet(sheet);
 
-  connect(nav_, &QListWidget::currentRowChanged, this, [this](int row) {
-    if (row >= 0) {
-      stack_->setCurrentIndex(row);
-    }
-  });
-  nav_->setCurrentRow(0);
-
-  connect(close_button, &QPushButton::clicked, this, [this]() { reject(); });
-  connect(save_button, &QPushButton::clicked, this, [this]() { save(); });
+  // The derived fonts are set programmatically, so the stylesheet cannot refresh
+  // them: re-derive them from the current base font, which also covers a font
+  // change (not only a theme change).
+  reapply_derived_fonts(this);
 }
 
 void SettingsWindow::set_current_session(std::uint32_t session_id) {
@@ -241,7 +251,7 @@ QWidget* SettingsWindow::make_page(
 
   auto* heading = new QLabel(title, page);
   heading->setObjectName(QStringLiteral("PageTitle"));
-  heading->setFont(scaled_font(4.0, true));
+  apply_derived_font(heading, 4.0, true);
 
   auto* sub = new QLabel(subtitle, page);
   sub->setObjectName(QStringLiteral("PageSubtitle"));
@@ -797,7 +807,7 @@ QWidget* SettingsWindow::build_about_page() {
     QVBoxLayout* body = card_body(card);
 
     auto* name = value_label(card, QStringLiteral("Local Notebook"), true);
-    name->setFont(scaled_font(6.0, true));
+    apply_derived_font(name, 6.0, true);
     body->addWidget(name);
     body->addSpacing(2);
 
@@ -862,6 +872,11 @@ void SettingsWindow::write_metrics() {
 
 void SettingsWindow::showEvent(QShowEvent* event) {
   QDialog::showEvent(event);
+
+  // Rebuild the scoped sheet first: the theme may have changed since the last
+  // visit, and the dialog's own controls would otherwise keep the colours they
+  // were built with.
+  apply_style();
 
   // A cancelled edit must not survive into the next visit, so every open starts
   // from the stored state rather than from whatever was left in the widgets.

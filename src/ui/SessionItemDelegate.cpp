@@ -18,12 +18,13 @@ namespace ui {
 
 namespace {
 
-// The two hover actions sit at the right edge, delete outermost. Each hit area
+// The three hover actions sit at the right edge, delete outermost. Each hit area
 // mirrors the per-message actions (a 20x20 button holding a 15x15 icon).
 constexpr int kActionSize = 20;
 constexpr int kIconSize = 15;
 constexpr int kActionMargin = 4;
 constexpr int kActionGap = 2;
+constexpr int kActionCount = 3;
 
 // The text inset. It matches the sidebar bands' padding, so row titles line up
 // with the banner and the category label.
@@ -46,17 +47,25 @@ SessionItemDelegate::SessionItemDelegate(QObject* parent)
 
 void SessionItemDelegate::ensure_icons() const {
   const QColor colour = theme().colors.text_muted;
+  const QColor accent = theme().colors.accent;
 
-  if (!edit_icon_.isNull() && icons_colour_ == colour) {
+  if (!edit_icon_.isNull() && !pin_icon_.isNull() && icons_colour_ == colour) {
     return;
   }
 
   icons_colour_ = colour;
+  pin_icon_ = resource_icon(QStringLiteral("pin"), colour, colour);
+  pin_active_icon_ = resource_icon(QStringLiteral("pin"), accent, colour);
   edit_icon_ = resource_icon(QStringLiteral("edit"), colour, colour);
   delete_icon_ = resource_icon(QStringLiteral("delete"), colour, colour);
 
   // A missing bundled resource falls back to a standard icon, as the per-message
   // actions do.
+  if (pin_icon_.isNull()) {
+    pin_icon_ = QApplication::style()->standardIcon(QStyle::SP_DialogYesButton);
+    pin_active_icon_ = pin_icon_;
+  }
+
   if (edit_icon_.isNull()) {
     edit_icon_ = QApplication::style()->standardIcon(QStyle::SP_FileIcon);
   }
@@ -64,6 +73,10 @@ void SessionItemDelegate::ensure_icons() const {
   if (delete_icon_.isNull()) {
     delete_icon_ = QApplication::style()->standardIcon(QStyle::SP_TrashIcon);
   }
+}
+
+void SessionItemDelegate::set_pin_handler(ActionHandler handler) {
+  pin_handler_ = std::move(handler);
 }
 
 void SessionItemDelegate::set_edit_handler(ActionHandler handler) {
@@ -89,6 +102,17 @@ QRect SessionItemDelegate::edit_button_rect(const QStyleOptionViewItem& option) 
   return QRect(
       del.left() - kActionSize - kActionGap,
       del.top(),
+      kActionSize,
+      kActionSize
+  );
+}
+
+QRect SessionItemDelegate::pin_button_rect(const QStyleOptionViewItem& option) const {
+  const QRect edit = edit_button_rect(option);
+
+  return QRect(
+      edit.left() - kActionSize - kActionGap,
+      edit.top(),
       kActionSize,
       kActionSize
   );
@@ -128,7 +152,8 @@ void SessionItemDelegate::paint(
 
   // Two lines, centred as a block. The trailing room the actions need is
   // reserved, so a long title is elided before it can reach them.
-  const int reserved = kActionSize * 2 + kActionGap + kActionMargin;
+  const int reserved = kActionSize * kActionCount + kActionGap * (kActionCount - 1) +
+      kActionMargin;
   const int text_width = rect.width() - kTextInset - reserved;
   const int text_height = title_metrics.height() + (time.isEmpty() ? 0 : time_metrics.height());
   const int top = rect.top() + (rect.height() - text_height) / 2;
@@ -156,6 +181,15 @@ void SessionItemDelegate::paint(
   if (hovered) {
     ensure_icons();
 
+    const bool pinned = index.data(SessionListModel::PinnedRole).toBool();
+
+    // The pin action reflects the row's state: accent when pinned, muted when
+    // not, so the category is legible from the row alone.
+    (pinned ? pin_active_icon_ : pin_icon_)
+        .paint(
+            painter, icon_rect(pin_button_rect(option)), Qt::AlignCenter, QIcon::Active,
+            QIcon::Off
+        );
     edit_icon_.paint(
         painter, icon_rect(edit_button_rect(option)), Qt::AlignCenter,
         QIcon::Active, QIcon::Off
@@ -205,6 +239,16 @@ bool SessionItemDelegate::editorEvent(
   }
 
   const QPoint position = mouse->pos();
+
+  if (pin_button_rect(option).contains(position)) {
+    action_click_ = true;
+
+    if (pin_handler_) {
+      pin_handler_(index);
+    }
+
+    return true;
+  }
 
   if (edit_button_rect(option).contains(position)) {
     action_click_ = true;

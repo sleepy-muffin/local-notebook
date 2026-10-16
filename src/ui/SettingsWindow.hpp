@@ -63,6 +63,13 @@ private:
   // Wraps a page body with its title/subtitle inside a scrolling area.
   QWidget* make_page(const QString& title, const QString& subtitle, QWidget* content);
 
+  // Rebuilds the window's scoped stylesheet from the current theme. The scoped
+  // sheet has higher precedence than the application sheet for this dialog's
+  // subtree, so it must be rebuilt on every show; otherwise a theme change would
+  // leave the dialog's controls (and the cards) on the colours they were built
+  // with until the application restarts.
+  void apply_style();
+
   // Pushes the widget values back into the pending settings / metrics.
   void write_config();
   void write_metrics();

@@ -63,6 +63,8 @@ QVariant SessionListModel::data(const QModelIndex& index, int role) const {
       return static_cast<uint>(session.id_);
     case TimeRole:
       return format_row_time(last_time_at(index.row()));
+    case PinnedRole:
+      return session.pinned_;
     default:
       return {};
   }
@@ -99,6 +101,14 @@ const std::string& SessionListModel::last_time_at(int row) const {
   }
 
   return last_times_[static_cast<std::size_t>(row)];
+}
+
+bool SessionListModel::pinned_at(int row) const {
+  if (row < 0 || row >= static_cast<int>(sessions_.size())) {
+    return false;
+  }
+
+  return sessions_[static_cast<std::size_t>(row)].pinned_;
 }
 
 int SessionListModel::row_for(std::uint32_t session_id) const {

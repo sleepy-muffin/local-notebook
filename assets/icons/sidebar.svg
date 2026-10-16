@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- Sidebar: the status bar's toggle for the sidebar's visibility. A panel with
+       a chamfered outline and a vertical divider (the second subpath, an even-odd
+       hole). Straight lines only. Monochrome; recoloured at runtime. -->
+  <path fill-rule="evenodd" d="M5 4 L19 4 L21 6 L21 18 L19 20 L5 20 L3 18 L3 6 Z M8 6 L9 6 L9 18 L8 18 Z" fill="#000000"/>
+</svg>

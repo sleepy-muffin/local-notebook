@@ -22,6 +22,9 @@ public:
     // The time of the session's newest message, formatted for the row's second
     // line (empty when the session has no messages).
     TimeRole,
+    // Whether the session is pinned; the delegate draws the pin action in the
+    // accent colour when it is.
+    PinnedRole,
   };
 
   explicit SessionListModel(QObject* parent = nullptr);
@@ -42,6 +45,7 @@ public:
   [[nodiscard]] lnb::Session session_at(int row) const;
   [[nodiscard]] std::uint32_t session_id_at(int row) const;
   [[nodiscard]] const std::string& last_time_at(int row) const;
+  [[nodiscard]] bool pinned_at(int row) const;
   [[nodiscard]] int row_for(std::uint32_t session_id) const;
 
 private:

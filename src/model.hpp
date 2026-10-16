@@ -41,6 +41,10 @@ public:
 
   std::optional<std::string> shared_directory_;
 
+  // Pinned sessions are listed in their own sidebar category above the rest.
+  // Stored in the session row (design-1.md §9).
+  bool pinned_ = false;
+
   // The single session knob: automatic-summarisation trigger, verbatim window
   // and summarisation granularity all in one.
   std::size_t summary_trigger_tokens_ = 16000;

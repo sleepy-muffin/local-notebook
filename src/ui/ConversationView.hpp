@@ -155,8 +155,20 @@ public:
   [[nodiscard]] std::uint32_t session_id() const { return session_id_; }
   [[nodiscard]] bool busy() const { return controller_.busy(); }
 
+  // Progress of the session's in-flight turn, for the running-task readout.
+  [[nodiscard]] ConversationController::Progress progress() const {
+    return controller_.progress();
+  }
+
   // Rebuilds the transcript from the database.
   void reload();
+
+  // Unloads the oldest rendered rows so the number of rendered message rows stays
+  // within the configured initial rendering amount, leaving room for `reserved`
+  // extra rows (an in-flight streaming row). Called whenever new content arrives,
+  // so a long conversation never keeps more than the configured amount rendered;
+  // history revealed by paging is temporary until the next arrival.
+  void enforce_render_limit(std::size_t reserved = 0);
 
   // Re-applies theme colours to the composer and every rendered bubble.
   void refresh_style();
