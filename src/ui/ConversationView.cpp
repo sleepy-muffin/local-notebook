@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QCursor>
+#include <QDateTime>
 #include <QEnterEvent>
 #include <QFontMetrics>
 #include <QHBoxLayout>
@@ -14,6 +15,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QShowEvent>
 #include <QSizePolicy>
 #include <QStringList>
 #include <QTextBlock>
@@ -47,6 +49,22 @@ QString css_color(const QColor& color) {
 
 QString from_utf8(const std::string& value) {
   return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
+}
+
+// A stored message's arrival time (ISO-8601 UTC) in the reader's local time. An
+// empty or unparsable value yields an empty string, so notice rows stay bare.
+QString format_message_time(const std::string& iso) {
+  if (iso.empty()) {
+    return {};
+  }
+
+  const QDateTime parsed = QDateTime::fromString(from_utf8(iso), Qt::ISODate);
+
+  if (!parsed.isValid()) {
+    return {};
+  }
+
+  return parsed.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm"));
 }
 
 // Fixed height of every action strip, so revealing the buttons never reflows the
@@ -535,11 +553,25 @@ MessageRow::MessageRow(MessageBubble::Role role, QWidget* parent)
   );
   message_id_label_->setVisible(false);
 
+  // The arrival time sits right next to the id, in the same muted colour, so the
+  // hover strip reads "#3  2026-10-16 14:32  [copy] [delete]" like Zed's message
+  // meta line. It shares the strip's constant height, so revealing it never
+  // reflows the transcript.
+  message_time_label_ = new QLabel(actions_);
+  message_time_label_->setObjectName(QStringLiteral("MessageTime"));
+  message_time_label_->setStyleSheet(
+      QStringLiteral("QLabel#MessageTime { color: %1; }")
+          .arg(css_color(theme().colors.text_muted))
+  );
+  message_time_label_->setVisible(false);
+
   if (role_ == MessageBubble::Role::User) {
     action_layout->addStretch(1);
     action_layout->addWidget(message_id_label_);
+    action_layout->addWidget(message_time_label_);
   } else {
     action_layout->addWidget(message_id_label_);
+    action_layout->addWidget(message_time_label_);
     action_layout->addStretch(1);
   }
 
@@ -612,6 +644,10 @@ void MessageRow::set_actions_visible(bool visible) {
   if (message_id_label_ != nullptr) {
     message_id_label_->setVisible(visible);
   }
+
+  if (message_time_label_ != nullptr) {
+    message_time_label_->setVisible(visible);
+  }
 }
 
 void MessageRow::set_message_id(std::uint32_t id) {
@@ -622,6 +658,14 @@ void MessageRow::set_message_id(std::uint32_t id) {
   }
 
   message_id_label_->setText(id == 0 ? QString{} : QStringLiteral("#%1").arg(id));
+}
+
+void MessageRow::set_message_time(const QString& time) {
+  if (message_time_label_ == nullptr) {
+    return;
+  }
+
+  message_time_label_->setText(time);
 }
 
 void MessageRow::enterEvent(QEnterEvent* event) {
@@ -714,6 +758,12 @@ ConversationView::ConversationView(
   connect(
       scrollbar, &QScrollBar::valueChanged, this,
       [this, scrollbar](int value) {
+        // A programmatic jump during a rebuild or a paged-in history load is not a
+        // reader decision, so it must not change whether content is followed.
+        if (updating_) {
+          return;
+        }
+
         stick_to_bottom_ = value >= scrollbar->maximum() - kStickToBottomSlack;
       }
   );
@@ -885,6 +935,12 @@ ConversationView::ConversationView(
 }
 
 void ConversationView::reload() {
+  // Remember the reader's place before the rebuild wipes the rows: following
+  // content is only ever a consequence of having been parked at the bottom, and a
+  // rebuild must not yank someone who had scrolled away back to the end.
+  const bool follow = stick_to_bottom_;
+  const int previous_value = scroll_->verticalScrollBar()->value();
+
   updating_ = true;
   clear_transcript();
 
@@ -921,9 +977,25 @@ void ConversationView::reload() {
   }
 
   update_load_older_visibility();
-  scroll_to_bottom();
   set_busy(controller_.busy());
   updating_ = false;
+
+  // Reposition once the rebuilt layout has settled. Following pins to the true
+  // bottom (the range only settles after Markdown reflows, so this stays smooth);
+  // otherwise the reader stays on the message they were reading. The restore goes
+  // through the scrollbar, so the valueChanged handler recomputes the follow flag
+  // from the final position -- landing back at the bottom re-arms it.
+  QTimer::singleShot(0, this, [this, follow, previous_value]() {
+    auto* bar = scroll_->verticalScrollBar();
+
+    if (follow) {
+      stick_to_bottom_ = true;
+      pin_to_bottom();
+      return;
+    }
+
+    bar->setValue(std::min(previous_value, bar->maximum()));
+  });
 }
 
 void ConversationView::enforce_render_limit(std::size_t reserved) {
@@ -984,6 +1056,9 @@ void ConversationView::render_message_at(std::size_t index, int layout_index) {
       from_self ? MessageBubble::Role::User : MessageBubble::Role::Assistant, message.id_,
       from_self
   );
+
+  // The arrival time is shown in the hover strip next to the id.
+  row->set_message_time(format_message_time(message.made_at_));
 
   row->bubble()->set_text(from_utf8(message.content_));
 
@@ -1087,6 +1162,17 @@ void ConversationView::set_busy(bool busy) {
   busy_ = busy;
   send_button_->setEnabled(!busy);
   cancel_button_->setVisible(busy);
+}
+
+void ConversationView::showEvent(QShowEvent* event) {
+  QWidget::showEvent(event);
+
+  // A theme change that happened while this transcript was hidden was deferred
+  // (mark_style_stale); do the restyle now that it is on screen.
+  if (style_stale_) {
+    style_stale_ = false;
+    refresh_style();
+  }
 }
 
 bool ConversationView::eventFilter(QObject* watched, QEvent* event) {
@@ -1214,18 +1300,6 @@ void ConversationView::clear_transcript() {
       widget->deleteLater();
     }
   }
-}
-
-void ConversationView::scroll_to_bottom() {
-  // Force-follow new content (session load, notice bubble) even if the reader
-  // had scrolled away, then pin once the layout has processed the change.
-  stick_to_bottom_ = true;
-
-  QTimer::singleShot(0, this, [this]() {
-    if (stick_to_bottom_) {
-      pin_to_bottom();
-    }
-  });
 }
 
 void ConversationView::pin_to_bottom() {
@@ -1384,9 +1458,12 @@ void ConversationView::submit() {
   }
 
   input_->clear();
+  // A freshly submitted message is content the writer wants to see, so jump back
+  // to the bottom even if they had scrolled away; the reload triggered by send()
+  // then follows the reply.
+  stick_to_bottom_ = true;
   controller_.send(text.toStdString());
   set_busy(true);
-  scroll_to_bottom();
 }
 
 } // namespace ui

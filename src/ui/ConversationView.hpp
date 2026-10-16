@@ -19,6 +19,7 @@ class QLabel;
 class QPlainTextEdit;
 class QPushButton;
 class QScrollArea;
+class QShowEvent;
 class QTimer;
 class QToolButton;
 class QVBoxLayout;
@@ -118,6 +119,10 @@ public:
   // actions. Ids of 0 (streaming/notice rows) leave the label empty.
   void set_message_id(std::uint32_t id);
 
+  // Records the message's arrival time and shows it next to the id. An empty
+  // string leaves the label blank.
+  void set_message_time(const QString& time);
+
 protected:
   void enterEvent(QEnterEvent* event) override;
   void leaveEvent(QEvent* event) override;
@@ -137,6 +142,7 @@ private:
   MessageBubble* bubble_ = nullptr;
   QWidget* actions_ = nullptr;
   QLabel* message_id_label_ = nullptr;
+  QLabel* message_time_label_ = nullptr;
   std::uint32_t message_id_ = 0;
   bool actions_visible_ = false;
   std::vector<ActionIcon> action_icons_;
@@ -173,6 +179,11 @@ public:
   // Re-applies theme colours to the composer and every rendered bubble.
   void refresh_style();
 
+  // Marks the view as needing a restyle without doing the work now. A hidden
+  // view (another session's transcript) is restyled when it is next shown, so a
+  // settings save never re-renders every cached conversation at once.
+  void mark_style_stale() { style_stale_ = true; }
+
   // Called by the window's poll timer; advances the in-flight generation.
   void poll();
 
@@ -184,6 +195,7 @@ public:
 
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
+  void showEvent(QShowEvent* event) override;
 
 private:
   MessageRow* add_row(MessageBubble::Role role, std::uint32_t message_id, bool editable);
@@ -203,7 +215,6 @@ private:
   void prompt_edit(std::uint32_t message_id, const QString& current);
   void clear_transcript();
   void flush_streaming_text();
-  void scroll_to_bottom();
   void pin_to_bottom();
   void submit();
   void set_busy(bool busy);
@@ -255,6 +266,10 @@ private:
   bool stick_to_bottom_ = true;
 
   bool busy_ = false;
+
+  // True when a theme change happened while this view was hidden, so the restyle
+  // is deferred until it is shown.
+  bool style_stale_ = false;
 
   // Cached left/right inset of the transcript layout; -1 until first computed.
   int content_side_margin_ = -1;

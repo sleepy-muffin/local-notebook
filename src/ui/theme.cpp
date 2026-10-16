@@ -29,6 +29,10 @@ struct ThemeState {
 
   QPixmap background;
   bool has_background = false;
+  // The path the current background (or the last failed attempt) came from. An
+  // unchanged path is never re-decoded, so a restyle does not re-read a large
+  // image from disk.
+  std::optional<std::string> background_path;
 
   QFont ui_font;
   QFont chat_font;
@@ -189,14 +193,23 @@ Theme parse_theme(const std::optional<QJsonObject>& root, const std::string& nam
 void load_background(const lnb::Settings& settings) {
   ThemeState& current = state();
 
-  current.background = QPixmap{};
-  current.has_background = false;
+  const std::optional<std::string>& wanted = settings.background_url;
 
-  if (!settings.background_url.has_value() || settings.background_url->empty()) {
+  // An unchanged path means the decoded pixmap (or the recorded failure) is
+  // still current. Clearing the path, or changing it, always reloads.
+  if (current.background_path == wanted) {
     return;
   }
 
-  const QString path = QString::fromStdString(*settings.background_url);
+  current.background_path = wanted;
+  current.background = QPixmap{};
+  current.has_background = false;
+
+  if (!wanted.has_value() || wanted->empty()) {
+    return;
+  }
+
+  const QString path = QString::fromStdString(*wanted);
   const QPixmap pixmap(path);
 
   if (pixmap.isNull()) {

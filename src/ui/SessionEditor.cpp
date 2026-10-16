@@ -45,6 +45,7 @@ namespace {
 struct BudgetPreset {
   const char* name;
   int trigger;
+  int keep;
   int memory_budget;
   int headroom;
   int response;
@@ -53,14 +54,33 @@ struct BudgetPreset {
   int calls;
 };
 
+/**
+ * summary_trigger_ summary_keep_ summary_budget_ summary_headroom_
+ *
+ * response_budget_ tool_output_cap_
+ *
+ * max_tool_rounds_ max_tool_calls_
+ */
 constexpr BudgetPreset kBudgetPresets[] = {
-    {"Light chat (instant help)", 8000, 2000, 4000, 2000, 4000, 4, 12},
-    {"Balanced (default)", 16000, 4000, 12000, 8000, 8000, 8, 32},
-    {"Novel writing", 32000, 8000, 16000, 16000, 4000, 4, 16},
-    {"Immersive role-play", 24000, 6000, 8000, 8000, 4000, 4, 12},
-    {"Abstract design work", 48000, 6000, 24000, 16000, 12000, 16, 64},
-    {"Large codebase analysis", 96000, 8000, 32000, 16000, 16000, 24, 128},
+    // summary: trigger (the input bound), keep (the level it collapses to),
+    // memory, reasoning;
+    // response;
+    // tool: output, rounds, calls
+    {"Very Light",   4000,  1000,  1000,  2000,  1000,  2000,  2,   6},
+    {"Light",        8000,  2000,  2000,  4000,  2000,  4000, 16,  64},
+    {"Balanced",    16000,  4000,  4000,  8000,  4000,  6000, 24,  96},
+    {"Heavy",       32000,  8000,  6000, 16000,  8000,  8000, 32, 128},
+    {"Very Heavy",  64000, 16000,  8000, 24000, 12000, 12000, 48, 192},
+    {"Ultra",       96000, 24000,  8000, 32000, 16000, 16000, 64, 256},
 };
+
+// constexpr BudgetPreset kBudgetPresets[] = {
+//     {"Light", 8000, 2000, 4000, 2000, 4000, 16, 64},
+//     {"Balanced", 16000, 4000, 12000, 8000, 8000, 24, 96},
+//     {"Heavy", 48000, 6000, 24000, 16000, 12000, 24, 96},
+//     {"Very Heavy", 96000, 8000, 32000, 16000, 16000, 32, 128},
+//     {"Ultra", 96000, 8000, 32000, 16000, 16000, 64, 256},
+// };
 
 } // namespace
 
@@ -241,13 +261,14 @@ QWidget* SessionEditor::build_content() {
   docs->setSizePolicy(docs_policy);
   docs->setText(QStringLiteral(
       "<b>How summarisation works</b><br>"
-      "Conversation memory is a rolling summary of older turns. The verbatim window "
-      "is the newest messages whose tokens fit <i>Summary trigger</i>; everything "
-      "older is folded into the memory, and the message that crosses the boundary is "
-      "kept whole. When the tokens written since the last fold reach <i>Summary "
-      "trigger</i>, the summariser runs automatically.<br><br>"
-      "The watermarks above are <b>bookkeeping only</b>: they count how much is new "
-      "so the trigger can fire. They never decide what is sent or what is read — the "
+      "Conversation memory is a rolling summary of older turns. A request carries the "
+      "system prompt plus the transcript; when that reaches <i>Summary trigger</i>, the "
+      "older messages are folded into the memory, collapsing the transcript to the "
+      "newest <i>Retained tokens</i>. Keep the retained level well below the trigger, or "
+      "the collapse would run again on the next turn. The message that crosses the "
+      "boundary is kept whole.<br><br>"
+      "The watermarks above are <b>bookkeeping only</b>: they count how much is new so "
+      "the trigger can fire. They never decide what is sent or what is read — the "
       "summariser always reads by recency, so pressing <b>Summarize now</b> twice with "
       "no new messages reads the same set and produces the same memory "
       "(idempotent). Custom instructions are kept separate and are never touched.<br><br>"
@@ -290,6 +311,7 @@ QWidget* SessionEditor::build_content() {
 
       const BudgetPreset& budget_preset = kBudgetPresets[index - 1];
       summary_trigger_->setValue(budget_preset.trigger);
+      summary_keep_->setValue(budget_preset.keep);
       summary_budget_->setValue(budget_preset.memory_budget);
       summary_headroom_->setValue(budget_preset.headroom);
       response_budget_->setValue(budget_preset.response);
@@ -332,6 +354,10 @@ QWidget* SessionEditor::build_content() {
   add_spin(
       QStringLiteral("Summary trigger"), static_cast<int>(defaults.summary_trigger_tokens_), 256,
       2'000'000'000, 256, &summary_trigger_
+  );
+  add_spin(
+      QStringLiteral("Retained tokens"), static_cast<int>(defaults.summary_keep_tokens_), 128,
+      2'000'000'000, 128, &summary_keep_
   );
   add_spin(
       QStringLiteral("Memory budget"), static_cast<int>(defaults.summary_token_budget_), 128,
@@ -385,6 +411,7 @@ void SessionEditor::load_session() {
   watermark_->setValue(static_cast<int>(session_.memory_watermark_));
   assistant_watermark_->setValue(static_cast<int>(session_.assistant_memory_watermark_));
 
+  summary_keep_->setValue(static_cast<int>(session_.summary_keep_tokens_));
   summary_trigger_->setValue(static_cast<int>(session_.summary_trigger_tokens_));
   summary_budget_->setValue(static_cast<int>(session_.summary_token_budget_));
   summary_headroom_->setValue(static_cast<int>(session_.summary_reasoning_headroom_tokens_));
@@ -415,6 +442,7 @@ void SessionEditor::save_session() {
   session.assistant_memory_watermark_ =
       static_cast<std::uint32_t>(assistant_watermark_->value());
 
+  session.summary_keep_tokens_ = static_cast<std::size_t>(summary_keep_->value());
   session.summary_trigger_tokens_ = static_cast<std::size_t>(summary_trigger_->value());
   session.summary_token_budget_ = static_cast<std::size_t>(summary_budget_->value());
   session.summary_reasoning_headroom_tokens_ =

@@ -175,6 +175,7 @@ void test_session_round_trip(const std::filesystem::path& path) {
   session.assistant_memory_watermark_ = 3;
   session.shared_directory_ = "/tmp/shared";
   session.pinned_ = true;
+  session.summary_keep_tokens_ = 101;
   session.summary_trigger_tokens_ = 111;
   session.summary_token_budget_ = 222;
   session.summary_reasoning_headroom_tokens_ = 333;
@@ -197,6 +198,7 @@ void test_session_round_trip(const std::filesystem::path& path) {
   CHECK(loaded->shared_directory_.has_value());
   CHECK(*loaded->shared_directory_ == "/tmp/shared");
   CHECK(loaded->pinned_);
+  CHECK(loaded->summary_keep_tokens_ == 101);
   CHECK(loaded->summary_trigger_tokens_ == 111);
   CHECK(loaded->summary_token_budget_ == 222);
   CHECK(loaded->summary_reasoning_headroom_tokens_ == 333);
@@ -395,8 +397,9 @@ void test_pinned_ordering(const std::filesystem::path& path) {
   CHECK(ordered.size() == 2 && ordered[1].id_ == plain_id);
 }
 
-// Opening a version-1 database (no `pinned` column) migrates it forward: the
-// column is added and the existing rows read as unpinned.
+// Opening a version-1 database (no `pinned` or `summary_keep_tokens` column)
+// migrates it forward: the columns are added and the existing rows read as
+// unpinned with the default retained level.
 void test_pinned_migration(const std::filesystem::path& path) {
   {
     lnb::store::connection conn(path.string());
@@ -435,12 +438,15 @@ INSERT INTO session (title) VALUES ('Legacy');
   CHECK(ordered.size() == 1);
   CHECK(ordered.size() == 1 && ordered[0].title_ == "Legacy");
   CHECK(ordered.size() == 1 && !ordered[0].pinned_);
+  CHECK(ordered.size() == 1 && ordered[0].summary_keep_tokens_ == 4000);
 
-  // The migrated column is writable.
+  // The migrated columns are writable.
   lnb::Session session = ordered[0];
   session.pinned_ = true;
+  session.summary_keep_tokens_ = 4321;
   db.update_session(session);
   CHECK(db.session(session.id_)->pinned_);
+  CHECK(db.session(session.id_)->summary_keep_tokens_ == 4321);
 }
 
 void test_cascade_delete(const std::filesystem::path& path) {

@@ -316,8 +316,9 @@ QJsonObject build_session_payload(
   const std::string system_prompt = build_system_prompt(assistant, session);
   const std::size_t system_tokens = context::prompt_tokens(system_prompt);
 
-  // The verbatim window is the newest suffix of the session that fits the
-  // session's single knob; the boundary message is kept whole.
+  // The request carries at most the session's input bound: the newest messages
+  // that fit `summary_trigger_tokens_`, the boundary message kept whole. The
+  // collapse below keeps the transcript beneath this bound.
   const context::Window window = context::plan_window(
       messages, system_tokens, session.summary_trigger_tokens_
   );
@@ -355,8 +356,8 @@ ContextUsage context_usage(
   const std::string system_prompt = build_system_prompt(assistant, session);
   const std::size_t system_tokens = context::prompt_tokens(system_prompt);
 
-  // Mirrors build_session_payload(): the same prompt cost and knob pick the
-  // same verbatim window, so the reported usage matches the sent request.
+  // Mirrors build_session_payload(): the same prompt cost and input bound pick
+  // the same verbatim messages, so the reported usage matches the sent request.
   const context::Window window = context::plan_window(
       messages, system_tokens, session.summary_trigger_tokens_
   );
@@ -635,6 +636,12 @@ std::string fold_session_memory(
     const std::optional<std::string>& proxy, GenerationTask& task,
     std::stop_token stop_token, bool force, const SummaryApprover& approver
 ) {
+  // A cancelled turn must not keep the interface waiting while a large gather
+  // runs, so the pass bails out as soon as a stop is requested.
+  if (stop_token.stop_requested()) {
+    throw std::runtime_error("Generation cancelled");
+  }
+
   const std::vector<Message> messages = db.messages(session.id_);
 
   // Nothing to fold until there is an actual exchange: the newest message is
@@ -645,12 +652,13 @@ std::string fold_session_memory(
 
   std::string memory = session.memory_;
 
-  // The memory is part of the system prompt, so it is counted when planning the
-  // verbatim window; everything before the window floor is the overflow.
+  // The collapse retains the newest messages that fit the keep window; the
+  // memory is part of the system prompt, so it is counted when planning that
+  // window. Everything before the window floor is the overflow to fold.
   const std::size_t system_tokens =
       context::prompt_tokens(session_system_prompt(session, memory));
   const context::Window window = context::plan_window(
-      messages, system_tokens, session.summary_trigger_tokens_
+      messages, system_tokens, session.summary_keep_tokens_
   );
 
   if (!force &&
@@ -821,6 +829,14 @@ std::string fold_assistant_memory(
     const std::optional<std::string>& proxy, GenerationTask& task,
     std::stop_token stop_token, bool strict, const SummaryApprover& approver
 ) {
+  // Every heavy loop below bails out the moment a stop is requested, so a
+  // cancelled turn never pins the interface thread on the join that follows it.
+  const auto throw_if_stopped = [&stop_token]() {
+    if (stop_token.stop_requested()) {
+      throw std::runtime_error("Generation cancelled");
+    }
+  };
+
   const std::vector<Session> sessions = db.sessions_by_recent();
 
   // Load each session's messages once; the gathered pool points into these.
@@ -828,6 +844,7 @@ std::string fold_assistant_memory(
   session_messages.reserve(sessions.size());
 
   for (const Session& session: sessions) {
+    throw_if_stopped();
     session_messages.push_back(db.messages(session.id_));
   }
 
@@ -854,6 +871,8 @@ std::string fold_assistant_memory(
   std::size_t recent_tokens = 0;
 
   for (std::size_t i = all.size(); i-- > 0;) {
+    throw_if_stopped();
+
     const std::size_t cost = context::message_tokens(*all[i].message);
 
     // Always keep at least the newest message.
@@ -876,6 +895,8 @@ std::string fold_assistant_memory(
   std::size_t compacted_tokens = 0;
 
   for (const Session& session: sessions) {
+    throw_if_stopped();
+
     if (session.memory_.empty()) {
       continue;
     }
@@ -987,10 +1008,16 @@ std::string fold_assistant_memory(
 
 // The automatic assistant trigger (design-1.md §6): the tokens of messages
 // newer than each session's assistant watermark, summed across all sessions.
-bool assistant_trigger_reached(store::database& db, const Assistant& assistant) {
+bool assistant_trigger_reached(
+    store::database& db, const Assistant& assistant, std::stop_token stop_token
+) {
   std::size_t new_tokens = 0;
 
   for (const Session& session: db.sessions_by_recent()) {
+    if (stop_token.stop_requested()) {
+      return false;
+    }
+
     for (const Message& message: db.messages(session.id_)) {
       if (message.id_ > session.assistant_memory_watermark_) {
         new_tokens += context::message_tokens(message);
@@ -1044,7 +1071,7 @@ std::string maybe_summarize_assistant(
   try {
     // Empty when the automatic trigger is not reached, so the caller only
     // overwrites Assistant::memory_ when there is a new memory to persist.
-    if (!assistant_trigger_reached(db, assistant)) {
+    if (!assistant_trigger_reached(db, assistant, stop_token)) {
       return {};
     }
 

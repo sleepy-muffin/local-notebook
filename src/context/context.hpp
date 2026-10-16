@@ -36,9 +36,9 @@ Window plan_window(
     std::size_t window_tokens
 );
 
-// Automatic-trigger test: the system prompt plus the messages above
-// `watermark` reach `trigger_tokens`. The watermark is bookkeeping only (design
-// §7) and never decides what is sent.
+// Automatic-collapse test: the system prompt plus the unsummarised transcript
+// (messages with an id above `watermark`) reaches `trigger_tokens`. The
+// watermark is bookkeeping only (design §7) and never decides what is sent.
 bool should_summarize(
     const std::vector<Message>& messages, std::size_t system_tokens,
     std::uint32_t watermark, std::size_t trigger_tokens

@@ -131,6 +131,7 @@ CREATE TABLE session (
   assistant_memory_watermark        INTEGER NOT NULL DEFAULT 0,
   shared_directory                  TEXT,
   pinned                            INTEGER NOT NULL DEFAULT 0,
+  summary_keep_tokens               INTEGER NOT NULL DEFAULT 4000,
   summary_trigger_tokens            INTEGER NOT NULL DEFAULT 16000,
   summary_token_budget              INTEGER NOT NULL DEFAULT 4000,
   summary_reasoning_headroom_tokens INTEGER NOT NULL DEFAULT 12000,
@@ -200,10 +201,10 @@ summariser budgets:
 ### Session — the `session` row
 
 `title`, `custom_instructions`, `memory`, the two watermarks, `shared_directory`, and
-every session-bound budget (`summary_trigger_tokens_`, `summary_token_budget_`,
-`summary_reasoning_headroom_tokens_`, `max_tool_rounds_`, `max_tool_calls_`,
-`tool_output_max_tokens_`, `response_token_budget_`). Edited in the scrollable
-session editor.
+every session-bound budget (`summary_keep_tokens_`, `summary_trigger_tokens_`,
+`summary_token_budget_`, `summary_reasoning_headroom_tokens_`, `max_tool_rounds_`,
+`max_tool_calls_`, `tool_output_max_tokens_`, `response_token_budget_`). Edited in the
+scrollable session editor.
 
 ## Memory and summarisation
 
@@ -218,13 +219,17 @@ A request for a prompt in session `S` of assistant `A` is assembled in order:
 
 ### Session summarisation
 
-`S.summary_trigger_tokens_` is a single knob with three jobs: the verbatim **window**,
-the automatic **trigger** (new tokens above `memory_watermark_`), and the summarisation
-**granularity** (everything older than the window is the overflow that gets folded).
-The summariser rewrites `S.memory_` from the previous memory plus that overflow, in
-batches if it does not fit one call, so nothing is silently dropped. Manual
-summarisation ignores the trigger but reads the same overflow — pressing it twice with
-no new messages produces the same memory.
+Session summarisation has **two knobs with one job each**. `S.summary_trigger_tokens_`
+is the **input bound**: a request carries the system prompt plus the transcript, and
+the transcript is never allowed past it. `S.summary_keep_tokens_` is the **level the
+transcript collapses to**: once the input reaches the trigger, the summariser rewrites
+`S.memory_` from the previous memory plus everything older than the newest `keep`
+tokens, and the watermark advances past it. The transcript therefore sits at `keep`
+after a collapse and grows back towards the trigger, instead of the entire window
+staying above the watermark and re-triggering on the next turn. A large overflow is
+folded in several calls (batched by the trigger), so nothing is silently dropped.
+Manual summarisation ignores the trigger but reads the same overflow — pressing it
+twice with no new messages produces the same memory.
 
 ### Assistant summarisation
 

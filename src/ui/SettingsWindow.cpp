@@ -110,6 +110,18 @@ void set_font_box(FontComboBox* box, const std::string& family) {
   }
 }
 
+// Whether the two settings agree on everything the rendered theme depends on.
+// Saving an unrelated field (a budget, a directory) must not trigger a full
+// application restyle and background decode, which is what makes Save feel slow.
+bool theme_inputs_equal(const lnb::Settings& a, const lnb::Settings& b) {
+  return a.theme == b.theme && a.ui_font == b.ui_font &&
+         a.ui_font_size == b.ui_font_size && a.font == b.font &&
+         a.font_size == b.font_size && a.mono_font == b.mono_font &&
+         a.mono_font_size == b.mono_font_size &&
+         a.background_url == b.background_url &&
+         a.background_override == b.background_override && a.metrics == b.metrics;
+}
+
 } // namespace
 
 SettingsWindow::SettingsWindow(lnb::Application& app, QWidget* parent)
@@ -941,6 +953,8 @@ void SettingsWindow::restore_metrics_defaults() {
 }
 
 void SettingsWindow::save() {
+  const lnb::Settings previous = app_.settings();
+
   write_config();
   write_metrics();
 
@@ -959,9 +973,14 @@ void SettingsWindow::save() {
     app_.save_assistant();
   }
 
-  // Re-apply the theme at runtime so the change is visible immediately.
-  if (auto* application = qobject_cast<QApplication*>(QApplication::instance())) {
-    ui::apply_theme(*application, app_.settings());
+  // Re-apply the theme at runtime so the change is visible immediately, but only
+  // when something the theme depends on actually changed. A full restyle rebuilds
+  // the application stylesheet and re-decodes the background image, which is far
+  // too expensive to run for a save that touched none of it.
+  if (!theme_inputs_equal(previous, app_.settings())) {
+    if (auto* application = qobject_cast<QApplication*>(QApplication::instance())) {
+      ui::apply_theme(*application, app_.settings());
+    }
   }
 
   if (on_saved_) {

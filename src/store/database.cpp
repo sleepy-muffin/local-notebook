@@ -8,10 +8,11 @@ namespace {
 
 // design-1.md §9. The schema is versioned via PRAGMA user_version so future
 // migrations have a starting point; this is a fresh start, so there is no
-// migration from the legacy database. Version 2 added `session.pinned`; an
-// existing version-1 file gains the column in the constructor.
+// migration from the legacy database. Version 2 added `session.pinned` and
+// version 3 `session.summary_keep_tokens`; an older file gains either column in
+// the constructor.
 constexpr std::string_view SCHEMA = R"sql(
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;
 
 CREATE TABLE IF NOT EXISTS session (
   id                                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,6 +23,7 @@ CREATE TABLE IF NOT EXISTS session (
   assistant_memory_watermark        INTEGER NOT NULL DEFAULT 0,
   shared_directory                  TEXT,
   pinned                            INTEGER NOT NULL DEFAULT 0,
+  summary_keep_tokens               INTEGER NOT NULL DEFAULT 4000,
   summary_trigger_tokens            INTEGER NOT NULL DEFAULT 16000,
   summary_token_budget              INTEGER NOT NULL DEFAULT 4000,
   summary_reasoning_headroom_tokens INTEGER NOT NULL DEFAULT 12000,
@@ -45,9 +47,9 @@ CREATE INDEX IF NOT EXISTS idx_message_made_at ON message(made_at);
 
 constexpr std::string_view SESSION_COLUMNS =
   "id, title, custom_instructions, memory, memory_watermark, "
-  "assistant_memory_watermark, shared_directory, pinned, summary_trigger_tokens, "
-  "summary_token_budget, summary_reasoning_headroom_tokens, max_tool_rounds, "
-  "max_tool_calls, tool_output_max_tokens, response_token_budget";
+  "assistant_memory_watermark, shared_directory, pinned, summary_keep_tokens, "
+  "summary_trigger_tokens, summary_token_budget, summary_reasoning_headroom_tokens, "
+  "max_tool_rounds, max_tool_calls, tool_output_max_tokens, response_token_budget";
 
 constexpr std::string_view MESSAGE_COLUMNS = "id, session_id, role, content, made_at";
 
@@ -61,13 +63,14 @@ Session read_session(const statement& stmt) {
   session.assistant_memory_watermark_ = stmt.column_uint32(5);
   session.shared_directory_ = stmt.column_text_opt(6);
   session.pinned_ = stmt.column_int(7) != 0;
-  session.summary_trigger_tokens_ = static_cast<std::size_t>(stmt.column_int(8));
-  session.summary_token_budget_ = static_cast<std::size_t>(stmt.column_int(9));
-  session.summary_reasoning_headroom_tokens_ = static_cast<std::size_t>(stmt.column_int(10));
-  session.max_tool_rounds_ = static_cast<std::size_t>(stmt.column_int(11));
-  session.max_tool_calls_ = static_cast<std::size_t>(stmt.column_int(12));
-  session.tool_output_max_tokens_ = static_cast<std::size_t>(stmt.column_int(13));
-  session.response_token_budget_ = static_cast<std::size_t>(stmt.column_int(14));
+  session.summary_keep_tokens_ = static_cast<std::size_t>(stmt.column_int(8));
+  session.summary_trigger_tokens_ = static_cast<std::size_t>(stmt.column_int(9));
+  session.summary_token_budget_ = static_cast<std::size_t>(stmt.column_int(10));
+  session.summary_reasoning_headroom_tokens_ = static_cast<std::size_t>(stmt.column_int(11));
+  session.max_tool_rounds_ = static_cast<std::size_t>(stmt.column_int(12));
+  session.max_tool_calls_ = static_cast<std::size_t>(stmt.column_int(13));
+  session.tool_output_max_tokens_ = static_cast<std::size_t>(stmt.column_int(14));
+  session.response_token_budget_ = static_cast<std::size_t>(stmt.column_int(15));
   return session;
 }
 
@@ -102,25 +105,33 @@ bool has_column(const connection& conn, std::string_view table, std::string_view
 database::database(std::string_view path) : connection_(path) {
   connection_.exec(SCHEMA);
 
-  // A database created before pinning existed gains the column here. A fresh one
-  // (created by SCHEMA above) already has it, so the ALTER is skipped.
+  // A database created before pinning or the keep window existed gains the
+  // columns here. A fresh one (created by SCHEMA above) already has them, so the
+  // ALTERs are skipped.
   if (!has_column(connection_, "session", "pinned")) {
     connection_.exec("ALTER TABLE session ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
+  }
+
+  if (!has_column(connection_, "session", "summary_keep_tokens")) {
+    connection_.exec(
+      "ALTER TABLE session ADD COLUMN summary_keep_tokens INTEGER NOT NULL DEFAULT 4000"
+    );
   }
 }
 
 std::uint32_t database::insert_session(const Session& session) {
   auto stmt = connection_.prepare(
     "INSERT INTO session (title, custom_instructions, memory, memory_watermark, "
-    "assistant_memory_watermark, shared_directory, pinned, summary_trigger_tokens, "
-    "summary_token_budget, summary_reasoning_headroom_tokens, max_tool_rounds, "
-    "max_tool_calls, tool_output_max_tokens, response_token_budget) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "assistant_memory_watermark, shared_directory, pinned, summary_keep_tokens, "
+    "summary_trigger_tokens, summary_token_budget, summary_reasoning_headroom_tokens, "
+    "max_tool_rounds, max_tool_calls, tool_output_max_tokens, response_token_budget) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   );
   stmt.bind(
     session.title_, session.custom_instructions_, session.memory_,
     session.memory_watermark_, session.assistant_memory_watermark_,
     session.shared_directory_, session.pinned_ ? 1 : 0,
+    static_cast<int>(session.summary_keep_tokens_),
     static_cast<int>(session.summary_trigger_tokens_),
     static_cast<int>(session.summary_token_budget_),
     static_cast<int>(session.summary_reasoning_headroom_tokens_),
@@ -136,15 +147,17 @@ void database::update_session(const Session& session) {
   auto stmt = connection_.prepare(
     "UPDATE session SET title = ?, custom_instructions = ?, memory = ?, "
     "memory_watermark = ?, assistant_memory_watermark = ?, shared_directory = ?, "
-    "pinned = ?, summary_trigger_tokens = ?, summary_token_budget = ?, "
-    "summary_reasoning_headroom_tokens = ?, max_tool_rounds = ?, "
-    "max_tool_calls = ?, tool_output_max_tokens = ?, response_token_budget = ? "
+    "pinned = ?, summary_keep_tokens = ?, summary_trigger_tokens = ?, "
+    "summary_token_budget = ?, summary_reasoning_headroom_tokens = ?, "
+    "max_tool_rounds = ?, max_tool_calls = ?, tool_output_max_tokens = ?, "
+    "response_token_budget = ? "
     "WHERE id = ?"
   );
   stmt.bind(
     session.title_, session.custom_instructions_, session.memory_,
     session.memory_watermark_, session.assistant_memory_watermark_,
     session.shared_directory_, session.pinned_ ? 1 : 0,
+    static_cast<int>(session.summary_keep_tokens_),
     static_cast<int>(session.summary_trigger_tokens_),
     static_cast<int>(session.summary_token_budget_),
     static_cast<int>(session.summary_reasoning_headroom_tokens_),

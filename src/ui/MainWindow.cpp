@@ -379,13 +379,7 @@ void MainWindow::apply_window_style() {
   }
 
   // The status bar's two icons follow the theme as well.
-  if (sidebar_toggle_ != nullptr) {
-    QIcon icon = resource_icon(QStringLiteral("sidebar"), c.text_muted, c.text_muted);
-    if (icon.isNull()) {
-      icon = style()->standardIcon(QStyle::SP_FileDialogListView);
-    }
-    sidebar_toggle_->setIcon(icon);
-  }
+  refresh_sidebar_toggle();
 
   if (task_indicator_ != nullptr) {
     QIcon icon = resource_icon(QStringLiteral("tasks"), c.text_muted, c.text_muted);
@@ -819,15 +813,24 @@ void MainWindow::open_settings() {
   if (settings_window_ == nullptr) {
     settings_window_ = new SettingsWindow(app_, this);
 
-    // A theme change must restyle this window's hand-painted chrome and every
-    // rendered transcript; an assistant change can move the context budget, so
+    // A theme change must restyle this window's hand-painted chrome and the
+    // transcript on screen; an assistant change can move the context budget, so
     // the header is refreshed too.
     settings_window_->set_on_saved([this]() {
       apply_window_style();
 
+      // Only the visible transcript is restyled now. Every other cached
+      // conversation is marked stale and restyles when it is next shown, so a
+      // save never re-renders Markdown for transcripts that are off screen.
       for (auto& [id, view] : conversations_) {
-        if (view != nullptr) {
+        if (view == nullptr) {
+          continue;
+        }
+
+        if (id == current_session_) {
           view->refresh_style();
+        } else {
+          view->mark_style_stale();
         }
       }
 
@@ -873,6 +876,25 @@ void MainWindow::toggle_sidebar() {
   if (sidebar_separator_ != nullptr) {
     sidebar_separator_->setVisible(sidebar_visible_);
   }
+
+  refresh_sidebar_toggle();
+}
+
+void MainWindow::refresh_sidebar_toggle() {
+  if (sidebar_toggle_ == nullptr) {
+    return;
+  }
+
+  // Tinted with the accent while the sidebar is shown, so its state reads at a
+  // glance (the same accent the send button uses); muted while it is hidden.
+  const ThemeColors& c = theme().colors;
+  const QColor colour = sidebar_visible_ ? c.accent : c.text_muted;
+
+  QIcon icon = resource_icon(QStringLiteral("sidebar"), colour, c.text_muted);
+  if (icon.isNull()) {
+    icon = style()->standardIcon(QStyle::SP_FileDialogListView);
+  }
+  sidebar_toggle_->setIcon(icon);
 }
 
 void MainWindow::update_task_indicator() {

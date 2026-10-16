@@ -47,6 +47,10 @@ struct ThemeMetrics {
   // Corner radius shared by the user's message block and the composer field, so
   // the two read as the same surface.
   int bubble_radius = 8;
+
+  // Value comparison, so the settings window can tell whether a save actually
+  // changed anything the theme depends on.
+  bool operator==(const ThemeMetrics&) const = default;
 };
 
 } // namespace lnb

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -83,11 +84,20 @@ private:
   void start(std::function<void(GenerationTask&, std::stop_token)> work);
   void finish_worker();
 
+  // Joins the worker only once it has actually exited. A cancelled turn keeps
+  // running until it observes the stop request, so an unconditional join here
+  // would freeze the interface for as long as the worker takes to notice; the
+  // join is instead completed by a later poll, when it is instant.
+  void reap_worker();
+
   lnb::Application& app_;
   std::uint32_t session_id_;
 
   GenerationTask task_;
   std::jthread worker_;
+  // Set by the worker as its very last action, so reap_worker() can tell the
+  // thread has exited without blocking on it.
+  std::atomic<bool> worker_finished_{false};
   bool running_ = false;
 
   std::mutex result_mutex_;

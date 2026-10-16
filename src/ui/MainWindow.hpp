@@ -78,6 +78,9 @@ private:
   // The status bar: toggles the sidebar's visibility, and opens the window that
   // lists the running generation tasks.
   void toggle_sidebar();
+  // Repaints the sidebar toggle's icon: accent while the sidebar is shown, muted
+  // while it is hidden.
+  void refresh_sidebar_toggle();
   void update_task_indicator();
   void open_tasks_window();
 

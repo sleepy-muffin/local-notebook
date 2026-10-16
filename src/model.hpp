@@ -45,9 +45,16 @@ public:
   // Stored in the session row (design-1.md §9).
   bool pinned_ = false;
 
-  // The single session knob: automatic-summarisation trigger, verbatim window
-  // and summarisation granularity all in one.
+  // The input bound, and the collapse trigger: a request carries the system
+  // prompt plus the transcript, and once that reaches this many tokens the
+  // older messages are folded into memory_.
   std::size_t summary_trigger_tokens_ = 16000;
+
+  // The level the transcript collapses to when the trigger fires: the newest
+  // messages kept verbatim, everything older folded. Keep it well below
+  // summary_trigger_tokens_, or the collapse re-triggers straight away.
+  std::size_t summary_keep_tokens_ = 4000;
+
   std::size_t summary_token_budget_ = 4000;
   std::size_t summary_reasoning_headroom_tokens_ = 12000;
 

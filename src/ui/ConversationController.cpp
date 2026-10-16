@@ -115,9 +115,21 @@ void ConversationController::edit_message(
 void ConversationController::start(
     std::function<void(GenerationTask&, std::stop_token)> work
 ) {
+  // The previous worker must be gone before its task and stop source are reused.
+  // Cancellation is prompt (the worker's heavy loops observe the stop token, and
+  // reap_worker() never blocks), so this is at most a short wait.
   if (worker_.joinable()) {
     worker_.join();
   }
+
+  {
+    // A late assistant-memory result from a cancelled turn must not leak into
+    // the next one.
+    std::lock_guard lock(result_mutex_);
+    pending_assistant_memory_.clear();
+  }
+
+  worker_finished_.store(false, std::memory_order_relaxed);
 
   task_.reset();
   task_.start();
@@ -138,10 +150,23 @@ void ConversationController::start(
     } catch (...) {
       task_.fail("The request failed for an unknown reason.");
     }
+
+    // The thread's last action, so reap_worker() can join it without blocking.
+    worker_finished_.store(true, std::memory_order_release);
   });
 }
 
+void ConversationController::reap_worker() {
+  if (worker_.joinable() && worker_finished_.load(std::memory_order_acquire)) {
+    worker_.join();
+  }
+}
+
 void ConversationController::poll() {
+  // Complete a deferred join from a previous cancelled turn, so the thread is
+  // always reclaimed even though the interface never waited for it.
+  reap_worker();
+
   if (!running_) {
     return;
   }
@@ -172,9 +197,9 @@ void ConversationController::poll() {
 }
 
 void ConversationController::finish_worker() {
-  if (worker_.joinable()) {
-    worker_.join();
-  }
+  // The worker may still be winding down after a cancel, so the join is deferred
+  // to a later poll (reap_worker) instead of freezing the interface here.
+  reap_worker();
 
   running_ = false;
 

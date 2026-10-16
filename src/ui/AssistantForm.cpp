@@ -30,10 +30,18 @@ struct SummaryPreset {
 };
 
 constexpr SummaryPreset kSummaryPresets[] = {
-    {"Light", 2000, 4000, 40000, 8000},
-    {"Balanced (default)", 4000, 12000, 80000, 16000},
-    {"Deep memory", 8000, 24000, 160000, 32000},
+    // memory, reasoning headroom, trigger, session pool
+    {"Very Light",          1000, 2000, 12000,  2000},
+    {"Light",               2000, 4000, 24000,  4000},
+    {"Balanced (default)",  4000, 8000, 48000,  8000},
+    {"Deep memory",         8000,16000, 96000, 16000},
 };
+
+// constexpr SummaryPreset kSummaryPresets[] = {
+//     {"Light", 2000, 4000, 40000, 8000},
+//     {"Balanced (default)", 4000, 12000, 80000, 16000},
+//     {"Deep memory", 8000, 24000, 160000, 32000},
+// };
 
 } // namespace
 

@@ -30,6 +30,7 @@
 #include <QPushButton>
 #include <QRect>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSet>
 #include <QSpinBox>
 #include <QStackedWidget>
@@ -566,6 +567,100 @@ void test_render_limit_unloads_history() {
   CHECK(rendered() == 2);
 }
 
+// Rebuilding the transcript (a finished turn, a style refresh) must not drag a
+// reader who had scrolled away back down to the bottom; only a reader already
+// parked at the bottom keeps following new content.
+void test_transcript_scroll_preserved_on_reload() {
+  enter_scratch("scroll-preserved");
+
+  lnb::Application notebook;
+  notebook.open_assistant("13131313-1313-1313-1313-131313131313", make_assistant());
+  const std::uint32_t session_id = notebook.sessions().create(lnb::Session{});
+
+  for (int i = 0; i < 60; ++i) {
+    notebook.messages(session_id).append(
+        lnb::Role::User,
+        (QStringLiteral("message %1: a line of text long enough to wrap on a narrow pane")
+             .arg(i))
+            .toStdString()
+    );
+  }
+
+  ui::ConversationView view(notebook, session_id);
+  view.resize(480, 260);
+  view.show();
+  QApplication::processEvents();
+  QApplication::processEvents();
+
+  auto* scroll = view.findChild<QScrollArea*>(QStringLiteral("Transcript"));
+  CHECK(scroll != nullptr);
+  if (scroll == nullptr) {
+    return;
+  }
+
+  QScrollBar* bar = scroll->verticalScrollBar();
+
+  // The history overflows the pane, so there is room to scroll away from the end.
+  CHECK(bar->maximum() > 0);
+
+  // The reader scrolls up to the top.
+  bar->setValue(0);
+  QApplication::processEvents();
+  CHECK(bar->value() == 0);
+
+  // A reload must leave them where they were, not pin them to the end.
+  view.reload();
+  QApplication::processEvents();
+  QApplication::processEvents();
+  CHECK(bar->value() == 0);
+
+  // A reader parked at the bottom, by contrast, keeps following: the same reload
+  // leaves them at the true bottom.
+  bar->setValue(bar->maximum());
+  QApplication::processEvents();
+  view.reload();
+  QApplication::processEvents();
+  QApplication::processEvents();
+  CHECK(bar->value() == bar->maximum());
+}
+
+// --- Message metadata ---------------------------------------------------------
+
+// Every stored message shows its arrival time in the hover strip next to the id,
+// so hovering reveals "#id  <local time>  [actions]".
+void test_message_timestamp() {
+  enter_scratch("message-timestamp");
+
+  lnb::Application notebook;
+  notebook.open_assistant("14141414-1414-1414-1414-141414141414", make_assistant());
+  const std::uint32_t session_id = notebook.sessions().create(lnb::Session{});
+
+  notebook.messages(session_id).append(lnb::Role::User, "hello");
+  notebook.messages(session_id).append(lnb::Role::Assistant, "hi there");
+
+  ui::ConversationView view(notebook, session_id);
+
+  int times = 0;
+  int ids = 0;
+
+  for (QLabel* label : view.findChildren<QLabel*>()) {
+    if (label->objectName() == QStringLiteral("MessageTime")) {
+      ++times;
+      // Rendered in the reader's local time as "yyyy-MM-dd HH:mm".
+      CHECK(!label->text().isEmpty());
+      CHECK(label->text().contains(QLatin1Char('-')));
+      CHECK(label->text().contains(QLatin1Char(':')));
+    } else if (label->objectName() == QStringLiteral("MessageId")) {
+      ++ids;
+      CHECK(!label->text().isEmpty());
+    }
+  }
+
+  // One strip per stored message (the user's and the assistant's).
+  CHECK(times == 2);
+  CHECK(ids == 2);
+}
+
 // --- Settings window ----------------------------------------------------------
 
 // Every settings page's content must fit its scroll area's viewport. The
@@ -816,13 +911,13 @@ void test_assistant_form_preset() {
     return;
   }
 
-  // Index 0 is the placeholder; "Balanced (default)" is the second real entry:
-  // memory 4000, headroom 12000, trigger 80000, session pool 16000, in field order.
-  preset->setCurrentIndex(2);
+  // Index 0 is the placeholder; "Balanced (default)" is the fourth entry:
+  // memory 4000, headroom 8000, trigger 48000, session pool 8000, in field order.
+  preset->setCurrentIndex(3);
   CHECK(spins[0]->value() == 4000);
-  CHECK(spins[1]->value() == 12000);
-  CHECK(spins[2]->value() == 80000);
-  CHECK(spins[3]->value() == 16000);
+  CHECK(spins[1]->value() == 8000);
+  CHECK(spins[2]->value() == 48000);
+  CHECK(spins[3]->value() == 8000);
 }
 
 void test_session_editor_preset() {
@@ -839,18 +934,18 @@ void test_session_editor_preset() {
     return;
   }
 
-  // "Large codebase analysis" (index 6) sets the trigger to 96000 and the tool-call
-  // budget to 128, which no other field holds.
+  // "Ultra" (index 6) sets the input bound to 192000 and the tool-call budget to
+  // 256, which no other field holds.
   preset->setCurrentIndex(6);
 
   bool found_trigger = false;
   bool found_calls = false;
   const QList<QSpinBox*> spins = editor.findChildren<QSpinBox*>();
   for (const QSpinBox* spin : spins) {
-    if (spin->value() == 96000) {
+    if (spin->value() == 192000) {
       found_trigger = true;
     }
-    if (spin->value() == 128) {
+    if (spin->value() == 256) {
       found_calls = true;
     }
   }
@@ -1084,6 +1179,43 @@ void test_conversation_backgrounds(QApplication& app) {
   CHECK(ui::theme().colors.input_background.alpha() == 0);
 }
 
+// A theme change restyles a visible conversation at once, but a conversation that
+// is hidden at the time (another session's transcript) only picks up the new theme
+// when it is next shown, so a settings save never re-renders every cached
+// conversation at once.
+void test_conversation_restyle_deferred_when_hidden(QApplication& app) {
+  enter_scratch("conversation-restyle-deferred");
+  write_probe_themes();
+
+  lnb::Application notebook;
+  notebook.open_assistant("15151515-1515-1515-1515-151515151515", make_assistant());
+  const std::uint32_t session_id = notebook.sessions().create(lnb::Session{});
+  notebook.messages(session_id).append(lnb::Role::User, "hello");
+
+  lnb::Settings opaque;
+  opaque.theme = "Opaque";
+  ui::apply_theme(app, opaque);
+
+  ui::ConversationView view(notebook, session_id);
+  const QString before = view.styleSheet();
+  CHECK(!before.isEmpty());
+
+  // The theme moves on while the view is hidden; marking it stale must not touch
+  // the sheet yet.
+  lnb::Settings translucent;
+  translucent.theme = "Translucent";
+  ui::apply_theme(app, translucent);
+  view.mark_style_stale();
+  CHECK(view.styleSheet() == before);
+
+  // Showing it does the deferred restyle.
+  view.show();
+  QApplication::processEvents();
+  CHECK(view.styleSheet() != before);
+
+  ui::apply_theme(app, lnb::Settings{});
+}
+
 // --- Background image cache ---------------------------------------------------
 
 // Replacing the background image with a different one of the *same* size must be
@@ -1127,6 +1259,16 @@ void test_background_image_reload(QApplication& app) {
   const QColor blue_centre = blue.pixelColor(blue.width() / 2, blue.height() / 2);
   CHECK(blue_centre.blue() > 150);
   CHECK(blue_centre.red() < 100);
+
+  // Re-applying the *same* path (a settings save with no image change) must not
+  // blank the background: an identical request short-circuits rather than clearing
+  // the cached image and re-decoding it.
+  apply(QStringLiteral("blue.png"));
+  const QImage blue_again = widget.grab().toImage();
+  const QColor blue_again_centre =
+      blue_again.pixelColor(blue_again.width() / 2, blue_again.height() / 2);
+  CHECK(blue_again_centre.blue() > 150);
+  CHECK(blue_again_centre.red() < 100);
 
   // Leave the default theme installed for the tests that follow.
   ui::apply_theme(app, lnb::Settings{});
@@ -1244,9 +1386,9 @@ void test_summary_review_decline() {
   notebook.open_assistant("77777777-7777-7777-7777-777777777777", make_assistant());
 
   lnb::Session session;
-  // A one-token trigger keeps only the newest message verbatim, so the older
+  // A one-token keep window holds only the newest message verbatim, so the older
   // messages become the overflow the pass would fold.
-  session.summary_trigger_tokens_ = 1;
+  session.summary_keep_tokens_ = 1;
   session.memory_ = "Previous memory.";
   const std::uint32_t session_id = notebook.sessions().create(session);
 
@@ -1426,6 +1568,8 @@ int main(int argc, char** argv) {
   test_session_row_action_icons(app);
   test_pinned_category();
   test_render_limit_unloads_history();
+  test_transcript_scroll_preserved_on_reload();
+  test_message_timestamp();
   test_settings_window_nav(app);
   test_settings_reload_on_show(app);
   test_settings_window_restyles_on_show(app);
@@ -1435,6 +1579,7 @@ int main(int argc, char** argv) {
   test_translucent_theme_buttons(app);
   test_code_block_restyles_on_theme_change(app);
   test_conversation_backgrounds(app);
+  test_conversation_restyle_deferred_when_hidden(app);
   test_background_image_reload(app);
   test_bundled_resources();
   test_app_icon();

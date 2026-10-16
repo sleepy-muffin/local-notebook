@@ -41,8 +41,8 @@ QJsonObject build_session_payload(
 );
 
 // How much of the input bound the next request would occupy, in estimated
-// tokens. `limit_tokens` is `session.summary_trigger_tokens_`, the single input
-// bound (design-1.md §1). Used to show context usage on the title bar.
+// tokens. `limit_tokens` is `session.summary_trigger_tokens_`, the input bound
+// (design-1.md §1). Used to show context usage on the title bar.
 struct ContextUsage {
   std::size_t used_tokens = 0;
   std::size_t limit_tokens = 0;
