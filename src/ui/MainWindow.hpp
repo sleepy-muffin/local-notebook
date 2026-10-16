@@ -118,7 +118,7 @@ private:
   QLabel* category_ = nullptr;
 
   QLabel* header_subtitle_ = nullptr;
-  QLabel* header_context_ = nullptr;
+  QLabel* header_summarization_trigger_ = nullptr;
   QLabel* header_time_ = nullptr;
 
   QStackedWidget* workspace_ = nullptr;

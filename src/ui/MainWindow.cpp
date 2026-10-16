@@ -262,8 +262,8 @@ QWidget* MainWindow::build_title_bar() {
   header_subtitle_ = new QLabel(bar);
   header_subtitle_->setObjectName(QStringLiteral("HeaderSubtitle"));
 
-  header_context_ = new QLabel(bar);
-  header_context_->setObjectName(QStringLiteral("HeaderContext"));
+  header_summarization_trigger_ = new QLabel(bar);
+  header_summarization_trigger_->setObjectName(QStringLiteral("HeaderContext"));
 
   header_time_ = new QLabel(bar);
   header_time_->setObjectName(QStringLiteral("HeaderTime"));
@@ -271,7 +271,7 @@ QWidget* MainWindow::build_title_bar() {
   layout->addWidget(brand_);
   layout->addStretch(1);
   layout->addWidget(header_subtitle_);
-  layout->addWidget(header_context_);
+  layout->addWidget(header_summarization_trigger_);
   layout->addSpacing(12);
   layout->addWidget(header_time_);
 
@@ -1082,8 +1082,8 @@ void MainWindow::update_header() {
     // No session open: the conversation info is simply absent; the banner on the
     // left of the bar stays.
     header_subtitle_->clear();
-    header_context_->clear();
-    header_context_->setToolTip(QString());
+    header_summarization_trigger_->clear();
+    header_summarization_trigger_->setToolTip(QString());
     header_time_->clear();
     return;
   }
@@ -1095,8 +1095,8 @@ void MainWindow::update_header() {
   const lnb::net::ContextUsage usage =
       lnb::net::context_usage(*session, sample);
 
-  header_context_->setText(format_tokens(usage.used_tokens, usage.limit_tokens));
-  header_context_->setToolTip(
+  header_summarization_trigger_->setText("summarisation trigger: " + format_tokens(usage.used_tokens, usage.limit_tokens));
+  header_summarization_trigger_->setToolTip(
       QStringLiteral(
           "%1 / %2 conversation tokens (system prompt excluded; the collapse "
           "fires at the limit)"
