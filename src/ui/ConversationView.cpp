@@ -34,6 +34,7 @@
 #include "app/application.hpp"
 #include "context/context.hpp"
 #include "net/client.hpp"
+#include "support/i18n.hpp"
 #include "ui/theme.hpp"
 
 namespace ui {
@@ -74,16 +75,16 @@ QString format_message_time(const std::string& iso) {
 // be mistaken for the id or the time.
 QString format_token_estimate(std::size_t tokens) {
   if (tokens < 1000) {
-    return QStringLiteral("%1 tok").arg(static_cast<qulonglong>(tokens));
+    return trs("%1 tok").arg(static_cast<qulonglong>(tokens));
   }
 
   const double thousands = static_cast<double>(tokens) / 1000.0;
 
   if (tokens % 1000 == 0 || tokens >= 100000) {
-    return QStringLiteral("%1k tok").arg(qRound(thousands));
+    return trs("%1k tok").arg(qRound(thousands));
   }
 
-  return QStringLiteral("%1k tok").arg(thousands, 0, 'f', 1);
+  return trs("%1k tok").arg(thousands, 0, 'f', 1);
 }
 
 // Fixed height of every action strip, so revealing the buttons never reflows the
@@ -784,7 +785,7 @@ ConversationView::ConversationView(
   // Reveals older messages on demand. It is inserted directly after the leading
   // stretch, so it stays pinned above every rendered row; it is hidden while the
   // whole history is already on screen.
-  load_older_ = new QPushButton(QStringLiteral("Load earlier messages"), transcript_);
+  load_older_ = new QPushButton(trs("Load earlier messages"), transcript_);
   load_older_->setObjectName(QStringLiteral("Secondary"));
   load_older_->setVisible(false);
   transcript_layout_->insertWidget(1, load_older_, 0, Qt::AlignHCenter);
@@ -853,8 +854,8 @@ ConversationView::ConversationView(
   input_->setObjectName(QStringLiteral("Composer"));
   input_->setPlaceholderText(
       app_.settings().enter_with_modifier
-          ? QStringLiteral("Type a message...  (Ctrl+Enter to send, Enter for a new line)")
-          : QStringLiteral("Type a message...  (Enter to send, Shift+Enter for a new line)")
+          ? trs("Type a message...  (Ctrl+Enter to send, Enter for a new line)")
+          : trs("Type a message...  (Enter to send, Shift+Enter for a new line)")
   );
   input_->setTabChangesFocus(true);
   input_->setFont(chat_font());
@@ -1179,7 +1180,7 @@ void ConversationView::update_load_older_visibility() {
   load_older_->setVisible(hidden > 0);
 
   if (hidden > 0) {
-    load_older_->setText(QStringLiteral("Load earlier messages (%1)").arg(hidden));
+    load_older_->setText(trs("Load earlier messages (%1)").arg(hidden));
   }
 }
 
@@ -1264,7 +1265,7 @@ MessageRow* ConversationView::make_row(
     if (role == MessageBubble::Role::Assistant) {
       auto* copy = row->add_action(
           QStringLiteral("copy"), QStyle::SP_DialogSaveButton,
-          QStringLiteral("Copy message")
+          trs("Copy message")
       );
 
       connect(
@@ -1276,7 +1277,7 @@ MessageRow* ConversationView::make_row(
     if (editable) {
       auto* edit = row->add_action(
           QStringLiteral("edit"), QStyle::SP_FileIcon,
-          QStringLiteral("Edit message")
+          trs("Edit message")
       );
 
       connect(
@@ -1287,7 +1288,7 @@ MessageRow* ConversationView::make_row(
 
     auto* remove = row->add_action(
         QStringLiteral("delete"), QStyle::SP_TrashIcon,
-        QStringLiteral("Delete message")
+        trs("Delete message")
     );
 
     connect(
@@ -1312,7 +1313,7 @@ void ConversationView::prompt_edit(std::uint32_t message_id, const QString& curr
   bool accepted = false;
 
   const QString edited = QInputDialog::getMultiLineText(
-      this, QStringLiteral("Edit message"), QStringLiteral("Message:"), current, &accepted
+      this, trs("Edit message"), trs("Message:"), current, &accepted
   );
 
   if (accepted && edited != current) {
@@ -1445,7 +1446,7 @@ void ConversationView::apply_composer_icons() {
 
       send_button_->setIcon(icon);
       send_button_->setToolTip(
-          QStringLiteral("Summarize the conversation into memory")
+          trs("Summarize the conversation into memory")
       );
     } else {
       // The send arrow takes the accent colour; a busy composer mutes it through
@@ -1457,7 +1458,7 @@ void ConversationView::apply_composer_icons() {
       }
 
       send_button_->setIcon(icon);
-      send_button_->setToolTip(QStringLiteral("Send"));
+      send_button_->setToolTip(trs("Send"));
     }
   }
 
@@ -1474,8 +1475,8 @@ void ConversationView::apply_composer_icons() {
 
     expand_button_->setIcon(icon);
     expand_button_->setToolTip(
-        expanded ? QStringLiteral("Shrink the composer")
-                 : QStringLiteral("Expand the composer")
+        expanded ? trs("Shrink the composer")
+                 : trs("Expand the composer")
     );
   }
 
@@ -1489,7 +1490,7 @@ void ConversationView::apply_composer_icons() {
     }
 
     cancel_button_->setIcon(icon);
-    cancel_button_->setToolTip(QStringLiteral("Cancel"));
+    cancel_button_->setToolTip(trs("Cancel"));
   }
 }
 

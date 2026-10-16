@@ -24,6 +24,7 @@
 
 #include "app/application.hpp"
 #include "net/client.hpp"
+#include "support/i18n.hpp"
 #include "ui/ConversationView.hpp"
 #include "ui/SessionItemDelegate.hpp"
 #include "ui/SessionListModel.hpp"
@@ -218,7 +219,7 @@ QWidget* MainWindow::build_status_bar() {
   sidebar_toggle_->setCursor(Qt::PointingHandCursor);
   sidebar_toggle_->setFixedSize(20, 20);
   sidebar_toggle_->setIconSize(QSize(15, 15));
-  sidebar_toggle_->setToolTip(QStringLiteral("Toggle sidebar"));
+  sidebar_toggle_->setToolTip(trs("Toggle sidebar"));
 
   connect(
       sidebar_toggle_, &QToolButton::clicked, this, [this]() { toggle_sidebar(); }
@@ -482,12 +483,12 @@ QWidget* MainWindow::build_sidebar() {
   new_session_layout->setContentsMargins(0, kNewSessionPadding, 0, 0);
   new_session_layout->setSpacing(0);
 
-  new_session_button_ = new QPushButton(QStringLiteral("New Session"), new_session_row);
+  new_session_button_ = new QPushButton(trs("New Session"), new_session_row);
   new_session_button_->setObjectName(QStringLiteral("NewSession"));
   new_session_button_->setCursor(Qt::PointingHandCursor);
   new_session_button_->setFocusPolicy(Qt::NoFocus);
   new_session_button_->setFlat(true);
-  new_session_button_->setToolTip(QStringLiteral("New Session"));
+  new_session_button_->setToolTip(trs("New Session"));
 
   new_session_button_->setIconSize(QSize(16, 16));
 
@@ -512,7 +513,7 @@ QWidget* MainWindow::build_sidebar() {
     pinned_category_layout->setContentsMargins(kSidebarPadding, 10, kSidebarPadding, 4);
     pinned_category_layout->setSpacing(0);
 
-    auto* pinned_category = new QLabel(QStringLiteral("PINNED"), pinned_category_row);
+    auto* pinned_category = new QLabel(trs("PINNED"), pinned_category_row);
     pinned_category->setObjectName(QStringLiteral("SidebarCategory"));
 
     pinned_category_layout->addWidget(pinned_category);
@@ -534,7 +535,7 @@ QWidget* MainWindow::build_sidebar() {
   category_layout->setContentsMargins(kSidebarPadding, 10, kSidebarPadding, 4);
   category_layout->setSpacing(0);
 
-  category_ = new QLabel(QStringLiteral("SESSIONS"), category_row);
+  category_ = new QLabel(trs("SESSIONS"), category_row);
   category_->setObjectName(QStringLiteral("SidebarCategory"));
 
   category_layout->addWidget(category_);
@@ -576,7 +577,7 @@ QWidget* MainWindow::build_sidebar() {
   current_settings_->setFixedSize(26, 26);
   current_settings_->setIconSize(QSize(16, 16));
   current_settings_->setCursor(Qt::PointingHandCursor);
-  current_settings_->setToolTip(QStringLiteral("Settings"));
+  current_settings_->setToolTip(trs("Settings"));
 
   connect(
       current_settings_, &QToolButton::clicked, this, [this]() { open_settings(); }
@@ -609,7 +610,7 @@ QWidget* MainWindow::build_right_pane() {
   workspace_->setMinimumWidth(0);
   workspace_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
 
-  empty_hint_ = new QLabel(QStringLiteral("Select a session, or create one to start."), workspace_);
+  empty_hint_ = new QLabel(trs("Select a session, or create one to start."), workspace_);
   empty_hint_->setObjectName(QStringLiteral("EmptyHint"));
   empty_hint_->setAlignment(Qt::AlignCenter);
 
@@ -921,9 +922,9 @@ void MainWindow::update_task_indicator() {
     // glyph beside the count otherwise.
     task_indicator_->setText(running == 0 ? QString() : QString::number(running));
     task_indicator_->setToolTip(
-        running == 0 ? QStringLiteral("No tasks running")
-        : running == 1 ? QStringLiteral("1 task running")
-                      : QStringLiteral("%1 tasks running").arg(running)
+        running == 0 ? trs("No tasks running")
+        : running == 1 ? trs("1 task running")
+                      : trs("%1 tasks running").arg(running)
     );
   }
 
@@ -952,7 +953,7 @@ void MainWindow::update_task_indicator() {
     const auto session = app_.db().session(id);
     const QString title = session.has_value() && !session->title_.empty()
         ? from_utf8(session->title_)
-        : QStringLiteral("Session #%1").arg(id);
+        : trs("Session #%1").arg(id);
 
     TasksWindow::Entry entry;
     entry.session_id = id;
@@ -961,7 +962,7 @@ void MainWindow::update_task_indicator() {
 
     if (busy) {
       const ConversationController::Progress progress = view->progress();
-      entry.state = QStringLiteral("Running");
+      entry.state = trs("Running");
       entry.rounds = progress.rounds;
       entry.elapsed_ms = progress.elapsed_ms;
     } else {
@@ -972,13 +973,13 @@ void MainWindow::update_task_indicator() {
 
       switch (snapshot.status) {
         case lnb::GenerationTask::Status::FAILED:
-          entry.state = QStringLiteral("Failed");
+          entry.state = trs("Failed");
           break;
         case lnb::GenerationTask::Status::CANCELLED:
-          entry.state = QStringLiteral("Cancelled");
+          entry.state = trs("Cancelled");
           break;
         default:
-          entry.state = QStringLiteral("Completed");
+          entry.state = trs("Completed");
           break;
       }
     }
@@ -1061,8 +1062,8 @@ void MainWindow::delete_session(std::uint32_t session_id) {
   }
 
   const QMessageBox::StandardButton answer = QMessageBox::warning(
-      this, QStringLiteral("Delete Session"),
-      QStringLiteral("Are you sure you want to delete this session? This cannot be undone."),
+      this, trs("Delete Session"),
+      trs("Are you sure you want to delete this session? This cannot be undone."),
       QMessageBox::Yes | QMessageBox::No, QMessageBox::No
   );
 
@@ -1088,19 +1089,17 @@ void MainWindow::update_header() {
     return;
   }
 
-  header_subtitle_->setText(QStringLiteral("Session #%1").arg(session->id_));
+  header_subtitle_->setText(trs("Session #%1").arg(session->id_));
 
   const std::vector<lnb::Message> sample =
       app_.db().recent_messages(current_session_, kContextSampleMessages);
   const lnb::net::ContextUsage usage =
       lnb::net::context_usage(*session, sample);
 
-  header_summarization_trigger_->setText("summarisation trigger: " + format_tokens(usage.used_tokens, usage.limit_tokens));
+  header_summarization_trigger_->setText(trs("summarisation trigger: ") + format_tokens(usage.used_tokens, usage.limit_tokens));
   header_summarization_trigger_->setToolTip(
-      QStringLiteral(
-          "%1 / %2 conversation tokens (system prompt excluded; the collapse "
-          "fires at the limit)"
-      )
+      trs("%1 / %2 conversation tokens (system prompt excluded; the collapse "
+          "fires at the limit)")
           .arg(usage.used_tokens)
           .arg(usage.limit_tokens)
   );
@@ -1112,7 +1111,7 @@ void MainWindow::update_current_block() {
   const lnb::Assistant& assistant = app_.assistant();
 
   const QString name = from_utf8(assistant.name_);
-  current_name_->setText(name.isEmpty() ? QStringLiteral("Assistant") : name);
+  current_name_->setText(name.isEmpty() ? trs("Assistant") : name);
 
   const QString model = from_utf8(assistant.model_);
   current_model_->setText(model);

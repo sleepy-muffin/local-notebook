@@ -22,6 +22,10 @@ struct Settings {
 
   std::string theme = "Catppuccin Mocha";
 
+  // UI language code: "en", "zh" or "ja". Applied at startup (and on Save
+  // from the Configuration page); see support/i18n.hpp.
+  std::string language = "en";
+
   // Optional background image, resolved relative to the working directory.
   std::optional<std::string> background_url;
 

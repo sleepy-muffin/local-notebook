@@ -18,6 +18,7 @@
 #include <string>
 #include <utility>
 
+#include "support/i18n.hpp"
 #include "ui/BackgroundWidget.hpp"
 #include "ui/dialog_style.hpp"
 #include "ui/theme.hpp"
@@ -34,8 +35,8 @@ namespace {
 QString render_request(const QJsonObject& request) {
   QString text;
 
-  text += QStringLiteral("Model: %1\n").arg(request.value("model").toString());
-  text += QStringLiteral("Completion cap: %1 tokens\n\n")
+  text += trs("Model: %1\n").arg(request.value("model").toString());
+  text += trs("Completion cap: %1 tokens\n\n")
               .arg(request.value("max_tokens").toInt());
 
   const QJsonArray messages = request.value("messages").toArray();
@@ -73,7 +74,7 @@ SummaryReviewDialog::SummaryReviewDialog(
 )
     : QDialog(parent) {
   setObjectName(QStringLiteral("SummaryReview"));
-  setWindowTitle(QStringLiteral("Review summarization"));
+  setWindowTitle(trs("Review summarization"));
   setModal(true);
   resize(680, 640);
   setMinimumSize(480, 400);
@@ -90,14 +91,14 @@ SummaryReviewDialog::SummaryReviewDialog(
   outer->setContentsMargins(24, 20, 24, 16);
   outer->setSpacing(0);
 
-  auto* heading = new QLabel(QStringLiteral("Review summarization"), background);
+  auto* heading = new QLabel(trs("Review summarization"), background);
   heading->setObjectName(QStringLiteral("FormTitle"));
   heading->setFont(scaled_font(4.0, true));
   outer->addWidget(heading);
   outer->addSpacing(6);
 
   auto* subtitle = new QLabel(
-      QStringLiteral(
+      trs(
           "The following request is about to be sent to the model to update the %1. "
           "Review it and choose whether to run the summarisation."
       )
@@ -129,7 +130,7 @@ SummaryReviewDialog::SummaryReviewDialog(
     outer->addSpacing(6);
 
     auto* note = new QLabel(
-        QStringLiteral(
+        trs(
             "This is the first of several requests: the remaining messages are folded "
             "in further batches after this one."
         ),
@@ -148,10 +149,10 @@ SummaryReviewDialog::SummaryReviewDialog(
   footer->setSpacing(8);
   footer->addStretch(1);
 
-  auto* cancel = new QPushButton(QStringLiteral("Cancel"), background);
+  auto* cancel = new QPushButton(trs("Cancel"), background);
   cancel->setObjectName(QStringLiteral("Secondary"));
 
-  auto* run = new QPushButton(QStringLiteral("Run"), background);
+  auto* run = new QPushButton(trs("Run"), background);
   run->setObjectName(QStringLiteral("Primary"));
   run->setDefault(true);
 
@@ -178,8 +179,8 @@ bool review_summary(const lnb::net::SummaryPlan& plan) {
     // harmless: say so, and point at the manual action.
     on_ui_thread([]() {
       QMessageBox::warning(
-          QApplication::activeWindow(), QStringLiteral("Summarization Skipped"),
-          QStringLiteral(
+          QApplication::activeWindow(), trs("Summarization Skipped"),
+          trs(
               "The automatic summarisation was skipped. Some messages may not be "
               "folded into memory; use Summarize now before sending new messages if "
               "you want them converged."

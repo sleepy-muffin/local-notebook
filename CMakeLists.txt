@@ -23,6 +23,8 @@ add_library(local-notebook-core STATIC
 
         src/support/log.hpp
         src/support/generation_task.hpp
+        src/support/i18n.hpp
+        src/support/i18n.cpp
 
         src/store/sqlite.hpp
         src/store/sqlite.cpp

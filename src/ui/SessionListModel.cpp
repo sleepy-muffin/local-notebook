@@ -3,6 +3,8 @@
 #include <QDate>
 #include <QDateTime>
 
+#include "support/i18n.hpp"
+
 namespace ui {
 
 namespace {
@@ -57,7 +59,7 @@ QVariant SessionListModel::data(const QModelIndex& index, int role) const {
     case Qt::DisplayRole:
     case TitleRole: {
       const QString title = QString::fromStdString(session.title_);
-      return title.isEmpty() ? QStringLiteral("New Session") : title;
+      return title.isEmpty() ? trs("New Session") : title;
     }
     case IdRole:
       return static_cast<uint>(session.id_);

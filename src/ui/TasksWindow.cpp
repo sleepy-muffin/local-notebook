@@ -14,6 +14,7 @@
 #include <QVBoxLayout>
 #include <QVariant>
 
+#include "support/i18n.hpp"
 #include "ui/dialog_style.hpp"
 #include "ui/theme.hpp"
 
@@ -25,7 +26,7 @@ namespace {
 
 // The running (or finished) time of a task, to one decimal of a second.
 QString format_elapsed(std::int64_t milliseconds) {
-  return QStringLiteral("%1 s").arg(static_cast<double>(milliseconds) / 1000.0, 0, 'f', 1);
+  return trs("%1 s").arg(static_cast<double>(milliseconds) / 1000.0, 0, 'f', 1);
 }
 
 // A read-only, scrollable, plain-text dump of one task's log. It deliberately
@@ -55,13 +56,13 @@ void show_log(QWidget* parent, const QString& title, const QString& log) {
   view->setReadOnly(true);
   view->setLineWrapMode(QPlainTextEdit::NoWrap);
   view->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-  view->setPlainText(log.isEmpty() ? QStringLiteral("This task produced no log.") : log);
+  view->setPlainText(log.isEmpty() ? trs("This task produced no log.") : log);
   root->addWidget(view, 1);
 
   auto* footer = new QHBoxLayout();
   footer->addStretch(1);
 
-  auto* close = new QPushButton(QStringLiteral("Close"), &dialog);
+  auto* close = new QPushButton(trs("Close"), &dialog);
   close->setObjectName(QStringLiteral("Secondary"));
   QObject::connect(close, &QPushButton::clicked, &dialog, [&dialog]() { dialog.accept(); });
   footer->addWidget(close);
@@ -78,7 +79,7 @@ void show_log(QWidget* parent, const QString& title, const QString& log) {
 
 TasksWindow::TasksWindow(QWidget* parent) : QDialog(parent) {
   setObjectName(QStringLiteral("TasksWindow"));
-  setWindowTitle(QStringLiteral("Tasks"));
+  setWindowTitle(trs("Tasks"));
   setModal(false);
   resize(460, 360);
   setMinimumSize(340, 220);
@@ -93,12 +94,12 @@ TasksWindow::TasksWindow(QWidget* parent) : QDialog(parent) {
   header_layout->setContentsMargins(20, 16, 20, 12);
   header_layout->setSpacing(2);
 
-  auto* title = new QLabel(QStringLiteral("Tasks"), header);
+  auto* title = new QLabel(trs("Tasks"), header);
   title->setObjectName(QStringLiteral("PageTitle"));
   apply_derived_font(title, 1.0, true);
 
   auto* subtitle = new QLabel(
-      QStringLiteral(
+      trs(
           "Running and recently finished generation tasks. "
           "Select one to read its log."
       ),
@@ -121,7 +122,7 @@ TasksWindow::TasksWindow(QWidget* parent) : QDialog(parent) {
   list_layout_->setContentsMargins(16, 0, 16, 16);
   list_layout_->setSpacing(8);
 
-  empty_ = new QLabel(QStringLiteral("No tasks yet."), list_);
+  empty_ = new QLabel(trs("No tasks yet."), list_);
   empty_->setObjectName(QStringLiteral("Muted"));
   empty_->setAlignment(Qt::AlignCenter);
   list_layout_->addWidget(empty_);
@@ -166,7 +167,7 @@ void TasksWindow::open_log(std::size_t index) {
 
   const Entry& entry = entries_[index];
   const QString title = entry.title.isEmpty()
-      ? QStringLiteral("Session #%1").arg(entry.session_id)
+      ? trs("Session #%1").arg(entry.session_id)
       : entry.title;
 
   const QString log =
@@ -257,7 +258,7 @@ void TasksWindow::set_entries(std::vector<Entry> entries) {
     rows_[i].title->setText(entry.title);
 
     const QString detail =
-        QStringLiteral("Session #%1   ·   %2   ·   Round %3   ·   %4")
+        trs("Session #%1   ·   %2   ·   Round %3   ·   %4")
             .arg(entry.session_id)
             .arg(entry.state)
             .arg(entry.rounds)

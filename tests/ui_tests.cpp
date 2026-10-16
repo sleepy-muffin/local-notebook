@@ -59,6 +59,7 @@
 #include "net/client.hpp"
 #include "store/util.hpp"
 #include "support/generation_task.hpp"
+#include "support/i18n.hpp"
 #include "ui/AssistantForm.hpp"
 #include "ui/BackgroundWidget.hpp"
 #include "ui/ConversationView.hpp"
@@ -146,6 +147,7 @@ void test_settings_round_trip() {
   original.rendered_message_limit = 7;
   original.history_page_size = 11;
   original.enter_with_modifier = false;
+  original.language = "ja";
 
   lnb::ThemeMetrics metrics;
   metrics.sidebar_width = 301;
@@ -163,6 +165,7 @@ void test_settings_round_trip() {
   CHECK(loaded.rendered_message_limit == 7);
   CHECK(loaded.history_page_size == 11);
   CHECK(loaded.enter_with_modifier == false);
+  CHECK(loaded.language == "ja");
 
   CHECK(loaded.metrics.has_value());
   if (loaded.metrics.has_value()) {
@@ -176,6 +179,45 @@ void test_settings_round_trip() {
 
   // auto_login defaults to on when the key is absent.
   CHECK(lnb::Settings{}.auto_login == true);
+}
+
+// --- UI translation -----------------------------------------------------------
+
+// The translation layer: language codes round-trip, registered strings translate,
+// unknown strings fall back to their English source, and English is the identity.
+void test_i18n() {
+  using lnb::i18n::Language;
+
+  CHECK(lnb::i18n::language_from_code("en") == Language::English);
+  CHECK(lnb::i18n::language_from_code("zh") == Language::Chinese);
+  CHECK(lnb::i18n::language_from_code("ja") == Language::Japanese);
+  // An unknown code falls back to English, so a hand-edited settings.json is safe.
+  CHECK(lnb::i18n::language_from_code("fr") == Language::English);
+
+  CHECK(lnb::i18n::code_from_language(Language::English) == "en");
+  CHECK(lnb::i18n::code_from_language(Language::Chinese) == "zh");
+  CHECK(lnb::i18n::code_from_language(Language::Japanese) == "ja");
+
+  CHECK(lnb::i18n::language_name(Language::English) == QStringLiteral("English"));
+  CHECK(lnb::i18n::language_name(Language::Chinese) == QString::fromUtf8("中文"));
+  CHECK(lnb::i18n::language_name(Language::Japanese) == QString::fromUtf8("日本語"));
+
+  // English is the identity, and an unregistered string falls back everywhere.
+  lnb::i18n::set_language(Language::English);
+  CHECK(lnb::i18n::trs("Cancel") == QStringLiteral("Cancel"));
+  CHECK(lnb::i18n::trs("Not a registered string") == QStringLiteral("Not a registered string"));
+
+  lnb::i18n::set_language(Language::Chinese);
+  CHECK(lnb::i18n::trs("Cancel") == QString::fromUtf8("取消"));
+  CHECK(lnb::i18n::trs("Not a registered string") == QStringLiteral("Not a registered string"));
+  // A format string still composes after translation.
+  CHECK(lnb::i18n::trs("Session #%1").arg(5) == QString::fromUtf8("会话 #5"));
+
+  lnb::i18n::set_language(Language::Japanese);
+  CHECK(lnb::i18n::trs("Cancel") == QString::fromUtf8("キャンセル"));
+
+  // Leave English installed for the tests that follow.
+  lnb::i18n::set_language(Language::English);
 }
 
 // --- AssistantForm ------------------------------------------------------------
@@ -1594,6 +1636,7 @@ int main(int argc, char** argv) {
   } guard{std::filesystem::current_path()};
 
   test_settings_round_trip();
+  test_i18n();
   test_assistant_form_round_trip();
   test_spin_box_wheel();
   test_font_combo_wheel();

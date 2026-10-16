@@ -2,6 +2,7 @@
 
 #include "app/application.hpp"
 #include "net/client.hpp"
+#include "support/i18n.hpp"
 #include "support/log.hpp"
 #include "ui/SummaryReviewDialog.hpp"
 
@@ -191,7 +192,7 @@ void ConversationController::start(
       // want: a cancelled turn reports nothing.
       task_.fail(error.what());
     } catch (...) {
-      task_.fail("The request failed for an unknown reason.");
+      task_.fail(trs("The request failed for an unknown reason.").toStdString());
     }
 
     // The thread's last action, so reap_worker() can join it without blocking.

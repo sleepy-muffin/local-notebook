@@ -65,7 +65,7 @@ Qt Widgets, with no JavaScript anywhere in the stack.
 ```
 src/
   model.hpp                 Role, Message, Session, Assistant
-  support/                  logging, the cancellable GenerationTask
+  support/                  logging, the cancellable GenerationTask, UI i18n
   store/                    SQLite wrapper, database, SessionManager/MessageManager
   app/                      global settings, assistant I/O, the Application object
   context/                  the pure context layer: windowing, triggers, summariser payloads
@@ -174,7 +174,14 @@ Configuration lives at three levels, matching the three things it configures.
 
 Theme, fonts, window geometry, background image and tint, and the transcript
 rendering window. It also holds `auto_login` (reopen the last assistant at startup,
-or always show the picker).
+or always show the picker) and `language` (the UI language code: `en`, `zh` or `ja`).
+
+The UI language is a pure English-source lookup (`support/i18n.hpp`): every
+user-visible string is registered by its English text, English is the identity
+mapping, and an unknown or missing key falls back to English. It is chosen on the
+**Configuration** page; because the strings are baked into the widgets when a
+window is built, changing it offers to restart the application so every window
+picks up the new language.
 
 Some bundled themes are marked **(Translucent)**: their surfaces carry an alpha so
 the background image shows through. The standard controls (buttons, input fields,
@@ -353,9 +360,10 @@ Windows:
   auto-login checkbox. Never shows API keys or URLs.
 - **Settings** — a left navigation with **Configuration**, **Metrics**, **Assistant**,
   **Account** and **About**. The Assistant page edits the open assistant's
-  configuration *and* shows its memory, with a manual **Summarize now**. Save applies
-  everything, re-applies the theme at runtime, and closes the window. Because a
-  cancelled edit must not survive to the next visit, every open re-reads the stored
+  configuration *and* shows its memory, with a manual **Summarize now**. The
+  Configuration page's **Appearance** section carries the **Language** selector. Save
+  applies everything, re-applies the theme at runtime, and closes the window. Because
+  a cancelled edit must not survive to the next visit, every open re-reads the stored
   settings, metrics and assistant. The Configuration and Metrics pages each carry a
   **Restore to defaults** button (the shipped defaults, and the current theme's own
   metrics respectively); it only fills the fields and never saves.
@@ -485,8 +493,8 @@ ctest --test-dir build/linux-x64-debug --output-on-failure
   settings navigation, settings reload-on-show and restyling on a theme change, and
   restore-to-defaults, the budget and
   summarisation presets, the wheel-safe spin boxes, combo boxes and font selectors, the
-  background-image cache, the summarisation review window (including its cross-thread
-  marshalling), and the composer.
+  background-image cache, the UI translation lookups, the summarisation review window
+  (including its cross-thread marshalling), and the composer.
 
 ## License
 

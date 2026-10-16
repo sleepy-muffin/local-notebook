@@ -86,6 +86,7 @@ QJsonObject to_json(const Settings& settings) {
   QJsonObject object;
   object["last_assistant"] = QString::fromStdString(settings.last_assistant);
   object["theme"] = QString::fromStdString(settings.theme);
+  object["language"] = QString::fromStdString(settings.language);
 
   object["background_url"] = settings.background_url.has_value()
       ? QJsonValue(QString::fromStdString(*settings.background_url))
@@ -126,6 +127,11 @@ Settings from_json(const QJsonObject& object) {
   const QString theme = object.value("theme").toString();
   if (!theme.isEmpty()) {
     settings.theme = theme.toStdString();
+  }
+
+  const QString language = object.value("language").toString();
+  if (!language.isEmpty()) {
+    settings.language = language.toStdString();
   }
 
   if (object.value("background_url").isString()) {

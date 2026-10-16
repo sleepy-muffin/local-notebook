@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 
+#include "support/i18n.hpp"
 #include "ui/dialog_style.hpp"
 
 namespace ui {
@@ -57,66 +58,65 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
   content->setSpacing(12);
 
   // ---- Assistant ----
-  content->addWidget(section_label(this, QStringLiteral("Assistant")));
+  content->addWidget(section_label(this, trs("Assistant")));
   {
     auto* form = form_layout(this);
 
     name_ = new QLineEdit(this);
-    name_->setPlaceholderText(QStringLiteral("Assistant name"));
+    name_->setPlaceholderText(trs("Assistant name"));
 
     model_ = new QLineEdit(this);
-    model_->setPlaceholderText(QStringLiteral("Model id, e.g. gpt-4o"));
+    model_->setPlaceholderText(trs("Model id, e.g. gpt-4o"));
 
-    form->addRow(field_label(this, QStringLiteral("Name")), name_);
-    form->addRow(field_label(this, QStringLiteral("Model")), model_);
+    form->addRow(field_label(this, trs("Name")), name_);
+    form->addRow(field_label(this, trs("Model")), model_);
     content->addLayout(form);
   }
 
   content->addWidget(h_separator(this));
 
   // ---- Connection ----
-  content->addWidget(section_label(this, QStringLiteral("Connection")));
+  content->addWidget(section_label(this, trs("Connection")));
   {
     auto* form = form_layout(this);
 
     api_url_ = new QLineEdit(this);
-    api_url_->setPlaceholderText(QStringLiteral("https://api.example.com/v1/chat/completions"));
+    api_url_->setPlaceholderText(trs("https://api.example.com/v1/chat/completions"));
 
     token_ = new QLineEdit(this);
-    token_->setPlaceholderText(QStringLiteral("Authentication token"));
+    token_->setPlaceholderText(trs("Authentication token"));
     token_->setEchoMode(QLineEdit::Password);
 
     proxy_ = new QLineEdit(this);
-    proxy_->setPlaceholderText(QStringLiteral("Optional"));
+    proxy_->setPlaceholderText(trs("Optional"));
 
-    form->addRow(field_label(this, QStringLiteral("API URL")), api_url_);
-    form->addRow(field_label(this, QStringLiteral("Token")), token_);
-    form->addRow(field_label(this, QStringLiteral("Proxy")), proxy_);
+    form->addRow(field_label(this, trs("API URL")), api_url_);
+    form->addRow(field_label(this, trs("Token")), token_);
+    form->addRow(field_label(this, trs("Proxy")), proxy_);
     content->addLayout(form);
   }
 
   content->addWidget(h_separator(this));
 
   // ---- Instructions ----
-  content->addWidget(section_label(this, QStringLiteral("Custom instructions")));
+  content->addWidget(section_label(this, trs("Custom instructions")));
   instructions_ = new QPlainTextEdit(this);
-  instructions_->setPlaceholderText(QStringLiteral("System prompt for this assistant"));
+  instructions_->setPlaceholderText(trs("System prompt for this assistant"));
   instructions_->setMinimumHeight(96);
   content->addWidget(instructions_);
 
   content->addWidget(h_separator(this));
 
   // ---- Summarisation ----
-  content->addWidget(section_label(this, QStringLiteral("Summarisation")));
+  content->addWidget(section_label(this, trs("Summarisation")));
 
   preset_ = new ComboBox(this);
-  preset_->addItem(QStringLiteral("Apply a preset..."));
+  preset_->addItem(trs("Apply a preset..."));
   for (const SummaryPreset& summary_preset : kSummaryPresets) {
-    preset_->addItem(QString::fromUtf8(summary_preset.name));
+    preset_->addItem(trs(summary_preset.name));
   }
   preset_->setToolTip(
-      QStringLiteral("Fill the budgets below with a preset. Nothing is saved until you "
-                     "press Save.")
+      trs("Fill the budgets below with a preset. Nothing is saved until you press Save.")
   );
   content->addWidget(preset_);
 
@@ -129,32 +129,32 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
     summary_session_budget_ = make_spin(this, 0);
 
     summary_token_budget_->setToolTip(
-        QStringLiteral("Target size of the generated assistant memory.")
+        trs("Target size of the generated assistant memory.")
     );
     summary_reasoning_headroom_->setToolTip(
-        QStringLiteral(
+        trs(
             "Extra completion budget for a reasoning model's hidden thinking, so the "
             "visible memory is not starved."
         )
     );
     summary_trigger_->setToolTip(
-        QStringLiteral(
+        trs(
             "New tokens across all sessions that trigger the summariser; also the cap "
             "on the recent messages gathered."
         )
     );
     summary_session_budget_->setToolTip(
-        QStringLiteral(
+        trs(
             "Token cap on the per-session summaries included in the assistant fold."
         )
     );
 
-    form->addRow(field_label(this, QStringLiteral("Memory budget")), summary_token_budget_);
+    form->addRow(field_label(this, trs("Memory budget")), summary_token_budget_);
     form->addRow(
-        field_label(this, QStringLiteral("Reasoning headroom")), summary_reasoning_headroom_
+        field_label(this, trs("Reasoning headroom")), summary_reasoning_headroom_
     );
-    form->addRow(field_label(this, QStringLiteral("Trigger tokens")), summary_trigger_);
-    form->addRow(field_label(this, QStringLiteral("Session pool")), summary_session_budget_);
+    form->addRow(field_label(this, trs("Trigger tokens")), summary_trigger_);
+    form->addRow(field_label(this, trs("Session pool")), summary_session_budget_);
     content->addLayout(form);
 
     connect(preset_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {

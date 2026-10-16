@@ -30,6 +30,7 @@
 #include "app/assistant_io.hpp"
 #include "model.hpp"
 #include "store/util.hpp"
+#include "support/i18n.hpp"
 #include "support/log.hpp"
 #include "ui/AssistantForm.hpp"
 #include "ui/BackgroundWidget.hpp"
@@ -282,10 +283,10 @@ public:
     footer->setSpacing(8);
     footer->addStretch(1);
 
-    auto* cancel = new QPushButton(QStringLiteral("Cancel"), background);
+    auto* cancel = new QPushButton(trs("Cancel"), background);
     cancel->setObjectName(QStringLiteral("Secondary"));
 
-    auto* save = new QPushButton(QStringLiteral("Save"), background);
+    auto* save = new QPushButton(trs("Save"), background);
     save->setObjectName(QStringLiteral("Primary"));
     save->setDefault(true);
 
@@ -322,7 +323,7 @@ private:
 AssistantPicker::AssistantPicker(lnb::Application& app, QWidget* parent)
     : QDialog(parent), app_(app) {
   setObjectName(QStringLiteral("AssistantPicker"));
-  setWindowTitle(QStringLiteral("Assistants"));
+  setWindowTitle(trs("Assistants"));
   setModal(true);
   resize(760, 520);
   setMinimumSize(620, 420);
@@ -340,12 +341,12 @@ AssistantPicker::AssistantPicker(lnb::Application& app, QWidget* parent)
   outer->setSpacing(0);
 
   // ---- Header ----
-  auto* title = new QLabel(QStringLiteral("Assistants"), background);
+  auto* title = new QLabel(trs("Assistants"), background);
   title->setObjectName(QStringLiteral("PickerTitle"));
   title->setFont(scaled_font(4.0, true));
 
   auto* subtitle = new QLabel(
-      QStringLiteral("Choose an assistant to open, or create a new one."),
+      trs("Choose an assistant to open, or create a new one."),
       background
   );
   subtitle->setObjectName(QStringLiteral("PickerSubtitle"));
@@ -410,20 +411,20 @@ AssistantPicker::AssistantPicker(lnb::Application& app, QWidget* parent)
   auto* footer = new QHBoxLayout();
   footer->setSpacing(8);
 
-  auto* new_button = new QPushButton(QStringLiteral("New assistant"), background);
+  auto* new_button = new QPushButton(trs("New assistant"), background);
   new_button->setObjectName(QStringLiteral("Secondary"));
 
-  auto_login_ = new QCheckBox(QStringLiteral("Open automatically at startup"), background);
+  auto_login_ = new QCheckBox(trs("Open automatically at startup"), background);
   auto_login_->setChecked(app_.settings().auto_login);
 
-  edit_button_ = new QPushButton(QStringLiteral("Edit"), background);
+  edit_button_ = new QPushButton(trs("Edit"), background);
   edit_button_->setObjectName(QStringLiteral("Secondary"));
 
-  open_button_ = new QPushButton(QStringLiteral("Open"), background);
+  open_button_ = new QPushButton(trs("Open"), background);
   open_button_->setObjectName(QStringLiteral("Primary"));
   open_button_->setDefault(true);
 
-  auto* cancel_button = new QPushButton(QStringLiteral("Cancel"), background);
+  auto* cancel_button = new QPushButton(trs("Cancel"), background);
   cancel_button->setObjectName(QStringLiteral("Secondary"));
 
   footer->addWidget(new_button);
@@ -466,7 +467,7 @@ void AssistantPicker::refresh() {
     const QString model = to_qstring(assistant.model_);
 
     auto* item = new QListWidgetItem(
-        name.isEmpty() ? QStringLiteral("Untitled assistant") : name,
+        name.isEmpty() ? trs("Untitled assistant") : name,
         list_
     );
     item->setData(k_uuid_role, to_qstring(uuid));
@@ -499,14 +500,14 @@ void AssistantPicker::update_preview() {
   const QString uuid = selected_uuid();
 
   if (uuid.isEmpty()) {
-    preview_name_->setText(QStringLiteral("No assistant selected"));
+    preview_name_->setText(trs("No assistant selected"));
     preview_model_->clear();
     preview_model_->setVisible(false);
     preview_hint_->setVisible(true);
     preview_hint_->setText(
         list_->count() == 0
-            ? QStringLiteral("There are no assistants yet. Create one to get started.")
-            : QStringLiteral("Select an assistant on the left to see it here.")
+            ? trs("There are no assistants yet. Create one to get started.")
+            : trs("Select an assistant on the left to see it here.")
     );
     edit_button_->setEnabled(false);
     open_button_->setEnabled(false);
@@ -518,7 +519,7 @@ void AssistantPicker::update_preview() {
   const QString name = to_qstring(assistant.name_);
   const QString model = to_qstring(assistant.model_);
 
-  preview_name_->setText(name.isEmpty() ? QStringLiteral("Untitled assistant") : name);
+  preview_name_->setText(name.isEmpty() ? trs("Untitled assistant") : name);
   preview_model_->setText(model);
   preview_model_->setVisible(!model.isEmpty());
   preview_hint_->setVisible(false);
@@ -559,7 +560,7 @@ void AssistantPicker::open_selected() {
 }
 
 void AssistantPicker::create_new() {
-  AssistantFormDialog form(QStringLiteral("New assistant"), lnb::Assistant{}, this);
+  AssistantFormDialog form(trs("New assistant"), lnb::Assistant{}, this);
   if (form.exec() != QDialog::Accepted) {
     return;
   }
@@ -584,7 +585,7 @@ void AssistantPicker::edit_selected() {
   const std::string id = uuid.toStdString();
   const lnb::Assistant existing = lnb::load_assistant(id);
 
-  AssistantFormDialog form(QStringLiteral("Edit assistant"), existing, this);
+  AssistantFormDialog form(trs("Edit assistant"), existing, this);
   if (form.exec() != QDialog::Accepted) {
     return;
   }

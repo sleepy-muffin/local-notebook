@@ -9,6 +9,7 @@
 #include "app/assistant_io.hpp"
 #include "app/data_location.hpp"
 #include "store/util.hpp"
+#include "support/i18n.hpp"
 #include "support/log.hpp"
 #include "ui/AssistantPicker.hpp"
 #include "ui/MainWindow.hpp"
@@ -30,6 +31,12 @@ int main(int argc, char** argv) {
   lnb::log::info("data root: {}", lnb::store::paths::data_root().string());
 
   lnb::Application notebook;
+
+  // Select the stored UI language before any window is created, so every string
+  // is looked up in the right language the first time it is built.
+  lnb::i18n::set_language(
+      lnb::i18n::language_from_code(notebook.settings().language)
+  );
 
   // Install the theme before any window is created.
   ui::apply_theme(app, notebook.settings());

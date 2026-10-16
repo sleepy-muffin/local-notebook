@@ -81,6 +81,8 @@ Two guarantees fall out of this design:
   [Zed](https://zed.dev): low contrast, hairlines, no speech bubbles, no centred
   column. Ships with **Catppuccin Mocha and Macchiato**, plus a theme system you
   can edit.
+- 🌐 **Three UI languages** — English, 中文 and 日本語, chosen from
+  **Settings → Configuration**.
 - 🧩 **Tools, not just chat** — `web_search` and `fetch_url` are always available;
   `search_code` and `list_directory` appear when a session has a shared directory,
   with paths sandboxed to it (symlink escapes rejected).

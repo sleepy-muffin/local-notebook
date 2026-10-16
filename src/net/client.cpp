@@ -3,6 +3,7 @@
 #include "context/context.hpp"
 #include "net/proxy.hpp"
 #include "store/database.hpp"
+#include "support/i18n.hpp"
 #include "support/log.hpp"
 
 #include <QByteArray>
@@ -50,12 +51,12 @@ std::string trimmed(const std::string& text) {
 // A human-readable status for the tool the model just requested. Kept out of the
 // loop so the mapping reads as a table.
 std::string tool_status(const ToolCall& call) {
-  if (call.name == QStringLiteral("read_file")) return "Reading files...";
-  if (call.name == QStringLiteral("search_code")) return "Searching code...";
-  if (call.name == QStringLiteral("list_directory")) return "Listing files...";
-  if (call.name == QStringLiteral("fetch_url")) return "Fetching page...";
-  if (call.name == QStringLiteral("web_search")) return "Searching the web...";
-  return "Using tools...";
+  if (call.name == QStringLiteral("read_file")) return trs("Reading files...").toStdString();
+  if (call.name == QStringLiteral("search_code")) return trs("Searching code...").toStdString();
+  if (call.name == QStringLiteral("list_directory")) return trs("Listing files...").toStdString();
+  if (call.name == QStringLiteral("fetch_url")) return trs("Fetching page...").toStdString();
+  if (call.name == QStringLiteral("web_search")) return trs("Searching the web...").toStdString();
+  return trs("Using tools...").toStdString();
 }
 
 // A completed turn whose reply hit the completion cap is not an error: the text
