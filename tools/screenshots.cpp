@@ -173,7 +173,7 @@ int main(int argc, char** argv) {
   lnb::Settings settings;
   settings.ui_font = "Carlito";
   settings.font = "Carlito";
-  settings.mono_font = "JetBrains Mono";
+  settings.mono_font = "JetBrains Mono Light";
   ui::apply_theme(app, settings);
 
   require_resolved_font(ui::ui_font(), QStringLiteral("Carlito"));
