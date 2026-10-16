@@ -344,31 +344,31 @@ platform plugin.
 
 ### Main window
 
-![The main window: a flat title bar over the session sidebar and the chat pane](docs/screenshots/main-window.png)
+![The main window: a flat title bar over the session sidebar and the chat pane](screenshots/main-window.png)
 
 ### Settings
 
 | Configuration | Metrics |
 |---|---|
-| ![The Configuration page](docs/screenshots/settings-configuration.png) | ![The Metrics page](docs/screenshots/settings-metrics.png) |
+| ![The Configuration page](screenshots/settings-configuration.png) | ![The Metrics page](screenshots/settings-metrics.png) |
 
 | Assistant | Account |
 |---|---|
-| ![The Assistant page, including its memory and a manual summarise action](docs/screenshots/settings-assistant.png) | ![The Account page](docs/screenshots/settings-account.png) |
+| ![The Assistant page, including its memory and a manual summarise action](screenshots/settings-assistant.png) | ![The Account page](screenshots/settings-account.png) |
 
-![The About page](docs/screenshots/settings-about.png)
+![The About page](screenshots/settings-about.png)
 
 ### Session editor
 
-![The session editor: title, shared directory, instructions, memory and budgets](docs/screenshots/session-editor.png)
+![The session editor: title, shared directory, instructions, memory and budgets](screenshots/session-editor.png)
 
 ### Assistant picker
 
-![The assistant picker](docs/screenshots/assistant-picker.png)
+![The assistant picker](screenshots/assistant-picker.png)
 
 ### Summarisation review
 
-![The review window, showing the exact request before it is sent](docs/screenshots/summary-review.png)
+![The review window, showing the exact request before it is sent](screenshots/summary-review.png)
 
 ## Building
 
