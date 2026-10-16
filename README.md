@@ -96,31 +96,6 @@ Two guarantees fall out of this design:
 
 ---
 
-## Screenshots
-
-| Main window | Session editor |
-|---|---|
-| ![The main window](docs/screenshots/main-window.png) | ![The session editor](docs/screenshots/session-editor.png) |
-
-| Assistant settings (with memory) | Assistant picker |
-|---|---|
-| ![The Assistant settings page](docs/screenshots/settings-assistant.png) | ![The assistant picker](docs/screenshots/assistant-picker.png) |
-
-<details>
-<summary>More screenshots</summary>
-
-| Configuration | Metrics |
-|---|---|
-| ![Configuration](docs/screenshots/settings-configuration.png) | ![Metrics](docs/screenshots/settings-metrics.png) |
-
-| Account | About |
-|---|---|
-| ![Account](docs/screenshots/settings-account.png) | ![About](docs/screenshots/settings-about.png) |
-
-</details>
-
----
-
 ## How it works
 
 The short version: a request is assembled as **system instructions → assistant
