@@ -67,6 +67,9 @@ def parse_path(d):
 
             continue
 
+        if command is None:
+          raise
+
         if command in "Mm":
             nx, ny = float(tokens[index]), float(tokens[index + 1])
             index += 2

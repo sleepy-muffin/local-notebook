@@ -1,7 +1,6 @@
 # TODOs - Active
 
-## Experience Improvements
+This file reveals the current jobs we are working on.
+If the TODO has been completed, please move the record to `todo-archived.md`.
 
-- (Refinement) Tasks window should not remove failed tasks, it should show the failed reasons for them. Clicking on it open a message box (content should be scrollable) which dumps the log of this task, it should not render the markdowns, and shows everything including all those are not displayed in the main window (thinking procedure, etc. )
-- (Refinement) Add UI translation files for English, Simplified Chinese, Japanese and English. The language can be toggled in Settings Window - Configuration page.
--
+## Experience Improvements

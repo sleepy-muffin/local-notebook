@@ -53,6 +53,8 @@ std::string trimmed(const std::string& text) {
 std::string tool_status(const ToolCall& call) {
   if (call.name == QStringLiteral("read_file")) return trs("Reading files...").toStdString();
   if (call.name == QStringLiteral("search_code")) return trs("Searching code...").toStdString();
+  if (call.name == QStringLiteral("search_code_regex")) return trs("Searching code...").toStdString();
+  if (call.name == QStringLiteral("find_files")) return trs("Finding files...").toStdString();
   if (call.name == QStringLiteral("list_directory")) return trs("Listing files...").toStdString();
   if (call.name == QStringLiteral("fetch_url")) return trs("Fetching page...").toStdString();
   if (call.name == QStringLiteral("web_search")) return trs("Searching the web...").toStdString();
@@ -1034,8 +1036,12 @@ std::string fold_assistant_memory(
   return memory;
 }
 
-// The automatic assistant trigger (design-1.md §6): the tokens of messages
-// newer than each session's assistant watermark, summed across all sessions.
+} // namespace
+
+// The automatic assistant trigger (design-1.md §6): the tokens of messages newer
+// than each session's assistant watermark, summed across all sessions. Public so
+// the interface can cache it (the application holds the cache the composer's
+// summarize mode reads).
 bool assistant_trigger_reached(
     store::database& db, const Assistant& assistant, std::stop_token stop_token
 ) {
@@ -1055,8 +1061,6 @@ bool assistant_trigger_reached(
 
   return new_tokens >= assistant.summary_trigger_tokens_;
 }
-
-} // namespace
 
 std::string maybe_summarize_session(
     store::database& db, const Session& session, const std::string& model,

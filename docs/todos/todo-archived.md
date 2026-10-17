@@ -1,11 +1,16 @@
 # TODOs - Archived
 
+This file stores the history of TODOs.
+Records should be added once they are completed.
+
 ## Bugs
 
 ### Windows CI fails on the step named "Test"
 
 Linux has passed the building.
+But Windows build didn't
 
+```text
 Run ctest --test-dir build --output-on-failure
 Test project D:/a/local-notebook/local-notebook/build
     Start 1: store
@@ -27,6 +32,10 @@ The following tests FAILED:
 	  2 - ui (Failed)
 Errors while running CTest
 Error: Process completed with exit code 1.
+```
+
+- (Bug) Sliding while clicking on the session list may change the highlight while the session has not been switched. Please disable sliding/dragging behaviors.
+- (Bug) There should be only one item in session list and pinned list, currently it's possible for both session list and pinned session list have their own highlighted item.
 
 ## Experience Improvements
 
@@ -57,3 +66,16 @@ Error: Process completed with exit code 1.
 - (Refinement) Please add a validation on clicking "Save", currently we provide one check: `response_token_budget_` is not allowed to be greater than `summary_trigger_tokens_` in Session Editor, it simply opens a Qt Message Box to explain the reason.
 - (Refinement) The token count in the title bar should be honest. Currently, I discovered that it can decrease it I set the trigger to a lower value. As our design triggers the summarization once the token count have exactly surpassed the trigger amount. And the oldest message in the tail will not be truncated. So, no messages will fail to converge. Remember we never decide the messages to be included into the summarization by watermarks.
 - (Refinement) Alter the send button to summarize button when the messages after the watermarks have surpassed the trigger amount, then we include all messages converged by trigger amount (the one in the tail should not be included), and it triggers summarizes only.
+
+- (Refinement) Add UI translation files for English, Simplified Chinese, Japanese and English. The language can be toggled in Settings Window - Configuration page.
+
+- (New Function) Ripgrep-style code search tools, offered when a session has a shared directory. They walk the shared directory honouring `.gitignore`/`.ignore` files (nearest match wins, with `!` negation), skip hidden entries, and never follow symlinks; any path outside the shared directory is rejected as before.
+  - `search_code_regex`: matches text files with a PCRE2 regular expression and returns matching paths, line numbers and surrounding context. Bounded like `search_code` (2 MB per file, 30 matches); unlike a naive search it is never truncated by a file count, so a match deep in a large checkout is still found. Matching is case-sensitive; the model opts into `(?i)` for case-insensitivity and can use `\b` for word boundaries. An optional `glob` restricts which files are searched.
+  - `find_files`: lists files whose path matches a glob, honouring the same ignore rules, without reading their contents.
+  - `search_code` is unchanged: a plain substring search that always works, including for languages and non-code files.
+
+- (Refinement) Tasks window should not remove failed tasks, it should show the failed reasons for them. Clicking on it open a message box (content should be scrollable) which dumps the log of this task, it should not render the markdowns, and shows everything including all those are not displayed in the main window (thinking procedure, etc. )
+- (Refinement) As soon as the user can reveal the failed notifications in the Tasks window, we no longer need to show the failure information in the conversation view (I think it's quite volatile, anti-intuition, and sometimes be buggy). Also, ensure generation tasks are not removed when the task has failed. But we will need a tiny message box created right above the button to indicate that a task has failed, clicking on the Tasks Window icon on the status bar to inspect the reasons. Ensure this tiny message box is re-usable, so we can use it for future icons appended to the status bar.
+- (Refinement) Use full copy of MIT Lisence in About tab in Settings Window. Also, the fully version lisence of the community version of Qt. They don't need to be rendered as markdown.
+- (Refinement) The background of scrollbars should be transparent. Currently they still have black background in settings window. While the scrollbar in Main Window appears to have transparent background (What looks better).
+- (Refinement) Generation Task triggered by summarization (both assistant-level and session-level) should be also queued into task list. Button should be substituted to summarize button when assistant-level summarization trigger has met (currently we already have it). Also, for the case where assistant-level trigger has been met. So, in the case when both triggers have been met in the same time, user have to summarize twice before moving on. (session-specific memory is inspected first. )

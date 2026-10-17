@@ -138,4 +138,15 @@ std::string summarize_assistant_now(
     std::stop_token stop_token, SummaryApprover approver = {}
 );
 
+// The automatic assistant trigger (design-1.md §6): the tokens of messages newer
+// than each session's assistant watermark, summed across all sessions, compared
+// against `assistant.summary_trigger_tokens_`. Because it reads every session's
+// transcript, callers should cache the answer rather than call it per frame (the
+// application keeps such a cache, and the interface reads the composer's
+// summarize mode from it).
+bool assistant_trigger_reached(
+    store::database& db, const Assistant& assistant,
+    std::stop_token stop_token = std::stop_token{}
+);
+
 } // namespace lnb::net

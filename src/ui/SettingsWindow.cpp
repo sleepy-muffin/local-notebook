@@ -5,6 +5,7 @@
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QEventLoop>
+#include <QFile>
 #include <QFont>
 #include <QFormLayout>
 #include <QFrame>
@@ -100,6 +101,30 @@ QLabel* value_label(QWidget* parent, const QString& text, bool prominent) {
   return label;
 }
 
+// Reads a bundled license text. It returns an empty string when the resource is
+// missing, so the About page degrades to its short caption rather than failing to
+// build.
+QString read_license(const QString& path) {
+  QFile file(path);
+
+  if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return QString();
+  }
+
+  return QString::fromUtf8(file.readAll());
+}
+
+// The verbatim license text. It is a plain, read-only text view rather than a
+// label: the text is shown exactly as shipped, so it is not run through the
+// markdown-ish label styling, and a long license scrolls within a fixed height.
+QPlainTextEdit* license_view(QWidget* parent, const QString& text) {
+  auto* view = new QPlainTextEdit(text, parent);
+  view->setReadOnly(true);
+  view->setTabChangesFocus(true);
+  view->setMinimumHeight(220);
+  return view;
+}
+
 // Fills a font selector from a stored family. An empty family means "the system
 // default", so the selectors were left untouched at build time; on a reload we
 // resolve it to the application's font, which is what an empty family already
@@ -155,6 +180,9 @@ SettingsWindow::SettingsWindow(lnb::Application& app, QWidget* parent)
 
   nav_ = new QListWidget(background);
   nav_->setObjectName(QStringLiteral("SettingsNav"));
+  // The rail shows the dialog behind it; the rule lives on the list so a style
+  // that paints from the palette cannot fill the scrollbar column black.
+  show_parent_background(nav_);
   nav_->setFrameShape(QFrame::NoFrame);
   nav_->setSelectionMode(QAbstractItemView::SingleSelection);
   nav_->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -866,14 +894,32 @@ QWidget* SettingsWindow::build_about_page() {
   }
   layout->addWidget(card);
 
-  auto* legal = make_card(content, trs("License"));
+  auto* mit = make_card(content, trs("License"));
   {
-    QVBoxLayout* body = card_body(legal);
+    QVBoxLayout* body = card_body(mit);
     body->addWidget(value_label(
-        legal, trs("Distributed under the terms in LICENSE.txt."), false
+        mit, trs("Local Notebook is distributed under the MIT License."), false
     ));
+    body->addSpacing(6);
+    body->addWidget(license_view(mit, read_license(QStringLiteral(":/licenses/mit.txt"))));
   }
-  layout->addWidget(legal);
+  layout->addWidget(mit);
+
+  auto* qt = make_card(content, trs("Qt License"));
+  {
+    QVBoxLayout* body = card_body(qt);
+    body->addWidget(value_label(
+        qt,
+        trs("Built with the community edition of Qt, used under the terms of the "
+            "GNU Lesser General Public License, version 3."),
+        false
+    ));
+    body->addSpacing(6);
+    body->addWidget(
+        license_view(qt, read_license(QStringLiteral(":/licenses/lgpl-3.0.txt")))
+    );
+  }
+  layout->addWidget(qt);
 
   layout->addStretch(1);
 
@@ -1140,6 +1186,9 @@ void SettingsWindow::summarize_assistant_now() {
   assistant_memory_->setPlainText(memory);
   app_.assistant().memory_ = produced;
   app_.save_assistant();
+  // The fold advanced every session's assistant watermark, so the cached trigger
+  // (which the composer's summarize mode reads) must be recomputed.
+  app_.mark_assistant_summary_stale();
 
   if (memory.isEmpty() || memory == previous) {
     QMessageBox::information(

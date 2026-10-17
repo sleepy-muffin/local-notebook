@@ -65,10 +65,14 @@ inline QString dialog_stylesheet(const QString& object_name) {
   sheet += QStringLiteral("QWidget#Hairline { background: %1; }").arg(border);
 
   sheet += QStringLiteral(
-               "QListWidget#AssistantList, QListWidget#SettingsNav { background: transparent;"
-               " border: none; outline: none; }");
+               "QListWidget#AssistantList, QListWidget#SettingsNav { border: none;"
+               " outline: none; }");
+  // The scroll area keeps the dialog canvas (the window colour) in its frame
+  // region without painting a background of its own: a `background: transparent`
+  // here would be resolved into the scroll area's palette, which Breeze paints
+  // opaque black around its scrollbars. See ui::show_parent_background().
   sheet += QStringLiteral(
-               "QScrollArea { background: transparent; border: none; }"
+               "QScrollArea { border: none; }"
                "QScrollArea > QWidget > QWidget { background: transparent; }");
 
   sheet += QStringLiteral(

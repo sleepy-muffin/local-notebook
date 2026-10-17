@@ -12,6 +12,7 @@
 #include <optional>
 
 class QApplication;
+class QWidget;
 
 namespace lnb {
 struct Settings;
@@ -99,6 +100,18 @@ QStringList theme_names();
 // Rebuilds the application stylesheet from the current theme state. Useful when
 // the metrics are changed in place.
 void refresh_stylesheet(QApplication& app);
+
+// Makes a scrolling widget (a QScrollArea, a list view, ...) show whatever is
+// behind it instead of painting a background of its own.
+//
+// The rule is installed on the widget itself rather than left to an ancestor
+// stylesheet, which matters on platform styles that paint from the palette:
+// Qt resolves a background inherited from an ancestor into the widget's own
+// palette, and a style such as Breeze (KDE) then fills the widget's frame
+// region — visibly the scrollbar column — with opaque black. A rule on the
+// widget itself is drawn by Qt's stylesheet engine directly, so nothing opaque
+// is painted and the widget stays genuinely transparent.
+void show_parent_background(QWidget* widget);
 
 // True when a background image was configured and loaded successfully.
 bool background_enabled();

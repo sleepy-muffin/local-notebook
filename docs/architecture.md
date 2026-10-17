@@ -69,7 +69,8 @@ src/
   store/                    SQLite wrapper, database, SessionManager/MessageManager
   app/                      global settings, assistant I/O, the Application object
   context/                  the pure context layer: windowing, triggers, summariser payloads
-  net/                      streaming client, proxy parsing, tools (filesystem + network)
+  net/                      streaming client, proxy parsing, tools (filesystem + network),
+                            ripgrep-style search
   ui/                       theme, chrome, main window, editors, settings
 ```
 
@@ -289,9 +290,21 @@ warns that the messages may not be folded into memory.
 
 ## Tools and networking
 
-- **Filesystem** (only when the session has a `shared_directory`): `search_code` and
-  `list_directory`. Paths are resolved against the shared directory and anything that
-  would escape it — including through symlinks — is rejected.
+- **Filesystem** (only when the session has a `shared_directory`): `search_code`,
+  `search_code_regex`, `find_files` and `list_directory`. Paths are resolved against
+  the shared directory and anything that would escape it — including through symlinks
+  — is rejected.
+- **Ripgrep-style search** (`net/search.*`): `search_code_regex` matches text files
+  with a PCRE2 regular expression, and `find_files` lists files by glob. Both walk the
+  tree honouring `.gitignore`/`.ignore` (nearest match wins, with `!` negation),
+  skipping hidden entries and never following symlinks. The walk is deliberately
+  unbounded: a search stops only at its match cap, never at a file count, so a large
+  checkout cannot report "no matches" just because the target sorts past an arbitrary
+  number of files. To keep that walk cheap, every ignore rule and every `glob` carries
+  a required literal substring (the longest literal run in its pattern), checked before
+  any `QString` or regex work; the literal is a pure prefilter, so the results are
+  identical with or without it. `search_code` stays a plain substring search and is
+  unaffected.
 - **Network** (always available): `fetch_url` (fetch a page and return its readable
   text) and `web_search`.
 

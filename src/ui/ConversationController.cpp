@@ -123,23 +123,84 @@ void ConversationController::summarize() {
     const lnb::Assistant assistant = app_.assistant();
     const lnb::Session current = session();
 
-    // A manual pass folds the overflow into the session memory and persists it.
-    // It is the sole action of this turn: no chat request follows. The user
-    // reviews the request first; declining leaves the memory untouched.
+    // Session-specific memory is inspected first: a manual pass folds the
+    // session's overflow into its memory and persists it. It is the sole action,
+    // so no chat request follows. The user reviews the request first; declining
+    // leaves the memory untouched.
     lnb::net::summarize_session_now(
         app_.db(), current, assistant.model_, assistant.api_url_,
         assistant.authentication_token_, assistant.proxy_, task, stop_token,
         review_summary
     );
+
+    // Then the shared assistant memory, when its own trigger has been reached.
+    // Both passes belong to this one turn, so a single press resolves both
+    // triggers instead of leaving the button asking for a second press. It is
+    // best-effort (an unreached trigger or a failure leaves the assistant memory
+    // untouched).
+    const std::string assistant_memory = lnb::net::maybe_summarize_assistant(
+        app_.db(), assistant, assistant.model_, assistant.api_url_,
+        assistant.authentication_token_, assistant.proxy_, task, stop_token,
+        review_summary
+    );
+    if (!assistant_memory.empty()) {
+      std::lock_guard lock(result_mutex_);
+      pending_assistant_memory_ = assistant_memory;
+    }
+  });
+}
+
+void ConversationController::summarize_session_now(
+    std::function<bool(const lnb::net::SummaryPlan&)> approver
+) {
+  if (running_) {
+    return;
+  }
+
+  start([this, approver = std::move(approver)](
+            GenerationTask& task, std::stop_token stop_token
+        ) {
+    // Snapshot the assistant and session so the worker never reads state the UI
+    // thread may be mutating.
+    const lnb::Assistant assistant = app_.assistant();
+    const lnb::Session current = session();
+
+    // An absent approver reviews interactively, exactly like the composer path;
+    // the editor passes its own so it can tell a deliberate decline apart from a
+    // real fold.
+    lnb::net::SummaryApprover reviewer = approver;
+
+    if (!reviewer) {
+      reviewer = review_summary;
+    }
+
+    // Forced, so the manual action folds the overflow regardless of the automatic
+    // trigger. Only the session memory is touched: the shared assistant memory is
+    // left to its own trigger, matching the editor's intent.
+    lnb::net::summarize_session_now(
+        app_.db(), current, assistant.model_, assistant.api_url_,
+        assistant.authentication_token_, assistant.proxy_, task, stop_token,
+        reviewer
+    );
   });
 }
 
 void ConversationController::cancel() {
+  // Mark the task terminal so the interface stops showing it as running, then
+  // stop the worker thread itself. The worker observes the thread's stop token
+  // (that token is what drives the network watchdog which aborts the in-flight
+  // request), so requesting only the task's stop would leave the request running:
+  // the user would see the turn as finished while the worker stayed blocked, and
+  // the next turn would freeze the interface joining it.
   task_.cancel();
+  worker_.request_stop();
 }
 
 void ConversationController::delete_message(std::uint32_t message_id) {
   app_.db().remove_message(message_id);
+  // Removing a message can only pull the assistant trigger back below its limit,
+  // so the cached answer must be recomputed.
+  app_.mark_assistant_summary_stale();
   if (on_changed_) {
     on_changed_();
   }
@@ -149,6 +210,9 @@ void ConversationController::edit_message(
     std::uint32_t message_id, std::string content
 ) {
   app_.db().update_message(message_id, content);
+  // An edit can change the message's token cost, so the cached trigger may be
+  // stale.
+  app_.mark_assistant_summary_stale();
   if (on_changed_) {
     on_changed_();
   }
@@ -268,6 +332,10 @@ void ConversationController::finish_worker() {
     app_.assistant().memory_ = assistant_memory;
     app_.save_assistant();
   }
+
+  // The turn may have added messages and advanced watermarks, so the cached
+  // assistant trigger is stale. Recomputing lazily keeps this per-turn step cheap.
+  app_.mark_assistant_summary_stale();
 
   if (snapshot.status == GenerationTask::Status::FAILED && !snapshot.error.empty() &&
       on_error_) {

@@ -45,6 +45,17 @@ public:
   // Persists assistant() to data/<uuid>/settings.json.
   void save_assistant();
 
+  // True when the assistant's shared memory trigger has been reached: the tokens
+  // of messages newer than every session's assistant watermark sum to the
+  // assistant's trigger (design-1.md §6). Reading every session is costly, so the
+  // answer is cached and recomputed only after mark_assistant_summary_stale().
+  // Interface thread only.
+  [[nodiscard]] bool assistant_summary_due() const;
+
+  // Marks the cached trigger stale. Cheap; call it whenever messages, watermarks
+  // or the assistant's summary budget may have changed.
+  void mark_assistant_summary_stale() { assistant_summary_stale_ = true; }
+
   void shutdown();
   [[nodiscard]] bool shutting_down() const { return shutting_down_; }
 
@@ -64,6 +75,11 @@ private:
   std::unique_ptr<store::SessionManager> sessions_;
   std::FILE* log_file_ = nullptr;
   bool shutting_down_ = false;
+
+  // Lazy cache for assistant_summary_due(): stale after any change that can move
+  // the trigger (a turn, a fold, an edit, a settings save).
+  mutable bool assistant_summary_due_ = false;
+  mutable bool assistant_summary_stale_ = true;
 };
 
 } // namespace lnb

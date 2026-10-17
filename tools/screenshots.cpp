@@ -236,7 +236,7 @@ int main(int argc, char** argv) {
          "Assistant: Because the completion budget is shared with hidden reasoning."},
     });
     plan.request = QJsonObject{
-        {"model", "gpt-5.6-luna"},
+        {"model", "gpt-6-luna"},
         {"max_tokens", 16000},
         {"messages", messages},
     };

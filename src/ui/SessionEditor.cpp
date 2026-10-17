@@ -18,17 +18,15 @@
 #include <QWidget>
 
 #include <cstddef>
-#include <exception>
-#include <memory>
 #include <optional>
 #include <string>
-#include <thread>
 
 #include "app/application.hpp"
 #include "net/client.hpp"
 #include "support/generation_task.hpp"
 #include "support/i18n.hpp"
 #include "ui/BackgroundWidget.hpp"
+#include "ui/ConversationView.hpp"
 #include "ui/SpinBox.hpp"
 #include "ui/SummaryReviewDialog.hpp"
 #include "ui/dialog_style.hpp"
@@ -67,6 +65,7 @@ constexpr BudgetPreset kBudgetPresets[] = {
     // memory, reasoning;
     // response;
     // tool: output, rounds, calls
+    {"Instant",      2000,   500,   500,  1000,   500,  1000,  0,   0},
     {"Very Light",   4000,  1000,  1000,  2000,  1000,  2000,  2,   6},
     {"Light",        8000,  2000,  2000,  4000,  2000,  4000, 16,  64},
     {"Balanced",    16000,  4000,  4000,  8000,  4000,  6000, 24,  96},
@@ -497,19 +496,24 @@ void SessionEditor::save_session() {
 }
 
 void SessionEditor::summarize_now() {
-  if (session_id_ == 0 || summarizing_) {
+  if (session_id_ == 0 || summarizing_ || conversation_view_ == nullptr) {
     return;
   }
 
-  const auto stored = app_.db().session(session_id_);
-
-  if (!stored.has_value()) {
+  // A manual fold runs as the session's own task, so it must never be started
+  // while a turn is already in flight: the one-task-per-session model is what
+  // guarantees a generation and a summarisation cannot touch the same session's
+  // memory, watermark and messages at once.
+  if (conversation_view_->busy()) {
+    QMessageBox::information(
+        this, trs("Session Busy"),
+        trs(
+            "This session is already running a task. Wait for it to finish, then "
+            "summarize."
+        )
+    );
     return;
   }
-
-  auto task = std::make_shared<lnb::GenerationTask>();
-  task->start();
-  const std::stop_token stop_token = task->stop_token();
 
   summarizing_ = true;
   summarize_button_->setEnabled(false);
@@ -517,15 +521,8 @@ void SessionEditor::summarize_now() {
   save_button_->setEnabled(false);
   cancel_button_->setEnabled(false);
 
-  lnb::store::database* db = &app_.db();
-  const lnb::Session session = *stored;
-  const std::string model = app_.assistant().model_;
-  const std::string url = app_.assistant().api_url_;
-  const std::string key = app_.assistant().authentication_token_;
-  const std::optional<std::string> proxy = app_.assistant().proxy_;
-
-  // The review runs on the worker thread and blocks on the interface thread, so
-  // a decline is recorded here and read after the worker is joined.
+  // The review runs on the worker thread and blocks on the interface thread, so a
+  // decline is recorded here and read after the task finishes.
   bool declined = false;
   const lnb::net::SummaryApprover approver =
       [&declined](const lnb::net::SummaryPlan& plan) {
@@ -536,28 +533,18 @@ void SessionEditor::summarize_now() {
         return approved;
       };
 
-  std::jthread worker([task, stop_token, db, session, model, url, key, proxy, approver]() {
-    try {
-      lnb::net::summarize_session_now(
-          *db, session, model, url, key, proxy, *task, stop_token, approver
-      );
-      task->complete();
-    } catch (const std::exception& error) {
-      if (!stop_token.stop_requested()) {
-        task->fail(error.what());
-      }
-    } catch (...) {
-      task->fail(trs("Unknown summarisation error").toStdString());
-    }
-  });
+  // The fold is driven through the view, so it runs as the session's single task
+  // and appears in the tasks window like any other turn.
+  conversation_view_->summarize_session_now(approver);
 
   // Keep the modal dialog responsive while the worker folds the transcript: the
-  // nested loop only pumps events until the task reaches a terminal state.
+  // nested loop only pumps events until the task reaches a terminal state. The
+  // window's poll timer keeps firing inside it, so the tasks window updates live.
   QEventLoop loop;
   QTimer timer;
 
-  QObject::connect(&timer, &QTimer::timeout, &loop, [&task, &loop]() {
-    if (task->is_terminal()) {
+  QObject::connect(&timer, &QTimer::timeout, &loop, [this, &loop]() {
+    if (!conversation_view_->busy()) {
       loop.quit();
     }
   });
@@ -577,7 +564,15 @@ void SessionEditor::summarize_now() {
     return;
   }
 
-  const lnb::GenerationTask::Snapshot snapshot = task->snapshot();
+  const lnb::GenerationTask::Snapshot snapshot =
+      conversation_view_->last_snapshot();
+
+  // A cancelled pass folded nothing and must not be reported as "nothing to
+  // summarise": cancelling is a deliberate no-op, exactly like a declined
+  // review, and the memory is simply left untouched.
+  if (snapshot.status == lnb::GenerationTask::Status::CANCELLED) {
+    return;
+  }
 
   if (snapshot.status == lnb::GenerationTask::Status::FAILED) {
     QMessageBox::warning(

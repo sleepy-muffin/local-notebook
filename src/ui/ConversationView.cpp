@@ -35,6 +35,7 @@
 #include "context/context.hpp"
 #include "net/client.hpp"
 #include "support/i18n.hpp"
+#include "ui/StatusNotice.hpp"
 #include "ui/theme.hpp"
 
 namespace ui {
@@ -905,6 +906,13 @@ ConversationView::ConversationView(
   composer_layout->addLayout(buttons);
 
   layout->addWidget(scroll_, 1);
+
+  // The small failure notice lives just above the composer, so it reads as a
+  // remark on the turn rather than part of the transcript. It is hidden until a
+  // turn fails.
+  notice_ = new StatusNotice(this);
+  layout->addWidget(notice_);
+
   layout->addWidget(composer);
 
   apply_composer_style();
@@ -967,8 +975,19 @@ ConversationView::ConversationView(
     }
   });
 
-  controller_.set_on_error([this](const std::string& text) {
-    pending_error_ = from_utf8(text);
+  controller_.set_on_error([this](const std::string&) {
+    // The reason itself now lives in the tasks window, where it can be read in
+    // full and does not vanish on the next reload; the transcript only raises the
+    // small nudge above the composer and points at the status bar's tasks icon.
+    if (notice_ != nullptr) {
+      notice_->set_content(
+          QStringLiteral("tasks"),
+          trs(
+              "A generation task failed. Open the tasks window from the status bar "
+              "to see why."
+          )
+      );
+    }
   });
 
   controller_.set_on_warning([this](const std::string& text) {
@@ -1006,14 +1025,9 @@ void ConversationView::reload() {
     render_message_at(start + k, 2 + static_cast<int>(k));
   }
 
-  // Notices from the last finished turn are rendered after the transcript, then
-  // cleared so a later reload does not show them again.
-  if (!pending_error_.isEmpty()) {
-    auto* row = add_row(MessageBubble::Role::Error, 0, false);
-    row->bubble()->set_text(pending_error_);
-    pending_error_.clear();
-  }
-
+  // A warning from the last finished turn is rendered after the transcript, then
+  // cleared so a later reload does not show it again. A failure is not shown here:
+  // its reason lives in the tasks window, and the composer notice points there.
   if (!pending_warning_.isEmpty()) {
     auto* row = add_row(MessageBubble::Role::Notice, 0, false);
     row->bubble()->set_text(pending_warning_);
@@ -1084,6 +1098,10 @@ void ConversationView::refresh_style() {
   apply_composer_style();
   content_side_margin_ = -1;
   update_content_margins();
+
+  if (notice_ != nullptr) {
+    notice_->refresh_style();
+  }
 
   for (MessageRow* row : rows_) {
     if (row != nullptr) {
@@ -1201,6 +1219,12 @@ void ConversationView::poll() {
   set_busy(controller_.busy());
 }
 
+void ConversationView::set_failure_notice_handler(std::function<void()> handler) {
+  if (notice_ != nullptr) {
+    notice_->set_on_click(std::move(handler));
+  }
+}
+
 void ConversationView::set_busy(bool busy) {
   if (busy_ == busy) {
     return;
@@ -1209,6 +1233,12 @@ void ConversationView::set_busy(bool busy) {
   busy_ = busy;
   send_button_->setEnabled(!busy);
   cancel_button_->setVisible(busy);
+
+  // A new turn supersedes the last failure: drop the nudge so it cannot linger
+  // over a fresh generation.
+  if (busy && notice_ != nullptr) {
+    notice_->setVisible(false);
+  }
 }
 
 void ConversationView::showEvent(QShowEvent* event) {
@@ -1522,7 +1552,18 @@ bool ConversationView::summarize_due() const {
   const lnb::net::ContextUsage usage =
       lnb::net::context_usage(session, messages_);
 
-  return usage.limit_tokens > 0 && usage.used_tokens >= usage.limit_tokens;
+  if (usage.limit_tokens > 0 && usage.used_tokens >= usage.limit_tokens) {
+    return true;
+  }
+
+  // The assistant memory is shared across every session, so its own trigger turns
+  // the primary action into a summarize pass even when this session has not
+  // overflowed. The application caches the (global) answer, so this is cheap.
+  return app_.assistant_summary_due();
+}
+
+void ConversationView::refresh_send_mode() {
+  update_send_mode();
 }
 
 void ConversationView::update_send_mode() {
@@ -1534,6 +1575,22 @@ void ConversationView::update_send_mode() {
 
   summarize_mode_ = due;
   apply_composer_icons();
+}
+
+void ConversationView::summarize_session_now(
+    std::function<bool(const lnb::net::SummaryPlan&)> approver
+) {
+  if (controller_.busy()) {
+    return;
+  }
+
+  // A manual fold is a fresh pass, so land at the bottom like the composer's
+  // summarize action. Setting busy bans the composer's send/summarize button (and
+  // reveals the stop action) for the whole pass, so the fold cannot be re-triggered
+  // while it runs.
+  stick_to_bottom_ = true;
+  controller_.summarize_session_now(std::move(approver));
+  set_busy(true);
 }
 
 void ConversationView::submit() {

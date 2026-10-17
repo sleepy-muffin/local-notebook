@@ -13,6 +13,10 @@
 
 namespace lnb {
 class Application;
+
+namespace net {
+struct SummaryPlan;
+}
 }
 
 namespace ui {
@@ -53,11 +57,28 @@ public:
   // Appends the user message, then starts a turn in the background.
   void send(std::string text);
 
-  // Folds the session's overflow into memory on demand. It is the sole action of
-  // the turn: no chat request follows. Used when the composer's primary action is
-  // the "summarize" variant, which replaces "Send" once the unsummarised
-  // transcript reaches the trigger.
+  // Folds the session's overflow into memory on demand, then the shared assistant
+  // memory when its own trigger has been reached. No chat request follows, so it
+  // is the sole action of the turn. Used when the composer's primary action is the
+  // "summarize" variant, which replaces "Send" once either the session's
+  // transcript or the assistant's cross-session trigger has been reached. Both
+  // passes belong to the one turn, so a single press resolves both triggers
+  // instead of asking the user to press again (session memory is inspected first).
   void summarize();
+
+  // Folds the session's overflow into memory on demand, forcing the pass even when
+  // the automatic trigger has not been reached. Unlike summarize(), only the
+  // session pass runs — the shared assistant memory is left to its own trigger —
+  // which is exactly the session editor's "fold this transcript now" action. It is
+  // serialised with the session's turn, so a manual fold can never run beside a
+  // generation on the same session.
+  //
+  // `approver` reviews the request before it is sent; the editor supplies its own
+  // so a declined review is a silent no-op. An absent approver reviews
+  // interactively, exactly like the composer path.
+  void summarize_session_now(
+      std::function<bool(const lnb::net::SummaryPlan&)> approver = {}
+  );
 
   // The last finished turn's outcome and diagnostic log, retained after the
   // worker is gone so the tasks window can show a failure and dump its log.

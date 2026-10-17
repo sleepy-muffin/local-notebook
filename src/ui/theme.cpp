@@ -14,6 +14,7 @@
 #include <QPainter>
 #include <QPalette>
 #include <QString>
+#include <QWidget>
 
 #include <optional>
 #include <string>
@@ -288,11 +289,18 @@ QString build_stylesheet() {
                .arg(rgba(c.surface));
 
   sheet += QStringLiteral(
+               "QScrollBar { background: transparent; }"
                "QScrollBar:vertical { background: transparent; width: 10px; margin: 0; }"
                "QScrollBar::handle:vertical { background: %1; border-radius: 5px;"
                "  min-height: 24px; }"
                "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
                "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {"
+               "  background: transparent; }"
+               "QScrollBar:horizontal { background: transparent; height: 10px; margin: 0; }"
+               "QScrollBar::handle:horizontal { background: %1; border-radius: 5px;"
+               "  min-width: 24px; }"
+               "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }"
+               "QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {"
                "  background: transparent; }")
                .arg(rgba(c.border));
 
@@ -445,6 +453,10 @@ QStringList theme_names() {
 
 void refresh_stylesheet(QApplication& app) {
   app.setStyleSheet(build_stylesheet());
+}
+
+void show_parent_background(QWidget* widget) {
+  widget->setStyleSheet(QStringLiteral("background: transparent;"));
 }
 
 bool background_enabled() {

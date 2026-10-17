@@ -39,4 +39,12 @@
     <file alias="app-256.png">appicon/app-256.png</file>
     <file alias="app-512.png">appicon/app-512.png</file>
   </qresource>
+
+  <!-- The license texts shown in full on the About page. The MIT text is the
+       repository's own LICENSE.txt; the Qt one is the community edition's LGPL
+       v3. They are shown verbatim, so they are carried as plain text. -->
+  <qresource prefix="/licenses">
+    <file alias="mit.txt">../LICENSE.txt</file>
+    <file alias="lgpl-3.0.txt">licenses/lgpl-3.0.txt</file>
+  </qresource>
 </RCC>

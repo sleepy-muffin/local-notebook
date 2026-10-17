@@ -2,13 +2,16 @@
 
 #include <QCloseEvent>
 #include <QDateTime>
+#include <QEvent>
 #include <QFont>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QItemSelectionModel>
 #include <QLabel>
 #include <QListView>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QStyle>
@@ -164,6 +167,23 @@ void MainWindow::closeEvent(QCloseEvent* event) {
   BackgroundWidget::closeEvent(event);
 }
 
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+  // While the left button is held the session lists treat the pointer as a drag
+  // and slide their current row to whichever row it passes over, even though no
+  // click was made. Swallowing those moves pins the highlight to the pressed
+  // row; a genuine click (press and release on the same row) still goes through
+  // and opens the session.
+  if (event->type() == QEvent::MouseMove) {
+    auto* mouse = static_cast<QMouseEvent*>(event);
+
+    if ((mouse->buttons() & Qt::LeftButton) != 0) {
+      return true;
+    }
+  }
+
+  return BackgroundWidget::eventFilter(watched, event);
+}
+
 void MainWindow::build_ui() {
   auto* root = new QVBoxLayout(this);
   root->setContentsMargins(0, 0, 0, 0);
@@ -304,7 +324,7 @@ void MainWindow::apply_window_style() {
           "  background: %5; }"
           "QFrame#CurrentUser { background: transparent; border: none;"
           "  border-top: 1px solid %3; }"
-          "QListView#Sessions { background: transparent; border: none; outline: none; }"
+          "QListView#Sessions { border: none; outline: none; }"
           "QPushButton#NewSession { background: transparent; border: none; color: %1;"
           "  text-align: left; padding: 6px 12px; border-radius: 0; }"
           "QPushButton#NewSession:hover { background: %5; }"
@@ -399,6 +419,10 @@ QListView* MainWindow::build_session_list(
 ) {
   auto* view = new QListView(parent);
   view->setObjectName(object_name);
+  // The list shows the sidebar behind it; the rule lives on the view (not on the
+  // window's stylesheet) so a style that paints from the palette cannot fill the
+  // scrollbar column opaque black. See ui::show_parent_background().
+  show_parent_background(view);
   view->setSelectionMode(QAbstractItemView::SingleSelection);
   view->setEditTriggers(QAbstractItemView::NoEditTriggers);
   view->setFrameShape(QFrame::NoFrame);
@@ -414,6 +438,9 @@ QListView* MainWindow::build_session_list(
   view->viewport()->setMouseTracking(true);
   view->viewport()->setAutoFillBackground(false);
   view->setMinimumWidth(0);
+
+  // Only a genuine click should move the list's own current row; see eventFilter.
+  view->viewport()->installEventFilter(this);
 
   model = new SessionListModel(view);
   view->setModel(model);
@@ -440,6 +467,27 @@ QListView* MainWindow::build_session_list(
   connect(
       view, &QListView::pressed, this,
       [bound_delegate](const QModelIndex&) { bound_delegate->clear_action_click(); }
+  );
+
+  // Keep at most one of the two lists highlighted. The highlight is the selection
+  // fill, so clearing the other list's selection is enough; clearing the selection
+  // leaves its current index alone, which does not emit currentChanged and so
+  // cannot recurse back into this handler.
+  QListView* const bound_view = view;
+  connect(
+      view->selectionModel(), &QItemSelectionModel::currentChanged, this,
+      [this, bound_view](const QModelIndex& current, const QModelIndex&) {
+        if (!current.isValid()) {
+          return;
+        }
+
+        QListView* const other =
+            bound_view == pinned_view_ ? sessions_view_ : pinned_view_;
+
+        if (other != nullptr) {
+          other->clearSelection();
+        }
+      }
   );
 
   connect(
@@ -752,46 +800,73 @@ void MainWindow::refresh_sessions() {
   update_current_block();
 }
 
+ConversationView* MainWindow::ensure_conversation_view(std::uint32_t session_id) {
+  if (session_id == 0) {
+    return nullptr;
+  }
+
+  const auto existing = conversations_.find(session_id);
+
+  if (existing != conversations_.end()) {
+    return existing->second;
+  }
+
+  const auto session = app_.db().session(session_id);
+
+  if (!session.has_value()) {
+    return nullptr;
+  }
+
+  auto* view = new ConversationView(app_, session_id, workspace_);
+  view->set_on_changed([this]() {
+    refresh_sessions();
+    update_header();
+  });
+
+  // The failure notice points at the status bar's tasks icon; clicking it opens
+  // the same window the icon does.
+  view->set_failure_notice_handler([this]() { open_tasks_window(); });
+
+  // The workspace always holds the empty hint, so adding a widget here never
+  // takes the current index: the visible pane is chosen explicitly by the caller.
+  workspace_->addWidget(view);
+  conversations_.emplace(session_id, view);
+
+  return view;
+}
+
 void MainWindow::open_conversation(std::uint32_t session_id) {
   if (session_id == 0) {
     return;
   }
 
-  auto it = conversations_.find(session_id);
+  ConversationView* view = ensure_conversation_view(session_id);
 
-  if (it == conversations_.end()) {
-    const auto session = app_.db().session(session_id);
-
-    if (!session.has_value()) {
-      refresh_sessions();
-      return;
-    }
-
-    auto* view = new ConversationView(app_, session_id, workspace_);
-    view->set_on_changed([this]() {
-      refresh_sessions();
-      update_header();
-    });
-
-    workspace_->addWidget(view);
-    it = conversations_.emplace(session_id, view).first;
+  if (view == nullptr) {
+    refresh_sessions();
+    return;
   }
 
   current_session_ = session_id;
-  workspace_->setCurrentWidget(it->second);
+  workspace_->setCurrentWidget(view);
 
-  // The row lives in one of the two lists; select it there.
+  // The row lives in one of the two lists; select it there and clear the other,
+  // so only ever one list shows a highlight.
   const int pinned_row = pinned_model_->row_for(session_id);
 
   if (pinned_row >= 0) {
-    if (pinned_view_->currentIndex().row() != pinned_row) {
-      pinned_view_->setCurrentIndex(pinned_model_->index(pinned_row, 0));
-    }
+    pinned_view_->setCurrentIndex(pinned_model_->index(pinned_row, 0));
+    sessions_view_->clearSelection();
   } else {
     const int row = sessions_model_->row_for(session_id);
-    if (row >= 0 && sessions_view_->currentIndex().row() != row) {
+
+    if (row >= 0) {
       sessions_view_->setCurrentIndex(sessions_model_->index(row, 0));
+    } else {
+      sessions_view_->clearSelection();
     }
+
+    pinned_view_->clearSelection();
   }
 
   update_header();
@@ -840,6 +915,17 @@ void MainWindow::open_settings() {
       refresh_sessions();
       update_header();
       update_current_block();
+
+      // The assistant and session summary budgets may have moved, so the cached
+      // assistant trigger and every composer's primary action are re-evaluated.
+      app_.mark_assistant_summary_stale();
+      last_assistant_due_ = app_.assistant_summary_due();
+
+      for (auto& [id, view] : conversations_) {
+        if (view != nullptr) {
+          view->refresh_send_mode();
+        }
+      }
     });
   }
 
@@ -864,6 +950,20 @@ void MainWindow::poll_conversations() {
 
   for (ConversationView* view : views) {
     view->poll();
+  }
+
+  // The assistant memory is shared, so a turn in one session can turn every
+  // composer's primary action into a summarize pass. The application caches the
+  // trigger, so this is a cheap compare; the views are asked to re-evaluate only
+  // when it actually flips.
+  const bool assistant_due = app_.assistant_summary_due();
+
+  if (assistant_due != last_assistant_due_) {
+    last_assistant_due_ = assistant_due;
+
+    for (ConversationView* view : views) {
+      view->refresh_send_mode();
+    }
   }
 
   update_task_indicator();
@@ -1041,6 +1141,14 @@ void MainWindow::edit_session(std::uint32_t session_id) {
 
   SessionEditor editor(app_, session_id, this);
 
+  // A manual "Summarize now" runs as the session's own background task, so it
+  // shows up in the tasks window like any other turn and can never race a
+  // generation on the same session. The editor drives the view that owns that
+  // task; it is created on first use here, without switching the visible pane.
+  if (ConversationView* view = ensure_conversation_view(session_id)) {
+    editor.set_conversation_view(view);
+  }
+
   if (editor.exec() != QDialog::Accepted) {
     return;
   }
@@ -1072,6 +1180,8 @@ void MainWindow::delete_session(std::uint32_t session_id) {
   }
 
   app_.db().remove_session(session_id);
+  // A removed session's messages no longer contribute to the assistant trigger.
+  app_.mark_assistant_summary_stale();
   refresh_sessions();
   update_header();
 }

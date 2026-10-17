@@ -35,6 +35,8 @@
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QStandardPaths>
+#include <QStyle>
+#include <QStyleFactory>
 #include <QStyleOptionViewItem>
 #include <QTimer>
 #include <QToolButton>
@@ -69,6 +71,7 @@
 #include "ui/SessionListModel.hpp"
 #include "ui/SettingsWindow.hpp"
 #include "ui/SpinBox.hpp"
+#include "ui/StatusNotice.hpp"
 #include "ui/SummaryReviewDialog.hpp"
 #include "ui/theme.hpp"
 
@@ -106,6 +109,20 @@ lnb::Assistant make_assistant() {
   assistant.model_ = "test-model";
   assistant.api_url_ = "https://example.invalid/v1/chat/completions";
   return assistant;
+}
+
+// There is no moc, so findChild<ui::ConversationView*>() does not compile; the
+// window's view for a session is recovered with a dynamic_cast instead.
+ui::ConversationView* find_conversation_view(QWidget& root, std::uint32_t session_id) {
+  for (QWidget* widget : root.findChildren<QWidget*>()) {
+    if (auto* candidate = dynamic_cast<ui::ConversationView*>(widget)) {
+      if (candidate->session_id() == session_id) {
+        return candidate;
+      }
+    }
+  }
+
+  return nullptr;
 }
 
 // --- Settings persistence -----------------------------------------------------
@@ -567,6 +584,151 @@ void test_pinned_category() {
   CHECK(dynamic_cast<ui::SessionItemDelegate*>(sessions_view->itemDelegate()) != nullptr);
 }
 
+// --- Session list interaction -------------------------------------------------
+
+// Dispatches one mouse event straight to a list's viewport, which is where the
+// view installs its own drag-select handling.
+void send_mouse(
+    QListView* view, QEvent::Type type, const QPoint& pos, Qt::MouseButton button,
+    Qt::MouseButtons buttons
+) {
+  const QPointF global = QPointF(view->viewport()->mapToGlobal(pos));
+  QMouseEvent event(
+      type, QPointF(pos), global, button, buttons, Qt::NoModifier
+  );
+  QApplication::sendEvent(view->viewport(), &event);
+}
+
+// The centre of a row, in viewport coordinates.
+QPoint row_center(QListView* view, int row) {
+  return view->visualRect(view->model()->index(row, 0)).center();
+}
+
+// A genuine click (press and release on one row) opens a session, but pressing a
+// row and dragging the pointer across another must not move the highlight: the
+// session has not been switched, so its row must stay selected.
+void test_session_list_drag_does_not_move_highlight() {
+  enter_scratch("session-drag");
+
+  lnb::Application notebook;
+  notebook.open_assistant("21212121-2121-2121-2121-212121212121", make_assistant());
+  notebook.sessions().create(lnb::Session{});
+  notebook.sessions().create(lnb::Session{});
+
+  ui::MainWindow window(notebook);
+  window.resize(1080, 720);
+  window.show();
+  QApplication::processEvents();
+
+  auto* view = window.findChild<QListView*>(QStringLiteral("Sessions"));
+  CHECK(view != nullptr);
+  if (view == nullptr) {
+    return;
+  }
+
+  // The highlight starts on the first row after a plain click.
+  const QPoint first = row_center(view, 0);
+  send_mouse(view, QEvent::MouseButtonPress, first, Qt::LeftButton, Qt::LeftButton);
+  send_mouse(view, QEvent::MouseButtonRelease, first, Qt::LeftButton, Qt::NoButton);
+  QApplication::processEvents();
+  CHECK(view->currentIndex().row() == 0);
+
+  // Press the same row, then drag onto the next one with the button held: the
+  // highlight must stay on the pressed row.
+  const QPoint second = row_center(view, 1);
+  send_mouse(view, QEvent::MouseButtonPress, first, Qt::LeftButton, Qt::LeftButton);
+  send_mouse(view, QEvent::MouseMove, second, Qt::NoButton, Qt::LeftButton);
+  QApplication::processEvents();
+  CHECK(view->currentIndex().row() == 0);
+
+  // Releasing over a different row is not a click on that row, so the highlight
+  // still does not move.
+  send_mouse(view, QEvent::MouseButtonRelease, second, Qt::LeftButton, Qt::NoButton);
+  QApplication::processEvents();
+  CHECK(view->currentIndex().row() == 0);
+}
+
+// The SESSIONS and PINNED lists must never both show a highlight: selecting a row
+// in one clears the other, whichever direction the switch happens.
+void test_session_lists_share_one_highlight() {
+  enter_scratch("session-one-highlight");
+
+  lnb::Application notebook;
+  notebook.open_assistant("22222222-2222-2222-2222-222222222222", make_assistant());
+
+  lnb::Session pinned_session;
+  pinned_session.title_ = "Pinned one";
+  pinned_session.pinned_ = true;
+  notebook.sessions().create(pinned_session);
+
+  lnb::Session plain_session;
+  plain_session.title_ = "Plain one";
+  notebook.sessions().create(plain_session);
+
+  ui::MainWindow window(notebook);
+  window.resize(1080, 720);
+  window.show();
+  QApplication::processEvents();
+
+  auto* pinned = window.findChild<QListView*>(QStringLiteral("PinnedSessions"));
+  auto* sessions = window.findChild<QListView*>(QStringLiteral("Sessions"));
+  CHECK(pinned != nullptr);
+  CHECK(sessions != nullptr);
+  if (pinned == nullptr || sessions == nullptr) {
+    return;
+  }
+
+  const auto click = [](QListView* list, int row) {
+    const QPoint pos = row_center(list, row);
+    send_mouse(list, QEvent::MouseButtonPress, pos, Qt::LeftButton, Qt::LeftButton);
+    send_mouse(list, QEvent::MouseButtonRelease, pos, Qt::LeftButton, Qt::NoButton);
+    QApplication::processEvents();
+  };
+
+  click(pinned, 0);
+  CHECK(pinned->selectionModel()->hasSelection());
+  CHECK(!sessions->selectionModel()->hasSelection());
+
+  click(sessions, 0);
+  CHECK(sessions->selectionModel()->hasSelection());
+  CHECK(!pinned->selectionModel()->hasSelection());
+}
+
+// --- Failure notice -----------------------------------------------------------
+
+// The reusable notice is hidden until it carries a message, so a view above the
+// composer can leave one in place and reveal it only after a failure.
+void test_status_notice_visibility() {
+  ui::StatusNotice notice;
+  CHECK(notice.isHidden());
+
+  notice.set_content(QStringLiteral("tasks"), QStringLiteral("A task failed."));
+  CHECK(!notice.isHidden());
+
+  notice.set_content(QStringLiteral("tasks"), QString());
+  CHECK(notice.isHidden());
+}
+
+// Every conversation view carries the notice, sitting above the composer, so a
+// failed turn has somewhere to raise its nudge.
+void test_conversation_view_has_failure_notice() {
+  enter_scratch("conversation-notice");
+
+  lnb::Application notebook;
+  notebook.open_assistant("23232323-2323-2323-2323-232323232323", make_assistant());
+  const std::uint32_t session_id = notebook.sessions().create(lnb::Session{});
+
+  ui::ConversationView view(notebook, session_id);
+
+  auto* notice = dynamic_cast<ui::StatusNotice*>(
+      view.findChild<QFrame*>(QStringLiteral("StatusNotice"))
+  );
+  CHECK(notice != nullptr);
+  if (notice != nullptr) {
+    CHECK(notice->isHidden());
+  }
+}
+
 // --- Render budget ------------------------------------------------------------
 
 // The transcript keeps no more than the configured initial rendering amount once
@@ -953,9 +1115,9 @@ void test_assistant_form_preset() {
     return;
   }
 
-  // Index 0 is the placeholder; "Balanced (default)" is the fourth entry:
+  // Index 0 is the placeholder; "Balanced" is the fifth entry:
   // memory 4000, headroom 8000, trigger 48000, session pool 8000, in field order.
-  preset->setCurrentIndex(3);
+  preset->setCurrentIndex(4);
   CHECK(spins[0]->value() == 4000);
   CHECK(spins[1]->value() == 8000);
   CHECK(spins[2]->value() == 48000);
@@ -1365,6 +1527,17 @@ void test_bundled_resources() {
   // to the system theme or a standard icon.
   CHECK(ui::resource_icon(QStringLiteral("no-such-icon"), QColor(0, 0, 0), QColor(0, 0, 0))
             .isNull());
+
+  // The About page shows the two license texts verbatim, so both are bundled as
+  // plain text with real content.
+  QFile mit(QStringLiteral(":/licenses/mit.txt"));
+  CHECK(mit.open(QIODevice::ReadOnly));
+  CHECK(QString::fromUtf8(mit.readAll()).contains(QStringLiteral("Permission is hereby granted")));
+
+  QFile lgpl(QStringLiteral(":/licenses/lgpl-3.0.txt"));
+  CHECK(lgpl.open(QIODevice::ReadOnly));
+  CHECK(QString::fromUtf8(lgpl.readAll())
+            .contains(QStringLiteral("GNU LESSER GENERAL PUBLIC LICENSE")));
 }
 
 // --- Application icon --------------------------------------------------------
@@ -1564,6 +1737,264 @@ void test_summary_review_cross_thread() {
   CHECK(approved.load());
 }
 
+// --- Assistant trigger -------------------------------------------------------
+
+// The assistant trigger sums the tokens newer than every session's assistant
+// watermark. It is global, and the application caches it so the composer can read
+// it cheaply; a change only takes effect once the cache is marked stale.
+void test_assistant_summary_trigger_cache() {
+  enter_scratch("assistant-trigger");
+
+  lnb::Application notebook;
+  notebook.open_assistant("99999999-9999-9999-9999-999999999999", make_assistant());
+
+  const std::uint32_t session_id = notebook.sessions().create(lnb::Session{});
+  notebook.messages(session_id).append(lnb::Role::User, "hello");
+
+  // A generous trigger is far above the single message, so nothing is due.
+  notebook.assistant().summary_trigger_tokens_ = 100000;
+  notebook.mark_assistant_summary_stale();
+  CHECK(!notebook.assistant_summary_due());
+  CHECK(!lnb::net::assistant_trigger_reached(notebook.db(), notebook.assistant()));
+
+  // Dropping the trigger below the accumulated tokens makes it due, but the
+  // cached answer is served until the cache is invalidated — that is the point of
+  // the cache (the check reads every session).
+  notebook.assistant().summary_trigger_tokens_ = 1;
+  CHECK(!notebook.assistant_summary_due()); // still cached from the big trigger
+  CHECK(lnb::net::assistant_trigger_reached(notebook.db(), notebook.assistant()));
+
+  notebook.mark_assistant_summary_stale();
+  CHECK(notebook.assistant_summary_due());
+}
+
+// The composer's primary action becomes "summarize" as soon as either trigger is
+// met: this session's own transcript trigger, or the shared assistant trigger.
+// The assistant one is global, so a session that has not overflowed still offers
+// the fold once the assistant's cross-session budget has accumulated.
+void test_composer_summarize_mode_from_triggers() {
+  enter_scratch("composer-summarize-mode");
+
+  lnb::Application notebook;
+  notebook.open_assistant("99999999-9999-9999-9999-999999999999", make_assistant());
+
+  // This session never overflows on its own...
+  lnb::Session session;
+  session.summary_trigger_tokens_ = 1000000;
+  const std::uint32_t session_id = notebook.sessions().create(session);
+  notebook.messages(session_id).append(lnb::Role::User, "hello");
+
+  // ...but the assistant trigger is only one token, so it is already reached.
+  notebook.assistant().summary_trigger_tokens_ = 1;
+  notebook.mark_assistant_summary_stale();
+
+  ui::ConversationView view(notebook, session_id);
+
+  auto* send = view.findChild<QToolButton*>(QStringLiteral("SendButton"));
+  CHECK(send != nullptr);
+
+  CHECK(view.summarize_due());
+
+  if (send != nullptr) {
+    CHECK(send->toolTip() == lnb::i18n::trs("Summarize the conversation into memory"));
+  }
+}
+
+// A summarize turn with nothing due is a clean no-op: the added assistant pass
+// must not force a fold (which would need the network) when its trigger is not
+// reached, and the turn still completes.
+void test_summarize_turn_no_op_completes() {
+  enter_scratch("summarize-no-op");
+
+  lnb::Application notebook;
+  notebook.open_assistant("99999999-9999-9999-9999-999999999999", make_assistant());
+
+  lnb::Session session;
+  session.summary_keep_tokens_ = 1000000; // nothing overflows the keep window
+  const std::uint32_t session_id = notebook.sessions().create(session);
+  notebook.messages(session_id).append(lnb::Role::User, "hello");
+  notebook.messages(session_id).append(lnb::Role::Assistant, "hi");
+
+  ui::ConversationController controller(notebook, session_id);
+  controller.summarize();
+
+  for (int guard = 0; controller.busy() && guard < 500; ++guard) {
+    controller.poll();
+    QApplication::processEvents();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+
+  CHECK(!controller.busy());
+  CHECK(
+      controller.last_snapshot().status == lnb::GenerationTask::Status::COMPLETED
+  );
+}
+
+// A manual, session-level fold must run as the session's own background task, so
+// the status bar counts it and the tasks window lists it like any other turn. This
+// drives the entry point the session editor uses (the conversation view) and holds
+// the worker inside a gated review, so the running task can be observed.
+void test_manual_summarize_runs_as_session_task() {
+  enter_scratch("manual-summarize-task");
+
+  lnb::Application notebook;
+  notebook.open_assistant("9a9a9a9a-9a9a-9a9a-9a9a-9a9a9a9a9a9a", make_assistant());
+
+  // A one-token keep window holds only the newest message verbatim, so the older
+  // messages become the overflow a manual pass would fold.
+  lnb::Session session;
+  session.summary_keep_tokens_ = 1;
+  session.memory_ = "Previous memory.";
+  const std::uint32_t session_id = notebook.sessions().create(session);
+
+  notebook.messages(session_id).append(lnb::Role::User, "First question.");
+  notebook.messages(session_id).append(lnb::Role::Assistant, "First answer.");
+  notebook.messages(session_id).append(lnb::Role::User, "Second question.");
+
+  ui::MainWindow window(notebook);
+  window.resize(1080, 720);
+  window.show();
+  QApplication::processEvents();
+
+  ui::ConversationView* view = find_conversation_view(window, session_id);
+  CHECK(view != nullptr);
+
+  auto* indicator = window.findChild<QToolButton*>(QStringLiteral("TaskIndicator"));
+  CHECK(indicator != nullptr);
+
+  if (view == nullptr || indicator == nullptr) {
+    return;
+  }
+
+  // Hold the worker inside the review so the fold is observably in flight while the
+  // running count is read; declining it keeps the pass off the network.
+  std::atomic<bool> reviewing = false;
+  std::atomic<bool> release = false;
+
+  const lnb::net::SummaryApprover approver =
+      [&reviewing, &release](const lnb::net::SummaryPlan&) {
+        reviewing = true;
+        while (!release.load()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return false; // decline: nothing is sent
+      };
+
+  view->summarize_session_now(approver);
+
+  // The fold is now the session's single task, so the composer's send/summarize
+  // action is banned and the stop action is shown for the whole pass.
+  CHECK(view->busy());
+
+  for (int guard = 0; !reviewing.load() && guard < 500; ++guard) {
+    QApplication::processEvents();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+
+  CHECK(reviewing.load());
+
+  // Let the window's poll timer publish the running task, then read it back.
+  for (int guard = 0; indicator->text() != QStringLiteral("1") && guard < 300; ++guard) {
+    QApplication::processEvents();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+
+  CHECK(indicator->text() == QStringLiteral("1"));
+
+  release.store(true);
+
+  for (int guard = 0; view->busy() && guard < 500; ++guard) {
+    QApplication::processEvents();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+
+  CHECK(!view->busy());
+  CHECK(view->has_finished_task());
+  CHECK(view->last_snapshot().status == lnb::GenerationTask::Status::COMPLETED);
+}
+
+// The session editor's "Summarize now" must delegate to the session's own view, so
+// the fold appears in the tasks window (here: the status bar count) instead of
+// running as a private task nobody can see. The review is declined by a helper
+// timer so the pass never reaches the network.
+void test_session_editor_summarize_shows_task() {
+  enter_scratch("editor-summarize-task");
+
+  lnb::Application notebook;
+  notebook.open_assistant("9b9b9b9b-9b9b-9b9b-9b9b-9b9b9b9b9b9b", make_assistant());
+
+  lnb::Session session;
+  session.summary_keep_tokens_ = 1;
+  session.memory_ = "Previous memory.";
+  const std::uint32_t session_id = notebook.sessions().create(session);
+
+  notebook.messages(session_id).append(lnb::Role::User, "First question.");
+  notebook.messages(session_id).append(lnb::Role::Assistant, "First answer.");
+  notebook.messages(session_id).append(lnb::Role::User, "Second question.");
+
+  ui::MainWindow window(notebook);
+  window.resize(1080, 720);
+  window.show();
+  QApplication::processEvents();
+
+  ui::ConversationView* view = find_conversation_view(window, session_id);
+  CHECK(view != nullptr);
+
+  auto* indicator = window.findChild<QToolButton*>(QStringLiteral("TaskIndicator"));
+  CHECK(indicator != nullptr);
+
+  ui::SessionEditor editor(notebook, session_id);
+
+  if (view != nullptr) {
+    editor.set_conversation_view(view);
+  }
+
+  QPushButton* summarize = nullptr;
+
+  for (QPushButton* button : editor.findChildren<QPushButton*>()) {
+    if (button->text() == lnb::i18n::trs("Summarize now")) {
+      summarize = button;
+      break;
+    }
+  }
+
+  CHECK(summarize != nullptr);
+
+  if (view == nullptr || summarize == nullptr || indicator == nullptr) {
+    return;
+  }
+
+  // While the review dialog is up, watch the status bar: the fold must show up as
+  // the session's running task. The dialog is then declined (so nothing is sent); a
+  // hard deadline guarantees the click cannot trap the suite in a nested loop.
+  std::atomic<bool> saw_task = false;
+  int ticks = 0;
+
+  QTimer driver;
+  QObject::connect(&driver, &QTimer::timeout, [indicator, &saw_task, &ticks]() {
+    ++ticks;
+
+    if (indicator->text() == QStringLiteral("1")) {
+      saw_task = true;
+    }
+
+    QWidget* modal = QApplication::activeModalWidget();
+
+    if (modal != nullptr && (saw_task.load() || ticks > 400)) {
+      QMetaObject::invokeMethod(modal, "reject");
+    }
+  });
+  driver.start(10);
+
+  // click() blocks in the editor's nested loop until the fold finishes; the driver
+  // above runs inside that loop.
+  summarize->click();
+  driver.stop();
+
+  CHECK(saw_task.load());
+  CHECK(!view->busy());
+}
+
 // --- Composer ----------------------------------------------------------------
 
 // The expand toggle raises the field to composer_height_expanded and back, and
@@ -1619,6 +2050,87 @@ void test_composer_expand_toggle() {
   CHECK(send->size() == QSize(28, 28));
 }
 
+// The column a scrollbar sits in must stay transparent, so the window behind it
+// shows through. Qt resolves a background that an *ancestor* stylesheet gives a
+// scrolling widget into the widget's own palette, and a style that paints from
+// that palette (Breeze, the KDE default) then fills the column opaque black. The
+// default style the suite runs under never exposes this, so the check also runs
+// under Breeze when its plugin is installed.
+void check_scrollbars_not_black(QWidget& window) {
+  window.show();
+  QApplication::processEvents();
+  QApplication::processEvents();
+
+  const QImage shot = window.grab().toImage();
+
+  for (QScrollBar* bar : window.findChildren<QScrollBar*>()) {
+    if (!bar->isVisible() || bar->orientation() != Qt::Vertical) {
+      continue;
+    }
+
+    const QPoint origin = bar->mapTo(&window, QPoint(0, 0));
+    const int x = origin.x() + bar->width() / 2;
+
+    for (int y = origin.y(); y < origin.y() + bar->height(); ++y) {
+      const QColor colour(shot.pixel(x, y));
+      CHECK(!(colour.red() == 0 && colour.green() == 0 && colour.blue() == 0));
+    }
+  }
+}
+
+void test_scrollbar_columns_transparent(QApplication& app) {
+  enter_scratch("scrollbar-columns");
+
+  lnb::Application notebook;
+  notebook.open_assistant("55555555-5555-5555-5555-555555555555", make_assistant());
+
+  // Enough sessions that the sidebar list grows a scrollbar of its own.
+  for (int i = 0; i < 30; ++i) {
+    lnb::Session session;
+    session.title_ = "Session " + std::to_string(i);
+    notebook.sessions().create(session);
+  }
+
+  lnb::Settings settings = notebook.settings();
+  settings.theme = "Catppuccin Latte";
+  ui::apply_theme(app, settings);
+
+  // The bug only appears under a style that paints widget backgrounds from the
+  // palette; Breeze is the one KDE ships. Switch to it when the plugin is
+  // available (the suite's default style never shows the bug) and restore after.
+  const QString original_style = QApplication::style()->objectName();
+  const bool switched =
+      QStyleFactory::keys().contains(QStringLiteral("Breeze"), Qt::CaseInsensitive);
+  if (switched) {
+    QApplication::setStyle(QStyleFactory::create(QStringLiteral("Breeze")));
+  }
+
+  {
+    ui::SettingsWindow window(notebook);
+    window.resize(820, 620);
+
+    // Style-independent invariant: the page scroll areas keep the dialog canvas
+    // in their palette rather than an opaque black.
+    for (QScrollArea* area : window.findChildren<QScrollArea*>()) {
+      CHECK(area->palette().color(QPalette::Window) == ui::theme().colors.window);
+    }
+
+    check_scrollbars_not_black(window);
+  }
+
+  {
+    ui::MainWindow window(notebook);
+    window.resize(1080, 720);
+    check_scrollbars_not_black(window);
+  }
+
+  if (switched) {
+    if (QStyle* style = QStyleFactory::create(original_style)) {
+      QApplication::setStyle(style);
+    }
+  }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1654,6 +2166,10 @@ int main(int argc, char** argv) {
   test_session_action_click_flag();
   test_session_row_action_icons(app);
   test_pinned_category();
+  test_session_list_drag_does_not_move_highlight();
+  test_session_lists_share_one_highlight();
+  test_status_notice_visibility();
+  test_conversation_view_has_failure_notice();
   test_render_limit_unloads_history();
   test_transcript_scroll_preserved_on_reload();
   test_message_timestamp();
@@ -1674,7 +2190,13 @@ int main(int argc, char** argv) {
   test_summary_review_decline();
   test_manual_summary_no_overflow_keeps_watermark();
   test_summary_review_cross_thread();
+  test_assistant_summary_trigger_cache();
+  test_composer_summarize_mode_from_triggers();
+  test_summarize_turn_no_op_completes();
+  test_manual_summarize_runs_as_session_task();
+  test_session_editor_summarize_shows_task();
   test_composer_expand_toggle();
+  test_scrollbar_columns_transparent(app);
 
   if (g_failures != 0) {
     std::fprintf(stderr, "%d check(s) failed\n", g_failures);

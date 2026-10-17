@@ -81,10 +81,9 @@ QString dialog_stylesheet(const QString& object_name) {
   sheet += QStringLiteral("QWidget#Separator { background: %1; }").arg(border);
 
   sheet += QStringLiteral(
-               "QListWidget#AssistantList { background: transparent; border: none;"
-               " outline: none; }");
+               "QListWidget#AssistantList { border: none; outline: none; }");
   sheet += QStringLiteral(
-               "QScrollArea { background: transparent; border: none; }"
+               "QScrollArea { border: none; }"
                "QScrollArea > QWidget > QWidget { background: transparent; }");
 
   sheet += QStringLiteral(
@@ -362,6 +361,9 @@ AssistantPicker::AssistantPicker(lnb::Application& app, QWidget* parent)
 
   list_ = new QListWidget(background);
   list_->setObjectName(QStringLiteral("AssistantList"));
+  // The list shows the dialog behind it; the rule lives on the list so a style
+  // that paints from the palette cannot fill the scrollbar column black.
+  show_parent_background(list_);
   list_->setItemDelegate(new AssistantItemDelegate(list_));
   list_->setSelectionMode(QAbstractItemView::SingleSelection);
   list_->setEditTriggers(QAbstractItemView::NoEditTriggers);

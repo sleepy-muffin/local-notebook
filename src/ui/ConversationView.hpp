@@ -30,6 +30,8 @@ class Application;
 
 namespace ui {
 
+class StatusNotice;
+
 // A single rendered chat message body. The user's own messages get a rounded
 // block (the same surface as the composer); assistant replies are bare,
 // Markdown-formatted text; notices and errors get a muted, bordered block. Every
@@ -189,6 +191,20 @@ public:
   // composer's primary action is "summarize" rather than "send".
   [[nodiscard]] bool summarize_due() const;
 
+  // Re-evaluates the primary action and swaps the button when the answer changed.
+  // Called when a shared trigger (the assistant memory) may have flipped, so a
+  // turn in another session can update this composer too.
+  void refresh_send_mode();
+
+  // Folds the session's transcript into memory on demand as the session's single
+  // task, forcing the pass even when the automatic trigger has not been reached.
+  // The session editor's "Summarize now" drives this, so the fold shows up in the
+  // tasks window like any other turn and never races a generation on the same
+  // session. `approver` reviews the request; an absent one reviews interactively.
+  void summarize_session_now(
+      std::function<bool(const lnb::net::SummaryPlan&)> approver = {}
+  );
+
   // The diagnostic log for the current (or last finished) turn, and the last
   // finished turn's snapshot; both feed the tasks window.
   [[nodiscard]] std::string task_log() const { return controller_.task_log(); }
@@ -206,6 +222,10 @@ public:
 
   // Called by the window's poll timer; advances the in-flight generation.
   void poll();
+
+  // Wires the failure notice's click action to the window that owns the status
+  // bar's tasks icon, so the notice is a shortcut back to the reasons.
+  void set_failure_notice_handler(std::function<void()> handler);
 
   // Called after every reload, so the window can refresh the session list, the
   // title bar and the context readout.
@@ -304,6 +324,10 @@ private:
   QToolButton* cancel_button_ = nullptr;
   QWidget* composer_bar_ = nullptr;
 
+  // The small notice above the composer that points at the status bar's tasks
+  // icon after a failed turn. Hidden while no turn has failed.
+  StatusNotice* notice_ = nullptr;
+
   // True while the composer field is raised to composer_height_expanded.
   bool composer_expanded_ = false;
 
@@ -320,9 +344,8 @@ private:
   QString pending_stream_text_;
   bool has_pending_stream_ = false;
 
-  // Notices from the finished turn, rendered after the transcript on the next
-  // reload: a failure, or a non-fatal warning such as a truncated reply.
-  QString pending_error_;
+  // A non-fatal warning from the finished turn, rendered after the transcript on
+  // the next reload (e.g. a truncated reply).
   QString pending_warning_;
 
   std::function<void()> on_changed_;

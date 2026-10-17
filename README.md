@@ -84,8 +84,9 @@ Two guarantees fall out of this design:
 - 🌐 **Three UI languages** — English, 中文 and 日本語, chosen from
   **Settings → Configuration**.
 - 🧩 **Tools, not just chat** — `web_search` and `fetch_url` are always available;
-  `search_code` and `list_directory` appear when a session has a shared directory,
-  with paths sandboxed to it (symlink escapes rejected).
+  `search_code`, `search_code_regex`, `find_files` and `list_directory` appear when a
+  session has a shared directory, with paths sandboxed to it (symlink escapes rejected).
+  The ripgrep-style tools honour `.gitignore`/`.ignore` and skip hidden entries.
 - 🔌 **Any OpenAI-compatible endpoint** — local or remote, with optional SOCKS5 /
   HTTP-CONNECT proxy support.
 - 🗂️ **Sessions as notes** — pin, rename, edit instructions and per-session

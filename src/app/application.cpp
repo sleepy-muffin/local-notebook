@@ -3,6 +3,7 @@
 #include <filesystem>
 
 #include "app/assistant_io.hpp"
+#include "net/client.hpp"
 #include "store/util.hpp"
 #include "support/log.hpp"
 
@@ -68,6 +69,10 @@ void Application::open_assistant(std::string uuid, Assistant assistant) {
   );
   sessions_ = std::make_unique<store::SessionManager>(*db_);
 
+  // The freshly opened database invalidates any cached trigger from a previous
+  // assistant (or the initial empty one).
+  mark_assistant_summary_stale();
+
   log::info("opened assistant {} at {}", assistant_uuid_, directory.string());
 
   settings_.last_assistant = assistant_uuid_;
@@ -80,6 +85,19 @@ void Application::save_assistant() {
   }
 
   lnb::save_assistant(assistant_uuid_, assistant_);
+}
+
+bool Application::assistant_summary_due() const {
+  if (db_ == nullptr) {
+    return false;
+  }
+
+  if (assistant_summary_stale_) {
+    assistant_summary_due_ = net::assistant_trigger_reached(*db_, assistant_);
+    assistant_summary_stale_ = false;
+  }
+
+  return assistant_summary_due_;
 }
 
 void Application::shutdown() {

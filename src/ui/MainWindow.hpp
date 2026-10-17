@@ -7,6 +7,7 @@
 
 #include "ui/BackgroundWidget.hpp"
 
+class QEvent;
 class QLabel;
 class QListView;
 class QPushButton;
@@ -38,6 +39,10 @@ public:
 protected:
   void closeEvent(QCloseEvent* event) override;
 
+  // Swallows the button-held moves the session lists would otherwise use to
+  // slide their current row while the pointer is dragged across rows.
+  bool eventFilter(QObject* watched, QEvent* event) override;
+
 private:
   void build_ui();
   QWidget* build_title_bar();
@@ -63,6 +68,12 @@ private:
 
   // Opens (creating on first use) the chat pane for `session_id`.
   void open_conversation(std::uint32_t session_id);
+
+  // Returns the chat pane that owns `session_id`'s background worker, creating it
+  // on first use without switching the visible pane. Returns nullptr when the
+  // session does not exist. Used by open_conversation() and to hand the session
+  // editor the view it drives its manual summarisation through.
+  ConversationView* ensure_conversation_view(std::uint32_t session_id);
 
   void new_session();
   void open_settings();
@@ -133,6 +144,10 @@ private:
   QToolButton* sidebar_toggle_ = nullptr;
   TasksWindow* tasks_window_ = nullptr;
   int shown_task_count_ = -1;
+
+  // The last observed assistant-memory trigger, compared each poll so every
+  // composer is told to re-evaluate only when the shared flag actually flips.
+  bool last_assistant_due_ = false;
 
   std::uint32_t current_session_ = 0;
   std::unordered_map<std::uint32_t, ConversationView*> conversations_;

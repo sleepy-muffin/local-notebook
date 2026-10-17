@@ -1,5 +1,6 @@
 #include "net/tools.hpp"
 #include "net/proxy.hpp"
+#include "net/search.hpp"
 
 #include <QEventLoop>
 #include <QJsonArray>
@@ -616,6 +617,49 @@ QJsonArray tool_definitions(bool filesystem) {
        }}
   };
 
+  const QJsonObject search_regex_function{
+      {"name", "search_code_regex"},
+      {"description",
+       "Search text files in the configured shared directory with a regular "
+       "expression (PCRE2 syntax), honouring .gitignore/.ignore files and "
+       "skipping hidden entries. Returns matching file paths, line numbers and "
+       "surrounding context. Matching is case-sensitive; add an inline flag "
+       "such as (?i) for case-insensitive matching, and \\b for word "
+       "boundaries."},
+      {"parameters",
+       QJsonObject{
+           {"type", "object"},
+           {"properties",
+            QJsonObject{
+                {"pattern", QJsonObject{{"type", "string"}, {"description", "Regular expression to search for"}}},
+                {"path", QJsonObject{{"type", "string"}, {"description", "Directory to search: a path relative to the shared directory or an absolute path inside it. Defaults to the shared directory."}}},
+                {"glob", QJsonObject{{"type", "string"}, {"description", "Optional glob to restrict which files are searched, e.g. \"*.cpp\" or \"src/**/*.hpp\"."}}}
+            }},
+           {"required", QJsonArray{"pattern"}},
+           {"additionalProperties", false}
+       }}
+  };
+
+  const QJsonObject find_files_function{
+      {"name", "find_files"},
+      {"description",
+       "List files in the configured shared directory whose path matches a "
+       "glob, honouring .gitignore/.ignore files and skipping hidden entries. "
+       "Use it to discover files by name or extension without reading their "
+       "contents."},
+      {"parameters",
+       QJsonObject{
+           {"type", "object"},
+           {"properties",
+            QJsonObject{
+                {"glob", QJsonObject{{"type", "string"}, {"description", "Glob to match file paths, e.g. \"*.md\" or \"src/**/*.cpp\"."}}},
+                {"path", QJsonObject{{"type", "string"}, {"description", "Directory to search: a path relative to the shared directory or an absolute path inside it. Defaults to the shared directory."}}}
+            }},
+           {"required", QJsonArray{"glob"}},
+           {"additionalProperties", false}
+       }}
+  };
+
   const QJsonObject read_function{
       {"name", "read_file"},
       {"description",
@@ -677,6 +721,8 @@ QJsonArray tool_definitions(bool filesystem) {
   if (filesystem) {
     tools.append(QJsonObject{{"type", "function"}, {"function", list_function}});
     tools.append(QJsonObject{{"type", "function"}, {"function", search_function}});
+    tools.append(QJsonObject{{"type", "function"}, {"function", search_regex_function}});
+    tools.append(QJsonObject{{"type", "function"}, {"function", find_files_function}});
     tools.append(QJsonObject{{"type", "function"}, {"function", read_function}});
   }
 
@@ -703,7 +749,8 @@ QString execute_local_tool(
 
     // Filesystem tools need a shared directory; network tools do not.
     const bool needs_root = call.name == "list_directory" ||
-        call.name == "search_code" || call.name == "read_file";
+        call.name == "search_code" || call.name == "search_code_regex" ||
+        call.name == "find_files" || call.name == "read_file";
 
     if (needs_root && (!root_path.has_value() || root_path->empty())) {
       return QStringLiteral(
@@ -723,6 +770,25 @@ QString execute_local_tool(
 
       return QString::fromStdString(
           search_code(query.toStdString(), *root_path, path.toStdString())
+      );
+    }
+
+    if (call.name == "search_code_regex") {
+      const QString pattern = json_string_or(args, "pattern");
+      const QString path = json_string_or(args, "path", QStringLiteral("."));
+      const QString glob = json_string_or(args, "glob");
+
+      return QString::fromStdString(search_regex(
+          pattern.toStdString(), *root_path, path.toStdString(), glob.toStdString()
+      ));
+    }
+
+    if (call.name == "find_files") {
+      const QString glob = json_string_or(args, "glob");
+      const QString path = json_string_or(args, "path", QStringLiteral("."));
+
+      return QString::fromStdString(
+          find_files(glob.toStdString(), *root_path, path.toStdString())
       );
     }
 

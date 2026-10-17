@@ -19,6 +19,8 @@ class Application;
 
 namespace ui {
 
+class ConversationView;
+
 // Edits one session: its title, custom instructions, shared directory, memory and
 // every session-bound budget (design-1.md §8). The window is scrollable and the
 // memory box is directly editable, with a "Summarize now" action that folds the
@@ -32,14 +34,21 @@ public:
 
   [[nodiscard]] std::uint32_t session_id() const { return session_id_; }
 
+  // The conversation view that owns the session's background worker, when one is
+  // available. A manual summarisation then runs as the session's own task, so it
+  // appears in the tasks window and can never race a generation on the same
+  // session. Unset for a brand-new session, whose summarise action is disabled
+  // because there is nothing stored to fold.
+  void set_conversation_view(ConversationView* view) { conversation_view_ = view; }
+
 private:
   QWidget* build_content();
   void load_session();
   void save_session();
 
   // Folds the whole transcript into the memory box on demand, regardless of the
-  // automatic trigger. Runs off the UI thread and reloads the persisted memory
-  // when it finishes.
+  // automatic trigger. Runs as the session's own background task (through the
+  // conversation view) and reloads the persisted memory when it finishes.
   void summarize_now();
 
   lnb::Application& app_;
@@ -72,6 +81,10 @@ private:
   QSpinBox* max_tool_calls_ = nullptr;
   QSpinBox* tool_output_cap_ = nullptr;
   QSpinBox* response_budget_ = nullptr;
+
+  // The session's worker owner, when the editor was given one. Null for a new
+  // session.
+  ConversationView* conversation_view_ = nullptr;
 
   // True while a manual summarisation is running, so the action cannot be
   // started twice.

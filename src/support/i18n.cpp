@@ -180,14 +180,13 @@ constexpr Entry kTranslations[] = {
     {"The retained-token level must be smaller than the summarization trigger. Otherwise the collapse would be triggered again immediately after it runs.", "保留 token 数必须小于总结触发阈值。否则折叠会在运行后立即再次触发。", "保持トークン数は要約トリガーより小さくなければなりません。そうでないと、折り畳みが実行直後に再びトリガーされます。"},
     {"<b>How summarisation works</b><br>Conversation memory is a rolling summary of older turns. A request carries the system prompt plus the transcript; when that reaches <i>Summary trigger</i>, the older messages are folded into the memory, collapsing the transcript to the newest <i>Retained tokens</i>. Keep the retained level well below the trigger, or the collapse would run again on the next turn. The message that crosses the boundary is kept whole.<br><br>The watermarks above are <b>bookkeeping only</b>: they count how much is new so the trigger can fire. They never decide what is sent or what is read — the summariser always reads by recency, so pressing <b>Summarize now</b> twice with no new messages reads the same set and produces the same memory (idempotent). Custom instructions are kept separate and are never touched.<br><br>The <b>assistant memory</b> is shared across every session: it is folded from the recent messages of all sessions (bounded by the assistant's own trigger) plus each session's summary (bounded by the session-pool budget). Older sessions may therefore be forgotten.<br><br>Clearing the memory and saving resets its watermark to 0, re-admitting the whole transcript.", "<b>总结的工作原理</b><br>对话记忆是较早轮次的滚动摘要。每次请求都会携带系统提示词以及对话记录；当它达到 <i>总结触发阈值</i> 时，较早的消息会被折叠进记忆中，将对话记录压缩到最新的 <i>保留 token 数</i>。请让保留水平远低于触发阈值，否则折叠会在下一轮再次运行。跨越边界的消息会完整保留。<br><br>上方的水位<b>仅用于记账</b>：它们统计有多少新内容，以便触发阈值能够触发。它们绝不决定发送或读取什么——总结器始终按最近程度读取，因此在没有新消息时按两次 <b>立即总结</b> 会读取同一组内容并产生相同的记忆（幂等）。自定义指令单独保存，永远不会被触碰。<br><br><b>助手记忆</b>在所有会话之间共享：它由所有会话的最近消息（受助手自身触发阈值限制）加上每个会话的摘要（受会话池预算限制）折叠而成。因此较早的会话可能会被遗忘。<br><br>清空记忆并保存会将其水位重置为 0，从而重新纳入整个对话记录。", "<b>要約の仕組み</b><br>会話メモリは古いやり取りのローリング要約です。リクエストにはシステムプロンプトとトランスクリプトが含まれ、それが <i>要約トリガー</i> に達すると、古いメッセージがメモリに畳み込まれ、トランスクリプトは最新の <i>保持トークン数</i> まで圧縮されます。保持レベルはトリガーを十分に下回るようにしてください。そうでないと、次のターンで再び折り畳みが実行されます。境界を越えるメッセージはそのまま保持されます。<br><br>上のウォーターマークは<b>記帳専用</b>です。どれだけ新しいか数えてトリガーを発火させるためだけに使用されます。何を送信し何を読み取るかを決定することはありません。要約器は常に新しい順に読み取るため、新しいメッセージがない状態で <b>今すぐ要約</b> を2回押しても同じ集合を読み取り、同じメモリを生成します（冪等）。カスタム指示は別に保持され、決して変更されません。<br><br><b>アシスタントメモリ</b>はすべてのセッションで共有されます。これはすべてのセッションの最近のメッセージ（アシスタント自身のトリガーで上限）と各セッションの要約（セッションプールのバジェットで上限）から折り畳まれます。そのため、古いセッションは忘れられる可能性があります。<br><br>メモリを消去して保存すると、ウォーターマークが 0 にリセットされ、トランスクリプト全体が再び取り込まれます。"},
     // Presets.
+    {"Instant", "极轻", "最軽量"},
     {"Very Light", "极轻", "最軽量"},
     {"Light", "轻量", "軽量"},
     {"Balanced", "均衡", "バランス"},
-    {"Balanced (default)", "均衡（默认）", "バランス（デフォルト）"},
     {"Heavy", "重度", "ヘビー"},
     {"Very Heavy", "极重", "超ヘビー"},
     {"Ultra", "极致", "ウルトラ"},
-    {"Deep memory", "深度记忆", "ディープメモリ"},
     // Assistant form.
     {"Assistant name", "助手名称", "アシスタント名"},
     {"Model id, e.g. gpt-4o", "模型 ID，例如 gpt-4o", "モデル ID（例: gpt-4o）"},
@@ -227,6 +226,7 @@ constexpr Entry kTranslations[] = {
     {"Reading files...", "正在读取文件...", "ファイルを読み込み中..."},
     {"Searching code...", "正在搜索代码...", "コードを検索中..."},
     {"Listing files...", "正在列出文件...", "ファイルを一覧表示中..."},
+    {"Finding files...", "正在查找文件...", "ファイルを検索中..."},
     {"Fetching page...", "正在获取页面...", "ページを取得中..."},
     {"Searching the web...", "正在搜索网络...", "ウェブを検索中..."},
     {"Using tools...", "正在使用工具...", "ツールを使用中..."},

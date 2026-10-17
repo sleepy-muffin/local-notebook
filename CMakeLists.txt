@@ -52,6 +52,8 @@ add_library(local-notebook-core STATIC
         src/net/proxy.cpp
         src/net/tools.hpp
         src/net/tools.cpp
+        src/net/search.hpp
+        src/net/search.cpp
         src/net/client.hpp
         src/net/client.cpp
 
@@ -61,6 +63,8 @@ add_library(local-notebook-core STATIC
         src/ui/BackgroundWidget.cpp
         src/ui/dialog_style.hpp
         src/ui/SpinBox.hpp
+        src/ui/StatusNotice.hpp
+        src/ui/StatusNotice.cpp
         src/ui/SessionListModel.hpp
         src/ui/SessionListModel.cpp
         src/ui/SessionItemDelegate.hpp
@@ -128,6 +132,19 @@ target_link_libraries(
 )
 
 add_test(NAME store COMMAND local-notebook-tests)
+
+# Headless tests for the ripgrep-style search tools and their tool-layer wiring.
+add_executable(local-notebook-tools-tests
+        tests/tools_tests.cpp
+)
+
+target_link_libraries(
+        local-notebook-tools-tests
+        PRIVATE
+        local-notebook-core
+)
+
+add_test(NAME tools COMMAND local-notebook-tools-tests)
 
 # Offscreen UI tests (window chrome, settings persistence, the shared assistant
 # form). They run against the offscreen platform plugin so no display is needed.
