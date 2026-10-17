@@ -6,6 +6,7 @@
 #include <string>
 
 #include "app/settings.hpp"
+#include "app/task_manager.hpp"
 #include "model.hpp"
 #include "store/database.hpp"
 #include "store/managers.hpp"
@@ -37,6 +38,11 @@ public:
   [[nodiscard]] store::database& db() { return *db_; }
   [[nodiscard]] store::SessionManager& sessions() { return *sessions_; }
   [[nodiscard]] store::MessageManager messages(std::uint32_t session_id);
+
+  // The single owner of every background job. Every widget starts its work
+  // through it, so a send can never race a pending fold and the tasks window can
+  // list them all without special cases.
+  [[nodiscard]] TaskManager& tasks() { return tasks_; }
 
   // Opens the assistant directory `uuid`, creating its database when needed,
   // and records it as the last-opened assistant in the global settings.
@@ -80,6 +86,10 @@ private:
   // the trigger (a turn, a fold, an edit, a settings save).
   mutable bool assistant_summary_due_ = false;
   mutable bool assistant_summary_stale_ = true;
+
+  // Declared last so it is destroyed (and its workers joined) before the database
+  // and managers it reads through.
+  TaskManager tasks_;
 };
 
 } // namespace lnb

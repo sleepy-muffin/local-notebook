@@ -32,6 +32,7 @@
 #include <algorithm>
 
 #include "app/application.hpp"
+#include "app/task_manager.hpp"
 #include "context/context.hpp"
 #include "net/client.hpp"
 #include "support/i18n.hpp"
@@ -1547,19 +1548,12 @@ bool ConversationView::summarize_due() const {
     return false;
   }
 
-  // context_usage reports the unsummarised conversation cost against the
-  // trigger, so "used >= limit" is exactly the automatic-collapse condition.
-  const lnb::net::ContextUsage usage =
-      lnb::net::context_usage(session, messages_);
-
-  if (usage.limit_tokens > 0 && usage.used_tokens >= usage.limit_tokens) {
-    return true;
-  }
-
-  // The assistant memory is shared across every session, so its own trigger turns
-  // the primary action into a summarize pass even when this session has not
-  // overflowed. The application caches the (global) answer, so this is cheap.
-  return app_.assistant_summary_due();
+  // The decision belongs to the manager, not the widget: the session's own
+  // overflow first, then the shared assistant trigger (or an assistant fold
+  // already in flight). Every composer therefore reports the same action, and the
+  // send button is banned the moment either trigger is met.
+  return app_.tasks().primary_action(session, messages_) !=
+      lnb::TaskManager::Action::Send;
 }
 
 void ConversationView::refresh_send_mode() {
@@ -1585,12 +1579,12 @@ void ConversationView::summarize_session_now(
   }
 
   // A manual fold is a fresh pass, so land at the bottom like the composer's
-  // summarize action. Setting busy bans the composer's send/summarize button (and
-  // reveals the stop action) for the whole pass, so the fold cannot be re-triggered
-  // while it runs.
+  // summarize action. The manager bans the composer's send/summarize button (and
+  // the stop action replaces it) for the whole pass, so the fold cannot be
+  // re-triggered while it runs.
   stick_to_bottom_ = true;
   controller_.summarize_session_now(std::move(approver));
-  set_busy(true);
+  set_busy(controller_.busy());
 }
 
 void ConversationView::submit() {
@@ -1598,12 +1592,17 @@ void ConversationView::submit() {
     return;
   }
 
+  // Re-derive the primary action first, so a trigger that flipped since the last
+  // refresh cannot make the composer send into a fold the manager has already
+  // called for.
+  update_send_mode();
+
   if (summarize_mode_) {
     // The send button has become a summarize button: fold the overflow into
     // memory, sending nothing. A fresh pass lands at the bottom.
     stick_to_bottom_ = true;
     controller_.summarize();
-    set_busy(true);
+    set_busy(controller_.busy());
     return;
   }
 
@@ -1613,13 +1612,18 @@ void ConversationView::submit() {
     return;
   }
 
-  input_->clear();
   // A freshly submitted message is content the writer wants to see, so jump back
   // to the bottom even if they had scrolled away; the reload triggered by send()
-  // then follows the reply.
+  // then follows the reply. The field is only cleared once the manager accepted
+  // the turn, so a refused send never loses the text. set_busy reflects whether a
+  // task actually started, so a refused one never wedges the composer.
   stick_to_bottom_ = true;
-  controller_.send(text.toStdString());
-  set_busy(true);
+
+  if (controller_.send(text.toStdString())) {
+    input_->clear();
+  }
+
+  set_busy(controller_.busy());
 }
 
 } // namespace ui

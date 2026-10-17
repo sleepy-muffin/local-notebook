@@ -1,13 +1,11 @@
 #include "ui/ConversationController.hpp"
 
-#include "app/application.hpp"
-#include "net/client.hpp"
-#include "support/i18n.hpp"
-#include "support/log.hpp"
-#include "ui/SummaryReviewDialog.hpp"
-
-#include <exception>
 #include <utility>
+
+#include "app/application.hpp"
+#include "app/task_manager.hpp"
+#include "net/client.hpp"
+#include "ui/SummaryReviewDialog.hpp"
 
 namespace ui {
 
@@ -17,10 +15,9 @@ ConversationController::ConversationController(
     : app_(app), session_id_(session_id) {}
 
 ConversationController::~ConversationController() {
-  if (worker_.joinable()) {
-    task_.cancel();
-    worker_.request_stop();
-    worker_.join();
+  // The worker captures `this`, so it must be gone before our members are.
+  if (task_ != nullptr) {
+    task_->shutdown();
   }
 }
 
@@ -29,33 +26,42 @@ lnb::Session ConversationController::session() const {
   return stored.value_or(lnb::Session{});
 }
 
+bool ConversationController::busy() const {
+  return task_ != nullptr && !task_->finished();
+}
+
 ConversationController::Progress ConversationController::progress() const {
-  const GenerationTask::Snapshot snapshot = task_.snapshot();
+  if (task_ == nullptr) {
+    return Progress{};
+  }
+
+  const GenerationTask::Snapshot snapshot = task_->snapshot();
   return Progress{snapshot.rounds, snapshot.elapsed_ms};
 }
 
 bool ConversationController::has_finished_task() const {
-  std::lock_guard lock(result_mutex_);
-  return last_snapshot_.has_value();
+  return task_ != nullptr && task_->terminal();
 }
 
 lnb::GenerationTask::Snapshot ConversationController::last_snapshot() const {
-  std::lock_guard lock(result_mutex_);
-  return last_snapshot_.value_or(lnb::GenerationTask::Snapshot{});
+  return task_ != nullptr ? task_->snapshot() : lnb::GenerationTask::Snapshot{};
 }
 
 std::string ConversationController::task_log() const {
-  if (running_) {
-    return task_.log_text();
-  }
-
-  std::lock_guard lock(result_mutex_);
-  return last_task_log_;
+  return task_ != nullptr ? task_->log_text() : std::string{};
 }
 
-void ConversationController::send(std::string text) {
-  if (running_ || text.empty()) {
-    return;
+bool ConversationController::send(std::string text) {
+  if (busy() || text.empty()) {
+    return false;
+  }
+
+  // The manager owns the decision of whether a send is allowed right now: a send
+  // is refused while this session's overflow, or the shared assistant memory, is
+  // pending a fold. This is the last line of defence behind the composer's own
+  // mode button.
+  if (app_.tasks().primary_action(session_id_) != lnb::TaskManager::Action::Send) {
+    return false;
   }
 
   app_.messages(session_id_).append(lnb::Role::User, text);
@@ -64,7 +70,7 @@ void ConversationController::send(std::string text) {
     on_changed_();
   }
 
-  start([this](GenerationTask& task, std::stop_token stop_token) {
+  start(lnb::TaskKind::Turn, [this](GenerationTask& task, std::stop_token stop_token) {
     // Snapshot the assistant and session so the worker never reads state the UI
     // thread may be mutating.
     const lnb::Assistant assistant = app_.assistant();
@@ -100,7 +106,8 @@ void ConversationController::send(std::string text) {
 
     // Assistant-level memory is shared across sessions, so it is folded after
     // the turn and applied to the assistant on the UI thread. It is reviewed
-    // first, like the session pass above.
+    // first, like the session pass above. This automatic pass stays best-effort:
+    // a failure never fails the user's turn.
     const std::string assistant_memory = lnb::net::maybe_summarize_assistant(
         app_.db(), assistant, model, url, key, assistant.proxy_, task, stop_token,
         review_summary
@@ -110,39 +117,64 @@ void ConversationController::send(std::string text) {
       pending_assistant_memory_ = assistant_memory;
     }
   });
+
+  return task_ != nullptr;
 }
 
 void ConversationController::summarize() {
-  if (running_) {
+  if (busy()) {
     return;
   }
 
-  start([this](GenerationTask& task, std::stop_token stop_token) {
-    // Snapshot the assistant and session so the worker never reads state the UI
-    // thread may be mutating.
+  // The manager resolves the level: a session overflow (folded first) or the
+  // shared assistant memory. Choosing here — rather than inside the worker — is
+  // what lets the fold occupy the right slot, so the assistant level shows up in
+  // the tasks window as the shared assistant task.
+  const lnb::TaskManager::Action action = app_.tasks().primary_action(session_id_);
+
+  if (action == lnb::TaskManager::Action::SummarizeSession) {
+    start(
+        lnb::TaskKind::SessionSummary,
+        [this](GenerationTask& task, std::stop_token stop_token) {
+      // Snapshot the assistant and session so the worker never reads state the UI
+      // thread may be mutating.
+      const lnb::Assistant assistant = app_.assistant();
+      const lnb::Session current = session();
+
+      // The user reviews the request first; declining leaves the memory untouched.
+      lnb::net::summarize_session_now(
+          app_.db(), current, assistant.model_, assistant.api_url_,
+          assistant.authentication_token_, assistant.proxy_, task, stop_token,
+          review_summary
+      );
+    });
+    return;
+  }
+
+  // No session overflow this press: the press was offered by the shared assistant
+  // trigger (or a fold is already due), so fold the assistant memory.
+  start(
+      lnb::TaskKind::AssistantSummary,
+      [this](GenerationTask& task, std::stop_token stop_token) {
+    // Snapshot the assistant so the worker never reads state the UI thread may be
+    // mutating.
     const lnb::Assistant assistant = app_.assistant();
-    const lnb::Session current = session();
 
-    // Session-specific memory is inspected first: a manual pass folds the
-    // session's overflow into its memory and persists it. It is the sole action,
-    // so no chat request follows. The user reviews the request first; declining
-    // leaves the memory untouched.
-    lnb::net::summarize_session_now(
-        app_.db(), current, assistant.model_, assistant.api_url_,
-        assistant.authentication_token_, assistant.proxy_, task, stop_token,
-        review_summary
-    );
+    // Nothing to fold (the trigger was not reached): a clean no-op that still
+    // completes, so a press with nothing due never contacts the network.
+    if (!lnb::net::assistant_trigger_reached(app_.db(), assistant, stop_token)) {
+      return;
+    }
 
-    // Then the shared assistant memory, when its own trigger has been reached.
-    // Both passes belong to this one turn, so a single press resolves both
-    // triggers instead of leaving the button asking for a second press. It is
-    // best-effort (an unreached trigger or a failure leaves the assistant memory
-    // untouched).
-    const std::string assistant_memory = lnb::net::maybe_summarize_assistant(
+    // The user asked for the fold, so a failure is reported (in the tasks window)
+    // rather than swallowed: unlike the automatic post-turn pass, this one is
+    // strict.
+    const std::string assistant_memory = lnb::net::summarize_assistant_now(
         app_.db(), assistant, assistant.model_, assistant.api_url_,
         assistant.authentication_token_, assistant.proxy_, task, stop_token,
         review_summary
     );
+
     if (!assistant_memory.empty()) {
       std::lock_guard lock(result_mutex_);
       pending_assistant_memory_ = assistant_memory;
@@ -153,13 +185,15 @@ void ConversationController::summarize() {
 void ConversationController::summarize_session_now(
     std::function<bool(const lnb::net::SummaryPlan&)> approver
 ) {
-  if (running_) {
+  if (busy()) {
     return;
   }
 
-  start([this, approver = std::move(approver)](
-            GenerationTask& task, std::stop_token stop_token
-        ) {
+  start(
+      lnb::TaskKind::SessionSummary,
+      [this, approver = std::move(approver)](
+          GenerationTask& task, std::stop_token stop_token
+      ) {
     // Snapshot the assistant and session so the worker never reads state the UI
     // thread may be mutating.
     const lnb::Assistant assistant = app_.assistant();
@@ -189,11 +223,10 @@ void ConversationController::cancel() {
   // Mark the task terminal so the interface stops showing it as running, then
   // stop the worker thread itself. The worker observes the thread's stop token
   // (that token is what drives the network watchdog which aborts the in-flight
-  // request), so requesting only the task's stop would leave the request running:
-  // the user would see the turn as finished while the worker stayed blocked, and
-  // the next turn would freeze the interface joining it.
-  task_.cancel();
-  worker_.request_stop();
+  // request), so requesting only the task's stop would leave the request running.
+  if (task_ != nullptr) {
+    task_->cancel();
+  }
 }
 
 void ConversationController::delete_message(std::uint32_t message_id) {
@@ -219,67 +252,45 @@ void ConversationController::edit_message(
 }
 
 void ConversationController::start(
+    lnb::TaskKind kind,
     std::function<void(GenerationTask&, std::stop_token)> work
 ) {
-  // The previous worker must be gone before its task and stop source are reused.
-  // Cancellation is prompt (the worker's heavy loops observe the stop token, and
-  // reap_worker() never blocks), so this is at most a short wait.
-  if (worker_.joinable()) {
-    worker_.join();
+  // The previous task's worker must be gone before its captures (this controller)
+  // could outlive it. Cancellation is prompt (the worker's heavy loops observe the
+  // stop token), so this is at most a short wait.
+  if (task_ != nullptr) {
+    task_->shutdown();
+    task_.reset();
   }
 
   {
-    // A late assistant-memory result from a cancelled turn must not leak into
-    // the next one; nor may the previous turn's retained outcome survive it.
+    // A late assistant-memory result from a cancelled task must not leak into the
+    // next one.
     std::lock_guard lock(result_mutex_);
     pending_assistant_memory_.clear();
-    last_snapshot_.reset();
-    last_task_log_.clear();
   }
 
-  worker_finished_.store(false, std::memory_order_relaxed);
-
-  task_.reset();
-  task_.start();
-  running_ = true;
+  reported_ = false;
   last_display_.clear();
   last_status_.clear();
 
-  worker_ = std::jthread([this, work = std::move(work)](
-                             std::stop_token stop_token
-                         ) {
-    try {
-      work(task_, stop_token);
-      task_.complete();
-    } catch (const std::exception& error) {
-      // task_.fail is a no-op when the task was cancelled, which is what we
-      // want: a cancelled turn reports nothing.
-      task_.fail(error.what());
-    } catch (...) {
-      task_.fail(trs("The request failed for an unknown reason.").toStdString());
-    }
+  auto submitted = app_.tasks().submit(kind, session_id_, std::move(work));
 
-    // The thread's last action, so reap_worker() can join it without blocking.
-    worker_finished_.store(true, std::memory_order_release);
-  });
-}
-
-void ConversationController::reap_worker() {
-  if (worker_.joinable() && worker_finished_.load(std::memory_order_acquire)) {
-    worker_.join();
+  if (submitted != nullptr) {
+    task_ = std::move(submitted);
   }
 }
 
 void ConversationController::poll() {
-  // Complete a deferred join from a previous cancelled turn, so the thread is
-  // always reclaimed even though the interface never waited for it.
-  reap_worker();
-
-  if (!running_) {
+  if (task_ == nullptr) {
     return;
   }
 
-  const GenerationTask::Snapshot snapshot = task_.snapshot();
+  // Complete a deferred join from a previous cancelled task, so the thread is
+  // always reclaimed even though the interface never waited for it.
+  task_->reap();
+
+  const GenerationTask::Snapshot snapshot = task_->snapshot();
 
   if (snapshot.status == GenerationTask::Status::RUNNING &&
       snapshot.display != last_display_) {
@@ -299,28 +310,20 @@ void ConversationController::poll() {
     }
   }
 
-  if (task_.is_terminal()) {
+  if (task_->terminal() && !reported_) {
     finish_worker();
   }
 }
 
 void ConversationController::finish_worker() {
+  // Report the outcome exactly once, before the callbacks can re-enter poll().
+  reported_ = true;
+
   // The worker may still be winding down after a cancel, so the join is deferred
-  // to a later poll (reap_worker) instead of freezing the interface here.
-  reap_worker();
+  // to a later poll (reap) instead of freezing the interface here.
+  task_->reap();
 
-  running_ = false;
-
-  const GenerationTask::Snapshot snapshot = task_.snapshot();
-
-  // Retain the outcome and the diagnostic log, so the tasks window can still
-  // show a failed (or cancelled) turn, with its reasoning, after the worker has
-  // gone and the task is about to be reused.
-  {
-    std::lock_guard lock(result_mutex_);
-    last_snapshot_ = snapshot;
-    last_task_log_ = task_.log_text();
-  }
+  const GenerationTask::Snapshot snapshot = last_snapshot();
 
   std::string assistant_memory;
   {
@@ -333,8 +336,8 @@ void ConversationController::finish_worker() {
     app_.save_assistant();
   }
 
-  // The turn may have added messages and advanced watermarks, so the cached
-  // assistant trigger is stale. Recomputing lazily keeps this per-turn step cheap.
+  // The task may have added messages and advanced watermarks, so the cached
+  // assistant trigger is stale. Recomputing lazily keeps this per-task step cheap.
   app_.mark_assistant_summary_stale();
 
   if (snapshot.status == GenerationTask::Status::FAILED && !snapshot.error.empty() &&

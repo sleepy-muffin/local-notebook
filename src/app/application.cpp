@@ -10,7 +10,7 @@
 namespace lnb {
 
 Application::Application()
-    : settings_(load_settings()) {}
+    : settings_(load_settings()), tasks_(*this) {}
 
 Application::~Application() {
   close_log();

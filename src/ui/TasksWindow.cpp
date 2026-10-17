@@ -134,8 +134,12 @@ TasksWindow::TasksWindow(QWidget* parent) : QDialog(parent) {
   apply_style();
 }
 
-void TasksWindow::set_log_provider(std::function<QString(std::uint32_t)> provider) {
+void TasksWindow::set_log_provider(std::function<QString(std::uint64_t)> provider) {
   log_provider_ = std::move(provider);
+}
+
+void TasksWindow::set_cancel_handler(std::function<void(std::uint64_t)> handler) {
+  cancel_handler_ = std::move(handler);
 }
 
 void TasksWindow::showEvent(QShowEvent* event) {
@@ -171,7 +175,7 @@ void TasksWindow::open_log(std::size_t index) {
       : entry.title;
 
   const QString log =
-      log_provider_ != nullptr ? log_provider_(entry.session_id) : QString();
+      log_provider_ != nullptr ? log_provider_(entry.id) : QString();
 
   show_log(this, title, log);
 }
@@ -217,9 +221,15 @@ void TasksWindow::rebuild_rows(std::size_t count) {
     card->setProperty("lnbRowIndex", static_cast<int>(i));
     card->installEventFilter(this);
 
-    auto* layout = new QVBoxLayout(card);
-    layout->setContentsMargins(14, 10, 14, 10);
-    layout->setSpacing(2);
+    auto* outer = new QHBoxLayout(card);
+    outer->setContentsMargins(14, 10, 14, 10);
+    outer->setSpacing(10);
+
+    // The text column is a layout, not a widget, so a click on any label still
+    // reaches the card beneath and opens the log.
+    auto* column = new QVBoxLayout();
+    column->setContentsMargins(0, 0, 0, 0);
+    column->setSpacing(2);
 
     auto* row_title = new QLabel(card);
     row_title->setObjectName(QStringLiteral("CurrentName"));
@@ -236,12 +246,29 @@ void TasksWindow::rebuild_rows(std::size_t count) {
       label->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     }
 
-    layout->addWidget(row_title);
-    layout->addWidget(row_detail);
-    layout->addWidget(row_error);
+    column->addWidget(row_title);
+    column->addWidget(row_detail);
+    column->addWidget(row_error);
+
+    // The stop action for a running task. It is the only place a shared assistant
+    // fold can be cancelled. The index is captured, so the handler always sees the
+    // current entry even though the rows are reused across refreshes.
+    auto* cancel = new QPushButton(trs("Cancel"), card);
+    cancel->setObjectName(QStringLiteral("Secondary"));
+    cancel->setCursor(Qt::PointingHandCursor);
+    cancel->setVisible(false);
+
+    QObject::connect(cancel, &QPushButton::clicked, this, [this, i]() {
+      if (i < entries_.size() && cancel_handler_ != nullptr) {
+        cancel_handler_(entries_[i].id);
+      }
+    });
+
+    outer->addLayout(column, 1);
+    outer->addWidget(cancel, 0, Qt::AlignVCenter);
 
     list_layout_->insertWidget(static_cast<int>(i), card);
-    rows_[i] = Row{card, row_title, row_detail, row_error};
+    rows_[i] = Row{card, row_title, row_detail, row_error, cancel};
   }
 }
 
@@ -257,12 +284,18 @@ void TasksWindow::set_entries(std::vector<Entry> entries) {
 
     rows_[i].title->setText(entry.title);
 
-    const QString detail =
-        trs("Session #%1   ·   %2   ·   Round %3   ·   %4")
-            .arg(entry.session_id)
-            .arg(entry.state)
-            .arg(entry.rounds)
-            .arg(format_elapsed(entry.elapsed_ms));
+    // The shared assistant task has no session, so its row reads without the
+    // "Session #0" prefix.
+    const QString detail = entry.session_id == 0
+        ? trs("%1   ·   Round %2   ·   %3")
+              .arg(entry.state)
+              .arg(entry.rounds)
+              .arg(format_elapsed(entry.elapsed_ms))
+        : trs("Session #%1   ·   %2   ·   Round %3   ·   %4")
+              .arg(entry.session_id)
+              .arg(entry.state)
+              .arg(entry.rounds)
+              .arg(format_elapsed(entry.elapsed_ms));
 
     rows_[i].detail->setText(detail);
 
@@ -280,6 +313,10 @@ void TasksWindow::set_entries(std::vector<Entry> entries) {
 
     rows_[i].error->setText(entry.error);
     rows_[i].error->setVisible(!entry.error.isEmpty());
+
+    if (rows_[i].cancel != nullptr) {
+      rows_[i].cancel->setVisible(entry.cancellable);
+    }
   }
 
   empty_->setVisible(entries_.empty());

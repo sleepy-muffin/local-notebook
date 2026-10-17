@@ -754,6 +754,11 @@ std::string fold_session_memory(
         request, silent_task, stop_token, api_url, api_key, proxy, "session-summary"
     );
 
+    // The summariser's own diagnostics (the exact request and response) are
+    // copied onto the visible task, so the tasks window shows what was sent
+    // instead of an empty log.
+    task.append_log(silent_task.log_text());
+
     const std::string text = trimmed(result.text);
 
     if (text.empty()) {
@@ -1010,6 +1015,11 @@ std::string fold_assistant_memory(
   const ChatCompletionResult result = send_message_once(
       request, silent_task, stop_token, api_url, api_key, proxy, "assistant-summary"
   );
+
+  // The summariser's own diagnostics (the exact request and response) are copied
+  // onto the visible task, so the tasks window shows what was sent instead of an
+  // empty log.
+  task.append_log(silent_task.log_text());
 
   const std::string memory = trimmed(result.text);
 

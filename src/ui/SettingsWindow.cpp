@@ -29,14 +29,12 @@
 
 #include <array>
 #include <cstddef>
-#include <exception>
 #include <memory>
 #include <optional>
 #include <string>
-#include <thread>
-#include <utility>
 
 #include "app/application.hpp"
+#include "app/task_manager.hpp"
 #include "net/client.hpp"
 #include "support/generation_task.hpp"
 #include "support/i18n.hpp"
@@ -1096,9 +1094,11 @@ void SettingsWindow::summarize_assistant_now() {
     return;
   }
 
-  auto task = std::make_shared<lnb::GenerationTask>();
-  task->start();
-  const std::stop_token stop_token = task->stop_token();
+  // The shared assistant fold occupies one slot; a fold already in flight is left
+  // to finish (it can be watched — and cancelled — in the tasks window).
+  if (app_.tasks().assistant_busy()) {
+    return;
+  }
 
   assistant_summarizing_ = true;
   assistant_summarize_->setEnabled(false);
@@ -1106,49 +1106,53 @@ void SettingsWindow::summarize_assistant_now() {
 
   lnb::store::database* db = &app_.db();
   const lnb::Assistant assistant = app_.assistant();
-  const std::string model = app_.assistant().model_;
-  const std::string url = app_.assistant().api_url_;
-  const std::string key = app_.assistant().authentication_token_;
-  const std::optional<std::string> proxy = app_.assistant().proxy_;
-
-  std::string produced;
+  const std::string model = assistant.model_;
+  const std::string url = assistant.api_url_;
+  const std::string key = assistant.authentication_token_;
+  const std::optional<std::string> proxy = assistant.proxy_;
 
   // The review runs on the worker thread and blocks on the interface thread, so
-  // a decline is recorded here and read after the worker is joined.
-  bool declined = false;
+  // a decline is recorded here and read after the task is reclaimed.
+  auto produced = std::make_shared<std::string>();
+  auto declined = std::make_shared<bool>(false);
+
   const lnb::net::SummaryApprover approver =
-      [&declined](const lnb::net::SummaryPlan& plan) {
+      [declined](const lnb::net::SummaryPlan& plan) {
         const bool approved = review_summary(plan);
         if (!approved) {
-          declined = true;
+          *declined = true;
         }
         return approved;
       };
 
-  std::jthread worker(
-      [&produced, task, stop_token, db, assistant, model, url, key, proxy, approver]() {
-        try {
-          produced = lnb::net::summarize_assistant_now(
-              *db, assistant, model, url, key, proxy, *task, stop_token, approver
-          );
-          task->complete();
-        } catch (const std::exception& error) {
-          if (!stop_token.stop_requested()) {
-            task->fail(error.what());
-          }
-        } catch (...) {
-          task->fail(trs("Unknown summarisation error").toStdString());
-        }
+  // The fold runs as the shared assistant task, so it appears in the tasks window
+  // and can be cancelled there like any other job.
+  auto task = app_.tasks().submit(
+      lnb::TaskKind::AssistantSummary, 0,
+      [produced, declined, db, assistant, model, url, key, proxy, approver](
+          lnb::GenerationTask& state, std::stop_token stop_token
+      ) {
+        *produced = lnb::net::summarize_assistant_now(
+            *db, assistant, model, url, key, proxy, state, stop_token, approver
+        );
       }
   );
 
+  if (task == nullptr) {
+    assistant_summarizing_ = false;
+    assistant_summarize_->setEnabled(true);
+    assistant_summarize_->setText(trs("Summarize now"));
+    return;
+  }
+
   // Keep the modal window responsive while the worker folds every session: the
-  // nested loop only pumps events until the task reaches a terminal state.
+  // nested loop only pumps events until the worker has exited. The main window's
+  // poll timer keeps firing inside it, so the tasks window updates live.
   QEventLoop loop;
   QTimer timer;
 
   QObject::connect(&timer, &QTimer::timeout, &loop, [&task, &loop]() {
-    if (task->is_terminal()) {
+    if (task->finished()) {
       loop.quit();
     }
   });
@@ -1157,21 +1161,24 @@ void SettingsWindow::summarize_assistant_now() {
   loop.exec();
   timer.stop();
 
-  // The worker writes `produced`; join before reading it.
-  if (worker.joinable()) {
-    worker.join();
-  }
+  // Reclaim the worker before its captures (produced/declined) are read.
+  task->reap();
 
   assistant_summarizing_ = false;
   assistant_summarize_->setEnabled(true);
   assistant_summarize_->setText(trs("Summarize now"));
 
   // A declined review is a deliberate no-op: say nothing about it.
-  if (declined) {
+  if (*declined) {
     return;
   }
 
   const lnb::GenerationTask::Snapshot snapshot = task->snapshot();
+
+  // A cancellation was deliberate (from the tasks window): say nothing.
+  if (snapshot.status == lnb::GenerationTask::Status::CANCELLED) {
+    return;
+  }
 
   if (snapshot.status == lnb::GenerationTask::Status::FAILED) {
     QMessageBox::warning(
@@ -1181,10 +1188,10 @@ void SettingsWindow::summarize_assistant_now() {
   }
 
   const QString previous = assistant_memory_->toPlainText();
-  const QString memory = to_qstring(produced);
+  const QString memory = to_qstring(*produced);
 
   assistant_memory_->setPlainText(memory);
-  app_.assistant().memory_ = produced;
+  app_.assistant().memory_ = *produced;
   app_.save_assistant();
   // The fold advanced every session's assistant watermark, so the cached trigger
   // (which the composer's summarize mode reads) must be recomputed.

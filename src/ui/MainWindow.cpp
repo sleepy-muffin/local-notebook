@@ -20,12 +20,14 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "app/application.hpp"
+#include "app/task_manager.hpp"
 #include "net/client.hpp"
 #include "support/i18n.hpp"
 #include "ui/ConversationView.hpp"
@@ -716,7 +718,7 @@ void MainWindow::refresh_sessions() {
     }
   }
 
-  for (const std::uint32_t id : removed) {
+  for (std::uint32_t id : removed) {
     auto it = conversations_.find(id);
 
     if (it == conversations_.end()) {
@@ -730,6 +732,9 @@ void MainWindow::refresh_sessions() {
     workspace_->removeWidget(it->second);
     it->second->deleteLater();
     conversations_.erase(it);
+
+    // The session is gone, so its task has no row to appear on any more.
+    app_.tasks().forget_session(id);
 
     if (current_session_ == id) {
       current_session_ = 0;
@@ -920,6 +925,7 @@ void MainWindow::open_settings() {
       // assistant trigger and every composer's primary action are re-evaluated.
       app_.mark_assistant_summary_stale();
       last_assistant_due_ = app_.assistant_summary_due();
+      last_assistant_busy_ = app_.tasks().assistant_busy();
 
       for (auto& [id, view] : conversations_) {
         if (view != nullptr) {
@@ -953,13 +959,16 @@ void MainWindow::poll_conversations() {
   }
 
   // The assistant memory is shared, so a turn in one session can turn every
-  // composer's primary action into a summarize pass. The application caches the
+  // composer's primary action into a summarize pass, and a fold in flight bans
+  // sending in every session until it finishes. The application caches the
   // trigger, so this is a cheap compare; the views are asked to re-evaluate only
-  // when it actually flips.
+  // when one of the two flags actually flips.
   const bool assistant_due = app_.assistant_summary_due();
+  const bool assistant_busy = app_.tasks().assistant_busy();
 
-  if (assistant_due != last_assistant_due_) {
+  if (assistant_due != last_assistant_due_ || assistant_busy != last_assistant_busy_) {
     last_assistant_due_ = assistant_due;
+    last_assistant_busy_ = assistant_busy;
 
     for (ConversationView* view : views) {
       view->refresh_send_mode();
@@ -1005,15 +1014,9 @@ void MainWindow::update_task_indicator() {
     return;
   }
 
-  // The status bar counts only the turns actually in flight. This costs nothing:
-  // it never touches the database.
-  int running = 0;
-
-  for (const auto& [id, view] : conversations_) {
-    if (view != nullptr && view->busy()) {
-      ++running;
-    }
-  }
+  // The status bar counts the tasks whose workers are still running. This costs
+  // nothing: it never touches the database.
+  const int running = static_cast<int>(app_.tasks().running_count());
 
   if (running != shown_task_count_) {
     shown_task_count_ = running;
@@ -1034,54 +1037,51 @@ void MainWindow::update_task_indicator() {
     return;
   }
 
+  // One entry per occupied slot, straight from the manager: every task — turns,
+  // session folds and the shared assistant fold — is listed, with no widget
+  // deciding what shows.
   std::vector<TasksWindow::Entry> entries;
 
-  for (const auto& [id, view] : conversations_) {
-    if (view == nullptr) {
+  for (const std::shared_ptr<lnb::Task>& task : app_.tasks().active_tasks()) {
+    if (task == nullptr) {
       continue;
     }
-
-    const bool busy = view->busy();
-    // A finished turn stays listed until the next turn replaces it, so a failure
-    // (and its reason) is never dropped silently.
-    const bool finished = !busy && view->has_finished_task();
-
-    if (!busy && !finished) {
-      continue;
-    }
-
-    const auto session = app_.db().session(id);
-    const QString title = session.has_value() && !session->title_.empty()
-        ? from_utf8(session->title_)
-        : trs("Session #%1").arg(id);
 
     TasksWindow::Entry entry;
-    entry.session_id = id;
-    entry.title = title;
-    entry.running = busy;
+    entry.id = task->id();
+    entry.session_id = task->session_id();
+    entry.running = !task->terminal();
+    entry.cancellable = !task->terminal();
 
-    if (busy) {
-      const ConversationController::Progress progress = view->progress();
-      entry.state = trs("Running");
-      entry.rounds = progress.rounds;
-      entry.elapsed_ms = progress.elapsed_ms;
+    if (entry.session_id == 0) {
+      // The shared assistant memory has no session of its own.
+      entry.title = trs("Assistant memory");
     } else {
-      const lnb::GenerationTask::Snapshot snapshot = view->last_snapshot();
-      entry.rounds = snapshot.rounds;
-      entry.elapsed_ms = snapshot.elapsed_ms;
-      entry.error = from_utf8(snapshot.error);
+      const auto session = app_.db().session(entry.session_id);
+      entry.title = session.has_value() && !session->title_.empty()
+          ? from_utf8(session->title_)
+          : trs("Session #%1").arg(entry.session_id);
+    }
 
-      switch (snapshot.status) {
-        case lnb::GenerationTask::Status::FAILED:
-          entry.state = trs("Failed");
-          break;
-        case lnb::GenerationTask::Status::CANCELLED:
-          entry.state = trs("Cancelled");
-          break;
-        default:
-          entry.state = trs("Completed");
-          break;
-      }
+    const lnb::GenerationTask::Snapshot snapshot = task->snapshot();
+    entry.rounds = snapshot.rounds;
+    entry.elapsed_ms = snapshot.elapsed_ms;
+    entry.error = from_utf8(snapshot.error);
+
+    switch (snapshot.status) {
+      case lnb::GenerationTask::Status::PENDING:
+      case lnb::GenerationTask::Status::RUNNING:
+        entry.state = trs("Running");
+        break;
+      case lnb::GenerationTask::Status::FAILED:
+        entry.state = trs("Failed");
+        break;
+      case lnb::GenerationTask::Status::CANCELLED:
+        entry.state = trs("Cancelled");
+        break;
+      default:
+        entry.state = trs("Completed");
+        break;
     }
 
     entries.push_back(std::move(entry));
@@ -1096,14 +1096,15 @@ void MainWindow::open_tasks_window() {
 
     // The log is only composed when the reader opens a task, so a hidden window
     // never pays for the (potentially large) request bodies it recorded.
-    tasks_window_->set_log_provider([this](std::uint32_t session_id) -> QString {
-      const auto it = conversations_.find(session_id);
+    tasks_window_->set_log_provider([this](std::uint64_t id) -> QString {
+      return from_utf8(app_.tasks().log_text(id));
+    });
 
-      if (it == conversations_.end() || it->second == nullptr) {
-        return {};
-      }
-
-      return from_utf8(it->second->task_log());
+    // A running task can be stopped from here. This is the only place a shared
+    // assistant fold can be cancelled: the session composer never offers it.
+    tasks_window_->set_cancel_handler([this](std::uint64_t id) {
+      app_.tasks().cancel(id);
+      update_task_indicator();
     });
   }
 
@@ -1180,7 +1181,9 @@ void MainWindow::delete_session(std::uint32_t session_id) {
   }
 
   app_.db().remove_session(session_id);
-  // A removed session's messages no longer contribute to the assistant trigger.
+  // A removed session's messages no longer contribute to the assistant trigger,
+  // and its task has no row to appear on any more.
+  app_.tasks().forget_session(session_id);
   app_.mark_assistant_summary_stale();
   refresh_sessions();
   update_header();

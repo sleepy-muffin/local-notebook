@@ -148,6 +148,9 @@ private:
   // The last observed assistant-memory trigger, compared each poll so every
   // composer is told to re-evaluate only when the shared flag actually flips.
   bool last_assistant_due_ = false;
+  // The last observed shared-assistant task state, so every composer is barred
+  // from sending (or released) the moment the assistant fold starts or finishes.
+  bool last_assistant_busy_ = false;
 
   std::uint32_t current_session_ = 0;
   std::unordered_map<std::uint32_t, ConversationView*> conversations_;

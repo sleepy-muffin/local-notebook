@@ -3,4 +3,7 @@
 This file reveals the current jobs we are working on.
 If the TODO has been completed, please move the record to `todo-archived.md`.
 
-## Experience Improvements
+## Small Improvement
+
+- Assistant-level summarisation produces no task information.
+- The send buttons across all sessions have already been banned, but their colors do not changed.

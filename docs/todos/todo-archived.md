@@ -79,3 +79,18 @@ Error: Process completed with exit code 1.
 - (Refinement) Use full copy of MIT Lisence in About tab in Settings Window. Also, the fully version lisence of the community version of Qt. They don't need to be rendered as markdown.
 - (Refinement) The background of scrollbars should be transparent. Currently they still have black background in settings window. While the scrollbar in Main Window appears to have transparent background (What looks better).
 - (Refinement) Generation Task triggered by summarization (both assistant-level and session-level) should be also queued into task list. Button should be substituted to summarize button when assistant-level summarization trigger has met (currently we already have it). Also, for the case where assistant-level trigger has been met. So, in the case when both triggers have been met in the same time, user have to summarize twice before moving on. (session-specific memory is inspected first. )
+
+- Manual assistant-level summarisation should be appended into Tasks Window as well.
+  In the case assistant-level summarisation is not completed, for both manually initiated or automatically triggered on sending message and the user affirms it, as we have already implemented.
+  - The send button is banned for all sessions.
+  - The user can not cancel this task in session conversation view.
+  - Please add cancel button in Tasks Window for running job, so assistant-level summarisation can be cancelled there.
+  - Currently, when the assistant-level summarisation is issued through the button on the right of session, the task will show up, but no details are provided there. No error messages even though the assistant-level summarisation is failed.
+
+  Implemented with the task abstraction below: the manual fold (Settings) runs as the shared assistant task, so it appears in the Tasks Window; every row for a running task carries a Cancel button; and a manual fold now surfaces both its request/response log (the summarizer runs on a silent task whose log is copied onto the visible one) and its failure (the manual paths fold strictly instead of swallowing the error).
+
+## Architectural Improvements
+
+- Make an abstract layer for tasks? Which prevents the UI from launching a "send" task when either session-level or assistant-level summarisation trigger is met (so, we will have another protection layer). And all tasks (send tasks, summarisation tasks) must go through it, so Tasks Window can show them without problems. To reduce UI sources from directly making decisions from their own.
+
+  Implemented as `lnb::TaskManager` / `lnb::Task` (`src/app/task_manager.*`), owned by `Application`. It is the single owner of every background worker and the single place the primary-action policy lives (`primary_action`: session overflow, then the shared assistant trigger or an in-flight assistant fold, then a plain send). Every turn and fold is started through `submit`, which refuses a `Turn` while the primary action is not a send — the extra protection layer — and keeps at most one task per slot (one per session, one for the shared assistant memory). The Tasks Window, the status-bar count and every composer now read from the manager instead of from the open views.

@@ -57,6 +57,7 @@
 #include "app/data_location.hpp"
 #include "app/metrics.hpp"
 #include "app/settings.hpp"
+#include "app/task_manager.hpp"
 #include "model.hpp"
 #include "net/client.hpp"
 #include "store/util.hpp"
@@ -73,6 +74,7 @@
 #include "ui/SpinBox.hpp"
 #include "ui/StatusNotice.hpp"
 #include "ui/SummaryReviewDialog.hpp"
+#include "ui/TasksWindow.hpp"
 #include "ui/theme.hpp"
 
 namespace {
@@ -1996,7 +1998,169 @@ void test_session_editor_summarize_shows_task() {
   CHECK(!view->busy());
 }
 
+// The manager is the single place the primary-action policy lives, and it is the
+// protection layer: a turn is refused outright while either trigger calls for a
+// fold, and accepted again once the action returns to a plain send.
+void test_task_manager_refuses_send_while_fold_due() {
+  enter_scratch("manager-send-gate");
+
+  lnb::Application notebook;
+  notebook.open_assistant("5a5a5a5a-5a5a-5a5a-5a5a-5a5a5a5a5a5a", make_assistant());
+
+  lnb::Session session;
+  session.summary_trigger_tokens_ = 1; // any transcript overflows at once
+  const std::uint32_t session_id = notebook.sessions().create(session);
+  notebook.messages(session_id).append(lnb::Role::User, "hello");
+
+  CHECK(
+      notebook.tasks().primary_action(session_id) ==
+      lnb::TaskManager::Action::SummarizeSession
+  );
+
+  // A send is refused while a fold is pending — the extra protection layer.
+  auto refused = notebook.tasks().submit(
+      lnb::TaskKind::Turn, session_id, [](lnb::GenerationTask&, std::stop_token) {}
+  );
+  CHECK(refused == nullptr);
+
+  // The fold itself is allowed through; a trivial body completes cleanly.
+  auto fold = notebook.tasks().submit(
+      lnb::TaskKind::SessionSummary, session_id,
+      [](lnb::GenerationTask&, std::stop_token) {}
+  );
+  CHECK(fold != nullptr);
+
+  for (int guard = 0; fold != nullptr && !fold->finished() && guard < 500; ++guard) {
+    QApplication::processEvents();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+
+  CHECK(fold != nullptr && fold->terminal());
+  CHECK(
+      fold != nullptr &&
+      fold->snapshot().status == lnb::GenerationTask::Status::COMPLETED
+  );
+
+  // Raise the trigger far above the transcript: the action is a plain send again,
+  // and a turn is accepted.
+  lnb::Session updated = notebook.db().session(session_id).value_or(lnb::Session{});
+  updated.summary_trigger_tokens_ = 1000000;
+  notebook.sessions().save(updated);
+  notebook.mark_assistant_summary_stale();
+
+  CHECK(notebook.tasks().primary_action(session_id) == lnb::TaskManager::Action::Send);
+
+  auto turn = notebook.tasks().submit(
+      lnb::TaskKind::Turn, session_id, [](lnb::GenerationTask&, std::stop_token) {}
+  );
+  CHECK(turn != nullptr);
+
+  if (turn != nullptr) {
+    turn->shutdown();
+  }
+}
+
+// The shared assistant fold occupies its own single-occupancy slot: while it
+// runs, every session's primary action is a fold (so sending is banned), a second
+// assistant fold is refused, and it can be cancelled by id — the path the tasks
+// window uses.
+void test_task_manager_assistant_slot_cancel() {
+  enter_scratch("manager-assistant-slot");
+
+  lnb::Application notebook;
+  notebook.open_assistant("5b5b5b5b-5b5b-5b5b-5b5b-5b5b5b5b5b5b", make_assistant());
+
+  const std::uint32_t session_id = notebook.sessions().create(lnb::Session{});
+  notebook.messages(session_id).append(lnb::Role::User, "hello");
+
+  // Hold the worker so the slot is observably busy.
+  std::atomic<bool> release = false;
+  const auto work = [&release](lnb::GenerationTask&, std::stop_token stop_token) {
+    while (!release.load() && !stop_token.stop_requested()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  };
+
+  auto task = notebook.tasks().submit(lnb::TaskKind::AssistantSummary, 0, work);
+  CHECK(task != nullptr);
+  CHECK(notebook.tasks().assistant_busy());
+
+  // A second assistant fold is refused while the slot is occupied.
+  auto second = notebook.tasks().submit(lnb::TaskKind::AssistantSummary, 0, work);
+  CHECK(second == nullptr);
+
+  // Every session's primary action is now a fold, so its send is banned.
+  CHECK(
+      notebook.tasks().primary_action(session_id) ==
+      lnb::TaskManager::Action::SummarizeAssistant
+  );
+
+  // The tasks-window path: cancel by id.
+  CHECK(task != nullptr && notebook.tasks().cancel(task->id()));
+  CHECK(task != nullptr && task->terminal());
+
+  release.store(true);
+
+  for (int guard = 0; task != nullptr && !task->finished() && guard < 500; ++guard) {
+    QApplication::processEvents();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+
+  CHECK(task != nullptr && task->finished());
+  CHECK(!notebook.tasks().assistant_busy());
+}
+
 // --- Composer ----------------------------------------------------------------
+
+// The tasks window offers a Cancel button only for a running task, and clicking
+// it forwards the task's id to the manager's cancel path.
+void test_tasks_window_cancel_button() {
+  enter_scratch("tasks-cancel-button");
+
+  ui::TasksWindow window;
+
+  std::uint64_t cancelled = 0;
+  window.set_cancel_handler([&cancelled](std::uint64_t id) { cancelled = id; });
+
+  ui::TasksWindow::Entry running;
+  running.id = 42;
+  running.session_id = 7;
+  running.title = QStringLiteral("Session #7");
+  running.running = true;
+  running.cancellable = true;
+  running.state = lnb::i18n::trs("Running");
+
+  ui::TasksWindow::Entry finished;
+  finished.id = 43;
+  finished.session_id = 8;
+  finished.title = QStringLiteral("Session #8");
+  finished.running = false;
+  finished.cancellable = false;
+  finished.state = lnb::i18n::trs("Completed");
+
+  window.set_entries({running, finished});
+  QApplication::processEvents();
+
+  // Exactly one Cancel is offered: the running one. The finished row has none.
+  int visible = 0;
+  QPushButton* clicked = nullptr;
+
+  for (QPushButton* button : window.findChildren<QPushButton*>()) {
+    if (button->text() == lnb::i18n::trs("Cancel") && !button->isHidden()) {
+      ++visible;
+      clicked = button;
+    }
+  }
+
+  CHECK(visible == 1);
+
+  if (clicked != nullptr) {
+    clicked->click();
+    QApplication::processEvents();
+  }
+
+  CHECK(cancelled == 42);
+}
 
 // The expand toggle raises the field to composer_height_expanded and back, and
 // both composer actions are icon-only buttons carrying the bundled artwork.
@@ -2196,6 +2360,9 @@ int main(int argc, char** argv) {
   test_summarize_turn_no_op_completes();
   test_manual_summarize_runs_as_session_task();
   test_session_editor_summarize_shows_task();
+  test_task_manager_refuses_send_while_fold_due();
+  test_task_manager_assistant_slot_cancel();
+  test_tasks_window_cancel_button();
   test_composer_expand_toggle();
   test_scrollbar_columns_transparent(app);
 

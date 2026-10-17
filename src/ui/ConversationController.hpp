@@ -1,18 +1,18 @@
 #pragma once
 
-#include <atomic>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
-#include <optional>
 #include <string>
-#include <thread>
 
 #include "model.hpp"
 #include "support/generation_task.hpp"
 
 namespace lnb {
 class Application;
+class Task;
+enum class TaskKind;
 
 namespace net {
 struct SummaryPlan;
@@ -25,10 +25,11 @@ namespace ui {
 // naturally.
 using lnb::GenerationTask;
 
-// One session's conversation logic. It owns the background worker for the
-// session's turn, so switching sessions never interrupts a generation and never
-// loses the in-progress draft. The view is passive: it renders the snapshot the
-// controller exposes and forwards intent through the callbacks below.
+// One session's conversation logic. It routes the session's background work (a
+// turn, a session fold) through the application's TaskManager, which owns the
+// worker and the state, so the view stays passive and every task is visible to
+// the tasks window. The view renders the snapshot the controller exposes and
+// forwards intent through the callbacks below.
 class ConversationController {
 public:
   ConversationController(lnb::Application& app, std::uint32_t session_id);
@@ -42,7 +43,8 @@ public:
   // The session as stored (a fresh read).
   [[nodiscard]] lnb::Session session() const;
 
-  [[nodiscard]] bool busy() const { return running_; }
+  // True while the session's task is in flight (its worker has not exited).
+  [[nodiscard]] bool busy() const;
 
   // Progress of the in-flight turn, for the running-task readout: the tool-call
   // round reached and how long the turn has been running. Both zero when no turn
@@ -54,16 +56,21 @@ public:
 
   [[nodiscard]] Progress progress() const;
 
-  // Appends the user message, then starts a turn in the background.
-  void send(std::string text);
+  // Appends the user message, then starts a turn in the background. Returns
+  // false — and appends nothing — when refused: the session's task is still
+  // winding down, or the manager's primary action for this session is not a plain
+  // send (a fold is pending), so a message can never race a fold.
+  [[nodiscard]] bool send(std::string text);
 
-  // Folds the session's overflow into memory on demand, then the shared assistant
-  // memory when its own trigger has been reached. No chat request follows, so it
-  // is the sole action of the turn. Used when the composer's primary action is the
-  // "summarize" variant, which replaces "Send" once either the session's
-  // transcript or the assistant's cross-session trigger has been reached. Both
-  // passes belong to the one turn, so a single press resolves both triggers
-  // instead of asking the user to press again (session memory is inspected first).
+  // Resolves one summarisation level per press, the session first. Used when the
+  // composer's primary action is the "summarize" variant, which replaces "Send"
+  // once either the session's transcript or the assistant's cross-session trigger
+  // has been reached. When this session's own trigger has been reached, the press
+  // folds its overflow and persists it; otherwise the press folds the shared
+  // assistant memory (its cross-session trigger was what offered the action). No
+  // chat request follows, so it is the sole action of the turn. After a session
+  // fold the button stays a summarize action while the assistant trigger is still
+  // met, so a second press resolves the assistant level.
   void summarize();
 
   // Folds the session's overflow into memory on demand, forcing the pass even when
@@ -80,12 +87,12 @@ public:
       std::function<bool(const lnb::net::SummaryPlan&)> approver = {}
   );
 
-  // The last finished turn's outcome and diagnostic log, retained after the
-  // worker is gone so the tasks window can show a failure and dump its log.
+  // The last finished task's outcome and diagnostic log, retained after the worker
+  // is gone so the tasks window can show a failure and dump its log.
   [[nodiscard]] bool has_finished_task() const;
   [[nodiscard]] lnb::GenerationTask::Snapshot last_snapshot() const;
 
-  // The diagnostic log for the current turn, or the last finished one when idle.
+  // The diagnostic log for the current task, or the last finished one when idle.
   [[nodiscard]] std::string task_log() const;
 
   // Requests the worker to stop. The partial reply is discarded.
@@ -112,38 +119,29 @@ public:
     on_warning_ = std::move(handler);
   }
 
-  // The UI timer calls this. It forwards streamed text and, once the worker
+  // The UI timer calls this. It forwards streamed text and, once the task
   // finishes, persists the assistant memory and signals a reload.
   void poll();
 
 private:
-  void start(std::function<void(GenerationTask&, std::stop_token)> work);
+  void start(
+      lnb::TaskKind kind,
+      std::function<void(GenerationTask&, std::stop_token)> work
+  );
   void finish_worker();
-
-  // Joins the worker only once it has actually exited. A cancelled turn keeps
-  // running until it observes the stop request, so an unconditional join here
-  // would freeze the interface for as long as the worker takes to notice; the
-  // join is instead completed by a later poll, when it is instant.
-  void reap_worker();
 
   lnb::Application& app_;
   std::uint32_t session_id_;
 
-  GenerationTask task_;
-  std::jthread worker_;
-  // Set by the worker as its very last action, so reap_worker() can tell the
-  // thread has exited without blocking on it.
-  std::atomic<bool> worker_finished_{false};
-  bool running_ = false;
+  // The session's current (or last finished) task, owned by the task manager so
+  // the tasks window and the task indicator see it too.
+  std::shared_ptr<lnb::Task> task_;
+  // True once finish_worker() has run for task_, so the terminal state is
+  // reported exactly once.
+  bool reported_ = false;
 
   mutable std::mutex result_mutex_;
   std::string pending_assistant_memory_;
-
-  // The last finished turn: its terminal snapshot and its diagnostic log. Guarded
-  // by result_mutex_, because poll/finish run on the interface thread while the
-  // tasks window may read them from a click handler.
-  std::optional<lnb::GenerationTask::Snapshot> last_snapshot_;
-  std::string last_task_log_;
 
   std::string last_display_;
   std::string last_status_;

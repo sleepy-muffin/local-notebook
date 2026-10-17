@@ -44,6 +44,8 @@ add_library(local-notebook-core STATIC
         src/app/data_location.cpp
         src/app/application.hpp
         src/app/application.cpp
+        src/app/task_manager.hpp
+        src/app/task_manager.cpp
 
         src/context/context.hpp
         src/context/context.cpp
