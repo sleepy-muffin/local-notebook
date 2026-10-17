@@ -1138,9 +1138,10 @@ void test_session_editor_preset() {
     return;
   }
 
-  // "Ultra" (index 6) sets the input bound to 192000 and the tool-call budget to
-  // 256, which no other field holds.
-  preset->setCurrentIndex(6);
+  // "Ultra" (index 7: index 0 is the placeholder, then
+  // Instant, Very Light, Light, Balanced, Heavy, Very Heavy, Ultra) sets the
+  // trigger to 96000 and the tool-call budget to 256, which no other preset holds.
+  preset->setCurrentIndex(7);
 
   bool found_trigger = false;
   bool found_calls = false;
