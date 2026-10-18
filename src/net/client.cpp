@@ -70,6 +70,28 @@ void note_length_warning(const ChatCompletionResult& result, GenerationTask& tas
   }
 }
 
+// Refuses a reasoning level the model does not offer. The user chose it
+// explicitly (or it is the level a session was created with), so a mismatch —
+// usually after the model was changed — fails loudly with a message naming the
+// fix, rather than being silently downgraded to a level the model accepts.
+void require_supported_reasoning(const std::string& model, const std::string& effort) {
+  if (!reasoning_effort_supported(model, effort)) {
+    throw std::runtime_error(
+        "Reasoning level \"" + effort + "\" is not available for model \"" + model +
+        "\". Choose another level for this session or assistant."
+    );
+  }
+}
+
+// The reasoning level to actually send: the stored level when it is set, else
+// the model's first (cheapest) level. Validated, so an unsupported level throws.
+std::string resolve_reasoning_effort(const std::string& model, const std::string& stored) {
+  const std::string effort =
+      stored.empty() ? default_reasoning_effort(model) : stored;
+  require_supported_reasoning(model, effort);
+  return effort;
+}
+
 // Incrementally decodes an OpenAI-compatible Server-Sent Events stream.
 //
 // Parsing happens inside a Qt signal handler (readyRead), and throwing across a
@@ -273,6 +295,268 @@ private:
   std::string error_;
 };
 
+// Incrementally decodes the Responses API's Server-Sent Events stream. The
+// vocabulary is the `response.*` event family and the terminal event is
+// `response.completed` (with `response.failed` / `response.incomplete` as the
+// other endings); there is no `[DONE]` sentinel. Like SseStream it never throws:
+// a failure is recorded and reported as "finished" so the caller can leave its
+// event loop and then act on the recorded state.
+class ResponsesStream {
+public:
+  ResponsesStream(GenerationTask& task, std::stop_token stop_token)
+      : task_(task), stop_token_(stop_token) {}
+
+  bool feed(const QByteArray& chunk) {
+    buffer_.append(chunk);
+
+    int newline = -1;
+    while ((newline = buffer_.indexOf('\n')) >= 0) {
+      const QByteArray line = buffer_.left(newline);
+      buffer_.remove(0, newline + 1);
+
+      if (!handle_line(line)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  void flush() {
+    if (finished_ || buffer_.isEmpty()) {
+      return;
+    }
+
+    QByteArray line = buffer_;
+    buffer_.clear();
+    handle_line(line);
+  }
+
+  [[nodiscard]] bool finished() const { return finished_; }
+  [[nodiscard]] bool failed() const { return failed_; }
+  [[nodiscard]] const std::string& error() const { return error_; }
+  [[nodiscard]] const std::string& text() const { return full_reply_; }
+  [[nodiscard]] const std::string& finish_reason() const { return finish_reason_; }
+
+  // The tool calls the model requested, in output order. `id` is the Responses
+  // `call_id`, which is exactly what a function_call_output must quote back.
+  [[nodiscard]] std::vector<ToolCall> tool_calls() const {
+    std::vector<ToolCall> calls;
+
+    for (const auto& [index, item]: items_) {
+      if (item.value("type").toString() != QStringLiteral("function_call")) {
+        continue;
+      }
+
+      ToolCall call;
+      call.index = index;
+      call.id = item.value("call_id").toString();
+      if (call.id.isEmpty()) {
+        call.id = item.value("id").toString();
+      }
+      call.name = item.value("name").toString();
+      call.arguments = item.value("arguments").toString();
+      calls.push_back(std::move(call));
+    }
+
+    return calls;
+  }
+
+  // Every output item the turn produced (reasoning, function_call, message), in
+  // order, so the next round can replay them verbatim — reasoning items must
+  // travel back with the tool outputs.
+  [[nodiscard]] std::vector<QJsonObject> output_items() const {
+    std::vector<QJsonObject> items;
+
+    for (const auto& [index, item]: items_) {
+      items.push_back(item);
+    }
+
+    return items;
+  }
+
+private:
+  bool handle_line(const QByteArray& raw_line) {
+    if (stop_token_.stop_requested()) {
+      finished_ = true;
+      return false;
+    }
+
+    QByteArray line = raw_line;
+    if (line.endsWith('\r')) {
+      line.chop(1);
+    }
+
+    // Only `data:` records carry payload; comments and keep-alives are ignored.
+    if (!line.startsWith("data:")) {
+      return true;
+    }
+
+    QByteArray data = line.mid(5);
+    if (data.startsWith(' ')) {
+      data.remove(0, 1);
+    }
+
+    // A gateway may still append the OpenAI sentinel; treat it as an ending.
+    if (data == "[DONE]") {
+      finish_if_open("stop");
+      return false;
+    }
+
+    QJsonParseError parse_error;
+    const QJsonDocument document = QJsonDocument::fromJson(data, &parse_error);
+
+    if (parse_error.error != QJsonParseError::NoError || !document.isObject()) {
+      lnb::log::debug(
+          "Responses SSE JSON parse failed: {}", parse_error.errorString().toStdString()
+      );
+      return true;
+    }
+
+    return handle_event(document.object());
+  }
+
+  bool handle_event(const QJsonObject& root) {
+    const QString type = root.value("type").toString();
+
+    if (type == QStringLiteral("response.output_text.delta")) {
+      return append_text(root.value("delta").toString());
+    }
+
+    // Hidden reasoning is only exposed as a summary, and only when one was
+    // requested. When present it is recorded on the task, never the reply.
+    if (type == QStringLiteral("response.reasoning_summary_text.delta") ||
+        type == QStringLiteral("response.reasoning_text.delta")) {
+      const QByteArray trace = root.value("delta").toString().toUtf8();
+      task_.append_thinking(
+          std::string_view(trace.constData(), static_cast<std::size_t>(trace.size()))
+      );
+      return true;
+    }
+
+    if (type == QStringLiteral("response.output_item.done")) {
+      // The finished item is authoritative: it carries the complete argument
+      // string (and any encrypted reasoning content) the deltas spelled out.
+      const int index = root.value("output_index").toInt(static_cast<int>(items_.size()));
+      const QJsonObject item = root.value("item").toObject();
+      if (!item.isEmpty()) {
+        items_[index] = item;
+      }
+      return true;
+    }
+
+    if (type == QStringLiteral("response.completed")) {
+      const QJsonObject response = root.value("response").toObject();
+      adopt_output(response);
+      finish_if_open(
+          response.value("status").toString() == QStringLiteral("incomplete")
+              ? "length"
+              : "stop"
+      );
+      return false;
+    }
+
+    if (type == QStringLiteral("response.incomplete")) {
+      adopt_output(root.value("response").toObject());
+      finish_if_open("length");
+      return false;
+    }
+
+    if (type == QStringLiteral("response.failed")) {
+      const QJsonObject error =
+          root.value("response").toObject().value("error").toObject();
+      failed_ = true;
+      error_ = error.value("message").toString().toStdString();
+      if (error_.empty()) {
+        error_ = "The response failed";
+      }
+      finished_ = true;
+      return false;
+    }
+
+    return true;
+  }
+
+  // The completed event carries the whole response; its `output` array, when
+  // present, is the authoritative item list and supersedes what the item events
+  // gathered.
+  void adopt_output(const QJsonObject& response) {
+    const QJsonArray output = response.value("output").toArray();
+
+    if (output.isEmpty()) {
+      return;
+    }
+
+    std::map<int, QJsonObject> authoritative;
+    for (int i = 0; i < output.size(); ++i) {
+      authoritative[i] = output.at(i).toObject();
+    }
+    items_ = std::move(authoritative);
+
+    // Fall back to the output's own message text when no text deltas arrived.
+    if (full_reply_.empty()) {
+      for (const auto& [index, item]: items_) {
+        if (item.value("type").toString() == QStringLiteral("message")) {
+          append_text(message_text(item));
+        }
+      }
+    }
+  }
+
+  static QString message_text(const QJsonObject& item) {
+    QString text;
+
+    for (const QJsonValue& part: item.value("content").toArray()) {
+      const QJsonObject content = part.toObject();
+      if (content.value("type").toString() == QStringLiteral("output_text")) {
+        text += content.value("text").toString();
+      }
+    }
+
+    return text;
+  }
+
+  bool append_text(const QString& delta) {
+    if (delta.isEmpty()) {
+      return true;
+    }
+
+    const QByteArray token = delta.toUtf8();
+
+    if (!task_.append_content(
+            std::string_view(token.constData(), static_cast<std::size_t>(token.size()))
+        )) {
+      failed_ = true;
+      error_ = "Generation is no longer active";
+      finished_ = true;
+      return false;
+    }
+
+    full_reply_.append(token.constData(), static_cast<std::size_t>(token.size()));
+    return true;
+  }
+
+  void finish_if_open(const char* reason) {
+    if (finish_reason_.empty()) {
+      finish_reason_ = reason;
+    }
+
+    finished_ = true;
+  }
+
+  GenerationTask& task_;
+  std::stop_token stop_token_;
+
+  QByteArray buffer_;
+  std::string full_reply_;
+  std::string finish_reason_;
+  std::map<int, QJsonObject> items_;
+
+  bool finished_ = false;
+  bool failed_ = false;
+  std::string error_;
+};
+
 // Assembles the system prompt (design-1.md §4): the assistant and session
 // instructions first, each under its own header, then the shared assistant
 // memory and the session memory. Used by build_session_payload(); the memory it
@@ -308,7 +592,7 @@ std::string build_system_prompt(const Assistant& assistant, const Session& sessi
 
 } // namespace
 
-QJsonObject build_session_payload(
+Request build_session_request(
     const Assistant& assistant, const Session& session,
     const std::vector<Message>& messages
 ) {
@@ -320,28 +604,27 @@ QJsonObject build_session_payload(
   const context::Window window =
       context::plan_window(messages, session.summary_trigger_tokens_);
 
-  QJsonArray payload_messages;
-  payload_messages.append(
-      QJsonObject{{"role", "system"}, {"content", QString::fromStdString(system_prompt)}}
-  );
+  Request request;
+  request.model = assistant.model_;
+  request.instructions = system_prompt;
+  request.filesystem_tools = session.shared_directory_.has_value();
+  request.include_tools = true;
+  request.max_output_tokens = static_cast<int>(session.response_token_budget_);
+  // The level is resolved here so an unsupported one fails the turn with a
+  // message naming the fix, rather than being corrected behind the user's back.
+  request.reasoning_effort =
+      resolve_reasoning_effort(assistant.model_, session.reasoning_effort_);
 
   for (std::size_t i = window.start; i < messages.size(); ++i) {
     const Message& message = messages[i];
-    payload_messages.append(QJsonObject{
-        {"role", message.role_ == Role::User ? "user" : "assistant"},
-        {"content", QString::fromStdString(message.content_)},
-    });
+    OutgoingMessage outgoing;
+    outgoing.role = message.role_ == Role::User ? OutgoingMessage::Role::User
+                                                : OutgoingMessage::Role::Assistant;
+    outgoing.content = message.content_;
+    request.messages.push_back(std::move(outgoing));
   }
 
-  return QJsonObject{
-      {"model", QString::fromStdString(assistant.model_)},
-      // Network tools are always offered; the filesystem tools join them only
-      // when the session has a shared directory.
-      {"tools", tool_definitions(session.shared_directory_.has_value())},
-      {"messages", payload_messages},
-      {"max_tokens", static_cast<int>(session.response_token_budget_)},
-      {"stream", true},
-  };
+  return request;
 }
 
 ContextUsage context_usage(
@@ -361,9 +644,8 @@ ContextUsage context_usage(
 }
 
 ChatCompletionResult send_message_once(
-    const QJsonObject& payload, GenerationTask& task, std::stop_token stop_token,
-    const std::string& api_url, const std::string& api_key,
-    const std::optional<std::string>& proxy, std::string_view kind
+    const QJsonObject& payload, const Remote& remote, GenerationTask& task,
+    std::stop_token stop_token, std::string_view kind
 ) {
   auto throw_if_stopped = [&stop_token]() {
     if (stop_token.stop_requested()) {
@@ -379,18 +661,18 @@ ChatCompletionResult send_message_once(
   // streaming response is never interrupted.
   manager.setTransferTimeout(60'000);
 
-  configure_proxy(manager, proxy);
+  configure_proxy(manager, remote.proxy);
 
-  QNetworkRequest request(QUrl(QString::fromStdString(api_url)));
+  QNetworkRequest request(QUrl(QString::fromStdString(remote.url)));
   request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
   request.setRawHeader("Accept", "text/event-stream");
 
   // Force HTTP/1.1; the input is an SSE stream and HTTP/2 adds no benefit here.
   request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
 
-  if (!api_key.empty()) {
+  if (!remote.key.empty()) {
     request.setRawHeader(
-        "Authorization", QByteArray("Bearer ") + QByteArray::fromStdString(api_key)
+        "Authorization", QByteArray("Bearer ") + QByteArray::fromStdString(remote.key)
     );
   }
 
@@ -406,7 +688,37 @@ ChatCompletionResult send_message_once(
 
   QNetworkReply* reply = manager.post(request, body);
 
-  SseStream stream(task, stop_token);
+  // Both parsers share the same surface; only the protocol decides which event
+  // vocabulary is decoded. The lambdas below keep the surrounding event-loop
+  // code identical for either.
+  std::optional<SseStream> chat_stream;
+  std::optional<ResponsesStream> responses_stream;
+
+  if (remote.protocol == ApiProtocol::Responses) {
+    responses_stream.emplace(task, stop_token);
+  } else {
+    chat_stream.emplace(task, stop_token);
+  }
+
+  const auto feed = [&](const QByteArray& chunk) -> bool {
+    return chat_stream ? chat_stream->feed(chunk) : responses_stream->feed(chunk);
+  };
+  const auto flush = [&]() {
+    if (chat_stream) {
+      chat_stream->flush();
+    } else {
+      responses_stream->flush();
+    }
+  };
+  const auto stream_finished = [&]() {
+    return chat_stream ? chat_stream->finished() : responses_stream->finished();
+  };
+  const auto stream_failed = [&]() {
+    return chat_stream ? chat_stream->failed() : responses_stream->failed();
+  };
+  const auto stream_error = [&]() -> const std::string& {
+    return chat_stream ? chat_stream->error() : responses_stream->error();
+  };
 
   QEventLoop loop;
 
@@ -422,7 +734,7 @@ ChatCompletionResult send_message_once(
       captured.append(chunk.left(CAPTURE_LIMIT - captured.size()));
     }
 
-    if (!stream.feed(chunk)) {
+    if (!feed(chunk)) {
       loop.quit();
     }
   });
@@ -449,10 +761,10 @@ ChatCompletionResult send_message_once(
       captured.append(trailing.left(CAPTURE_LIMIT - captured.size()));
     }
 
-    stream.feed(trailing);
+    feed(trailing);
   }
 
-  stream.flush();
+  flush();
 
   const bool aborted_by_stop = stop_token.stop_requested();
   const QNetworkReply::NetworkError network_error = reply->error();
@@ -470,8 +782,8 @@ ChatCompletionResult send_message_once(
     throw std::runtime_error("Generation cancelled");
   }
 
-  if (stream.failed()) {
-    throw std::runtime_error(stream.error());
+  if (stream_failed()) {
+    throw std::runtime_error(stream_error());
   }
 
   if (network_error != QNetworkReply::NoError) {
@@ -488,7 +800,7 @@ ChatCompletionResult send_message_once(
     throw std::runtime_error(message);
   }
 
-  if (!stream.finished()) {
+  if (!stream_finished()) {
     // The stream closed without a `[DONE]` sentinel. The usual cause is a
     // non-streaming response — a plain JSON completion or an error body — which
     // carries no `data:` lines to parse; showing the start of the body makes
@@ -504,14 +816,21 @@ ChatCompletionResult send_message_once(
   }
 
   ChatCompletionResult result;
-  result.text = stream.text();
-  result.finish_reason = stream.finish_reason();
-  result.tool_calls = stream.tool_calls();
-  result.assistant_message = stream.assistant_message();
+  if (chat_stream) {
+    result.text = chat_stream->text();
+    result.finish_reason = chat_stream->finish_reason();
+    result.tool_calls = chat_stream->tool_calls();
+    result.assistant_message = chat_stream->assistant_message();
+  } else {
+    result.text = responses_stream->text();
+    result.finish_reason = responses_stream->finish_reason();
+    result.tool_calls = responses_stream->tool_calls();
+    result.response_items = responses_stream->output_items();
+  }
 
   lnb::log::info(
-      "send_message_once tool_calls={}, finish_reason={}", result.tool_calls.size(),
-      result.finish_reason
+      "send_message_once protocol={} tool_calls={}, finish_reason={}",
+      protocol_name(remote.protocol), result.tool_calls.size(), result.finish_reason
   );
 
   task.append_log(
@@ -524,9 +843,7 @@ ChatCompletionResult send_message_once(
 }
 
 ChatCompletionResult generate_reply(
-    QJsonObject payload, GenerationTask& task, std::stop_token stop_token,
-    const std::string& api_url, const std::string& api_key,
-    const std::optional<std::string>& proxy,
+    Request request, const Remote& remote, GenerationTask& task, std::stop_token stop_token,
     const std::optional<std::string>& shared_directory, const Session& session
 ) {
   const std::size_t max_rounds = session.max_tool_rounds_;
@@ -540,16 +857,20 @@ ChatCompletionResult generate_reply(
       throw std::runtime_error("Generation cancelled");
     }
 
-    lnb::log::info("generate_reply round={}", round);
+    lnb::log::info(
+        "generate_reply round={} protocol={}", round, protocol_name(remote.protocol)
+    );
 
     task.append_log("generate_reply round=" + std::to_string(round));
 
     // Publish the round so the running-task readout can show progress.
     task.set_rounds(round);
 
-    result = send_message_once(
-        payload, task, stop_token, api_url, api_key, proxy, "chat"
-    );
+    // Rebuilt each round from the accumulated request, so the body reflects the
+    // tool history: appended messages for Chat, replayed raw items for Responses.
+    const QJsonObject payload = build_request(remote.protocol, request);
+
+    result = send_message_once(payload, remote, task, stop_token, "chat");
 
     if (result.tool_calls.empty()) {
       note_length_warning(result, task);
@@ -571,16 +892,26 @@ ChatCompletionResult generate_reply(
       task.append_content(ends_sentence ? "\n\n" : "\n");
     }
 
-    QJsonArray messages = payload.value("messages").toArray();
-
-    // The assistant message carrying the tool calls must be echoed back
-    // verbatim before the results so the model can match them by id.
-    messages.append(result.assistant_message);
-
     if (total_calls + result.tool_calls.size() > max_calls) {
       throw std::runtime_error("Tool-call budget exhausted");
     }
     total_calls += result.tool_calls.size();
+
+    // Echo the assistant turn back in the shape the protocol expects, before
+    // the results, so the model can match them by id.
+    if (remote.protocol == ApiProtocol::Responses) {
+      // The raw output items (reasoning included) replay verbatim; the service
+      // discards any reasoning it cannot use.
+      for (const QJsonObject& item: result.response_items) {
+        request.raw_items.push_back(item);
+      }
+    } else {
+      OutgoingMessage assistant;
+      assistant.role = OutgoingMessage::Role::Assistant;
+      assistant.content = result.text;
+      assistant.tool_calls = result.tool_calls;
+      request.messages.push_back(std::move(assistant));
+    }
 
     for (const ToolCall& call: result.tool_calls) {
       task.set_status(tool_status(call));
@@ -602,7 +933,7 @@ ChatCompletionResult generate_reply(
           call.arguments.left(2000).toStdString() + ")"
       );
 
-      QString output = execute_local_tool(call, shared_directory, proxy);
+      QString output = execute_local_tool(call, shared_directory, remote.proxy);
 
       // Bound each tool result so the in-turn loop cannot grow the context
       // without limit across rounds.
@@ -620,16 +951,20 @@ ChatCompletionResult generate_reply(
           output.left(8000).toStdString()
       );
 
-      messages.append(QJsonObject{
-          {"role", "tool"},
-          {"tool_call_id", call.id},
-          {"content", output},
-      });
+      if (remote.protocol == ApiProtocol::Responses) {
+        request.raw_items.push_back(QJsonObject{
+            {"type", "function_call_output"},
+            {"call_id", call.id},
+            {"output", output},
+        });
+      } else {
+        OutgoingMessage tool_result;
+        tool_result.role = OutgoingMessage::Role::ToolResult;
+        tool_result.tool_call_id = call.id.toStdString();
+        tool_result.content = output.toStdString();
+        request.messages.push_back(std::move(tool_result));
+      }
     }
-
-    // The loop is bounded by max_tool_rounds_ / max_tool_calls_, and every
-    // result by tool_output_max_tokens_, so no separate context trim is needed.
-    payload.insert("messages", messages);
   }
 
   lnb::log::info("generate_reply: reached the tool-call round cap ({})", max_rounds);
@@ -645,10 +980,9 @@ namespace {
 // trigger (a manual "summarise now"). Returns the resulting memory, which is
 // the unchanged input when there was nothing to fold.
 std::string fold_session_memory(
-    store::database& db, const Session& session, const std::string& model,
-    const std::string& api_url, const std::string& api_key,
-    const std::optional<std::string>& proxy, GenerationTask& task,
-    std::stop_token stop_token, bool force, const SummaryApprover& approver
+    store::database& db, const Session& session, const Remote& remote,
+    GenerationTask& task, std::stop_token stop_token, bool force,
+    const SummaryApprover& approver
 ) {
   // A cancelled turn must not keep the interface waiting while a large gather
   // runs, so the pass bails out as soon as a stop is requested.
@@ -690,6 +1024,12 @@ std::string fold_session_memory(
   const std::size_t max_tokens =
       session.summary_token_budget_ + session.summary_reasoning_headroom_tokens_;
 
+  // The summariser inherits the session's reasoning level: an unsupported level
+  // is refused here with the same message the turn itself would raise, so a
+  // manual summarisation cannot quietly pick a different level.
+  const std::string effort =
+      resolve_reasoning_effort(remote.model, session.reasoning_effort_);
+
   // Review the pass before anything leaves the machine. The plan describes the
   // first request; a very large overflow continues in further batches, which is
   // noted for the user. Declining returns the memory untouched, because nothing
@@ -701,8 +1041,12 @@ std::string fold_session_memory(
 
     SummaryPlan plan;
     plan.kind = "session memory";
-    plan.request =
-        context::session_summary_request(model, memory, first_batch, max_tokens);
+    plan.request = build_request(
+        remote.protocol,
+        context::session_summary_request(
+            remote.model, memory, first_batch, max_tokens, effort
+        )
+    );
     plan.automatic = !force;
     plan.more_requests = first_batch.size() < window.start;
     plan.watermark_text =
@@ -741,8 +1085,12 @@ std::string fold_session_memory(
 
     task.set_status("Summarizing conversation...");
 
-    const QJsonObject request =
-        context::session_summary_request(model, memory, batch, max_tokens);
+    const QJsonObject request = build_request(
+        remote.protocol,
+        context::session_summary_request(
+            remote.model, memory, batch, max_tokens, effort
+        )
+    );
 
     // A silent, throwaway task: the summariser's text is internal and must not
     // be streamed into the visible transcript. The outer stop token is forwarded
@@ -751,7 +1099,7 @@ std::string fold_session_memory(
     silent_task.start();
 
     const ChatCompletionResult result = send_message_once(
-        request, silent_task, stop_token, api_url, api_key, proxy, "session-summary"
+        request, remote, silent_task, stop_token, "session-summary"
     );
 
     // The summariser's own diagnostics (the exact request and response) are
@@ -859,10 +1207,9 @@ std::string build_sessions_block(
 // empty summariser completion an error (a manual request); an automatic one
 // keeps the previous memory instead.
 std::string fold_assistant_memory(
-    store::database& db, const Assistant& assistant, const std::string& model,
-    const std::string& api_url, const std::string& api_key,
-    const std::optional<std::string>& proxy, GenerationTask& task,
-    std::stop_token stop_token, bool strict, const SummaryApprover& approver
+    store::database& db, const Assistant& assistant, const Remote& remote,
+    GenerationTask& task, std::stop_token stop_token, bool strict,
+    const SummaryApprover& approver
 ) {
   // Every heavy loop below bails out the moment a stop is requested, so a
   // cancelled turn never pins the interface thread on the join that follows it.
@@ -963,9 +1310,18 @@ std::string fold_assistant_memory(
 
   task.set_status("Summarizing assistant memory...");
 
-  const QJsonObject request = context::assistant_summary_request(
-      model, assistant.memory_, sessions_block,
-      assistant.summary_token_budget_ + assistant.summary_reasoning_headroom_tokens_
+  // The summariser inherits the assistant's reasoning level; an unsupported
+  // level is refused rather than silently replaced (see resolve_reasoning_effort).
+  const std::string effort =
+      resolve_reasoning_effort(remote.model, assistant.reasoning_effort_);
+
+  const QJsonObject request = build_request(
+      remote.protocol,
+      context::assistant_summary_request(
+          remote.model, assistant.memory_, sessions_block,
+          assistant.summary_token_budget_ + assistant.summary_reasoning_headroom_tokens_,
+          effort
+      )
   );
 
   // Review the single request before it leaves the machine. Declining returns
@@ -1013,7 +1369,7 @@ std::string fold_assistant_memory(
   silent_task.start();
 
   const ChatCompletionResult result = send_message_once(
-      request, silent_task, stop_token, api_url, api_key, proxy, "assistant-summary"
+      request, remote, silent_task, stop_token, "assistant-summary"
   );
 
   // The summariser's own diagnostics (the exact request and response) are copied
@@ -1073,15 +1429,11 @@ bool assistant_trigger_reached(
 }
 
 std::string maybe_summarize_session(
-    store::database& db, const Session& session, const std::string& model,
-    const std::string& api_url, const std::string& api_key,
-    const std::optional<std::string>& proxy, GenerationTask& task,
-    std::stop_token stop_token, SummaryApprover approver
+    store::database& db, const Session& session, const Remote& remote,
+    GenerationTask& task, std::stop_token stop_token, SummaryApprover approver
 ) {
   try {
-    return fold_session_memory(
-        db, session, model, api_url, api_key, proxy, task, stop_token, false, approver
-    );
+    return fold_session_memory(db, session, remote, task, stop_token, false, approver);
   } catch (const std::exception& error) {
     // Best effort: an automatic summarisation must never fail the user's turn,
     // so an unchanged memory is returned instead of propagating.
@@ -1094,21 +1446,15 @@ std::string maybe_summarize_session(
 }
 
 std::string summarize_session_now(
-    store::database& db, const Session& session, const std::string& model,
-    const std::string& api_url, const std::string& api_key,
-    const std::optional<std::string>& proxy, GenerationTask& task,
-    std::stop_token stop_token, SummaryApprover approver
+    store::database& db, const Session& session, const Remote& remote,
+    GenerationTask& task, std::stop_token stop_token, SummaryApprover approver
 ) {
-  return fold_session_memory(
-      db, session, model, api_url, api_key, proxy, task, stop_token, true, approver
-  );
+  return fold_session_memory(db, session, remote, task, stop_token, true, approver);
 }
 
 std::string maybe_summarize_assistant(
-    store::database& db, const Assistant& assistant, const std::string& model,
-    const std::string& api_url, const std::string& api_key,
-    const std::optional<std::string>& proxy, GenerationTask& task,
-    std::stop_token stop_token, SummaryApprover approver
+    store::database& db, const Assistant& assistant, const Remote& remote,
+    GenerationTask& task, std::stop_token stop_token, SummaryApprover approver
 ) {
   try {
     // Empty when the automatic trigger is not reached, so the caller only
@@ -1118,7 +1464,7 @@ std::string maybe_summarize_assistant(
     }
 
     return fold_assistant_memory(
-        db, assistant, model, api_url, api_key, proxy, task, stop_token, false, approver
+        db, assistant, remote, task, stop_token, false, approver
     );
   } catch (const std::exception& error) {
     lnb::log::info("maybe_summarize_assistant: skipped: {}", error.what());
@@ -1127,13 +1473,11 @@ std::string maybe_summarize_assistant(
 }
 
 std::string summarize_assistant_now(
-    store::database& db, const Assistant& assistant, const std::string& model,
-    const std::string& api_url, const std::string& api_key,
-    const std::optional<std::string>& proxy, GenerationTask& task,
-    std::stop_token stop_token, SummaryApprover approver
+    store::database& db, const Assistant& assistant, const Remote& remote,
+    GenerationTask& task, std::stop_token stop_token, SummaryApprover approver
 ) {
   return fold_assistant_memory(
-      db, assistant, model, api_url, api_key, proxy, task, stop_token, true, approver
+      db, assistant, remote, task, stop_token, true, approver
   );
 }
 

@@ -135,9 +135,10 @@ std::vector<const Message*> summary_candidates(
   return candidates;
 }
 
-QJsonObject session_summary_request(
+net::Request session_summary_request(
     const std::string& model, const std::string& existing_memory,
-    const std::vector<const Message*>& candidates, std::size_t max_tokens
+    const std::vector<const Message*>& candidates, std::size_t max_tokens,
+    const std::string& reasoning_effort
 ) {
   std::string system(kSessionSummaryPrompt);
 
@@ -155,30 +156,25 @@ QJsonObject session_summary_request(
     transcript += '\n';
   }
 
-  QJsonArray messages;
-  messages.append(
-      QJsonObject{{"role", "system"}, {"content", QString::fromStdString(system)}}
-  );
-  messages.append(QJsonObject{
-      {"role", "user"},
-      {"content",
-       QString::fromStdString("New conversation to fold into memory:\n\n" + transcript)},
-  });
+  net::Request request;
+  request.model = model;
+  request.instructions = system;
+  request.include_tools = false;
+  request.max_output_tokens = static_cast<int>(max_tokens);
+  request.reasoning_effort = reasoning_effort;
 
-  // The network client only speaks Server-Sent Events, so the summariser must
-  // ask for a stream too: a non-streaming body carries no `data: [DONE]` and
-  // send_message_once() would reject the response.
-  return QJsonObject{
-      {"model", QString::fromStdString(model)},
-      {"messages", messages},
-      {"max_tokens", static_cast<int>(max_tokens)},
-      {"stream", true},
-  };
+  net::OutgoingMessage user;
+  user.role = net::OutgoingMessage::Role::User;
+  user.content = "New conversation to fold into memory:\n\n" + transcript;
+  request.messages.push_back(std::move(user));
+
+  return request;
 }
 
-QJsonObject assistant_summary_request(
+net::Request assistant_summary_request(
     const std::string& model, const std::string& existing_memory,
-    const std::string& sessions_block, std::size_t max_tokens
+    const std::string& sessions_block, std::size_t max_tokens,
+    const std::string& reasoning_effort
 ) {
   std::string user;
   user += "# Previous Assistant Memory\n";
@@ -186,22 +182,19 @@ QJsonObject assistant_summary_request(
   user += "\n\n# Sessions\n\n";
   user += sessions_block;
 
-  QJsonArray messages;
-  messages.append(QJsonObject{
-      {"role", "system"},
-      {"content", QString::fromStdString(std::string(kAssistantSummaryPrompt))},
-  });
-  messages.append(
-      QJsonObject{{"role", "user"}, {"content", QString::fromStdString(user)}}
-  );
+  net::Request request;
+  request.model = model;
+  request.instructions = std::string(kAssistantSummaryPrompt);
+  request.include_tools = false;
+  request.max_output_tokens = static_cast<int>(max_tokens);
+  request.reasoning_effort = reasoning_effort;
 
-  // As above: stream, so the SSE-only client can parse the response.
-  return QJsonObject{
-      {"model", QString::fromStdString(model)},
-      {"messages", messages},
-      {"max_tokens", static_cast<int>(max_tokens)},
-      {"stream", true},
-  };
+  net::OutgoingMessage message;
+  message.role = net::OutgoingMessage::Role::User;
+  message.content = user;
+  request.messages.push_back(std::move(message));
+
+  return request;
 }
 
 std::string clamp_tokens(const std::string& text, std::size_t max_tokens) {

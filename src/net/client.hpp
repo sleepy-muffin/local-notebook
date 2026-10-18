@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "model.hpp"
+#include "net/protocol.hpp"
 #include "net/tools.hpp"
 #include "support/generation_task.hpp"
 
@@ -22,20 +23,37 @@ class database;
 
 namespace lnb::net {
 
+// Where and how one request goes: the fully derived endpoint URL, the key, the
+// optional proxy, the model id and the wire protocol. Grouping them keeps the
+// summaries' signatures readable and lets a single value carry the protocol
+// choice to every request the turn makes.
+struct Remote {
+  std::string url;
+  std::string key;
+  std::optional<std::string> proxy;
+  std::string model;
+  ApiProtocol protocol = ApiProtocol::Responses;
+};
+
 // The outcome of one streaming request. `assistant_message` is the exact
 // assistant message (role/content/optional tool_calls) that has to be echoed
-// back to the model when the tool call is answered.
+// back to the model when the tool call is answered. `response_items` carries the
+// same turn in the Responses shape — the raw output items (reasoning items
+// included) that must be replayed verbatim for the next round.
 struct ChatCompletionResult {
   std::string text;
   std::vector<ToolCall> tool_calls;
   std::string finish_reason;
   QJsonObject assistant_message;
+  std::vector<QJsonObject> response_items;
 };
 
-// Assembles the payload for one prompt, in order (design-1.md §4): system
-// (assistant + session instructions), assistant memory, session memory, then
-// the verbatim window of `messages` that fits `session.summary_trigger_tokens_`.
-QJsonObject build_session_payload(
+// Assembles the protocol-neutral request for one turn (design-1.md §4): system
+// (assistant + session instructions), assistant memory, session memory, then the
+// verbatim window of `messages` that fits `session.summary_trigger_tokens_`. The
+// system prompt becomes `instructions` (Responses) or the leading system message
+// (Chat) when the caller serialises it.
+Request build_session_request(
     const Assistant& assistant, const Session& session,
     const std::vector<Message>& messages
 );
@@ -54,17 +72,16 @@ ContextUsage context_usage(
     const Session& session, const std::vector<Message>& messages
 );
 
-// Performs one streaming chat-completions request. Assistant text is streamed
-// into `task` as it arrives. Throws std::runtime_error on failure; a stop
-// request surfaces as the message "Generation cancelled".
+// Performs one streaming request using `remote`'s protocol. Assistant text is
+// streamed into `task` as it arrives. Throws std::runtime_error on failure; a
+// stop request surfaces as the message "Generation cancelled".
 //
 // `kind` labels the request in the assistant log ("chat", "session-summary",
 // "assistant-summary"); the exact request body is written there verbatim before
 // it is posted.
 ChatCompletionResult send_message_once(
-    const QJsonObject& payload, GenerationTask& task, std::stop_token stop_token,
-    const std::string& api_url, const std::string& api_key,
-    const std::optional<std::string>& proxy, std::string_view kind
+    const QJsonObject& payload, const Remote& remote, GenerationTask& task,
+    std::stop_token stop_token, std::string_view kind
 );
 
 // Runs one full assistant turn: sends the payload, executes any local tool
@@ -73,9 +90,7 @@ ChatCompletionResult send_message_once(
 // rounds, total tool calls and the size of each tool result are bounded by
 // `session`, so the in-turn loop can never grow the context without limit.
 ChatCompletionResult generate_reply(
-    QJsonObject payload, GenerationTask& task, std::stop_token stop_token,
-    const std::string& api_url, const std::string& api_key,
-    const std::optional<std::string>& proxy,
+    Request request, const Remote& remote, GenerationTask& task, std::stop_token stop_token,
     const std::optional<std::string>& shared_directory, const Session& session
 );
 
@@ -106,17 +121,13 @@ using SummaryApprover = std::function<bool(const SummaryPlan&)>;
 // memory (which is also persisted to the database). `approver`, when set, is
 // consulted before the request is sent and may cancel the pass.
 std::string maybe_summarize_session(
-    store::database& db, const Session& session, const std::string& model,
-    const std::string& api_url, const std::string& api_key,
-    const std::optional<std::string>& proxy, GenerationTask& task,
-    std::stop_token stop_token, SummaryApprover approver = {}
+    store::database& db, const Session& session, const Remote& remote,
+    GenerationTask& task, std::stop_token stop_token, SummaryApprover approver = {}
 );
 
 std::string summarize_session_now(
-    store::database& db, const Session& session, const std::string& model,
-    const std::string& api_url, const std::string& api_key,
-    const std::optional<std::string>& proxy, GenerationTask& task,
-    std::stop_token stop_token, SummaryApprover approver = {}
+    store::database& db, const Session& session, const Remote& remote,
+    GenerationTask& task, std::stop_token stop_token, SummaryApprover approver = {}
 );
 
 // Assistant summarisation across all sessions (design-1.md §6). `maybe_*` fires
@@ -125,17 +136,13 @@ std::string summarize_session_now(
 // assigns it to `Assistant::memory_` and persists it, because the assistant is
 // passed by const reference. `approver` behaves as above.
 std::string maybe_summarize_assistant(
-    store::database& db, const Assistant& assistant, const std::string& model,
-    const std::string& api_url, const std::string& api_key,
-    const std::optional<std::string>& proxy, GenerationTask& task,
-    std::stop_token stop_token, SummaryApprover approver = {}
+    store::database& db, const Assistant& assistant, const Remote& remote,
+    GenerationTask& task, std::stop_token stop_token, SummaryApprover approver = {}
 );
 
 std::string summarize_assistant_now(
-    store::database& db, const Assistant& assistant, const std::string& model,
-    const std::string& api_url, const std::string& api_key,
-    const std::optional<std::string>& proxy, GenerationTask& task,
-    std::stop_token stop_token, SummaryApprover approver = {}
+    store::database& db, const Assistant& assistant, const Remote& remote,
+    GenerationTask& task, std::stop_token stop_token, SummaryApprover approver = {}
 );
 
 // The automatic assistant trigger (design-1.md §6): the tokens of messages newer

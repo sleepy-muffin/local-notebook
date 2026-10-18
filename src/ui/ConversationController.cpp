@@ -5,9 +5,27 @@
 #include "app/application.hpp"
 #include "app/task_manager.hpp"
 #include "net/client.hpp"
+#include "net/protocol.hpp"
 #include "ui/SummaryReviewDialog.hpp"
 
 namespace ui {
+namespace {
+
+// Every request this controller makes (the turn and both folds) shares one
+// description: the endpoint derived from the assistant's base URL and protocol,
+// plus its key, proxy and model. Building it in one place keeps the protocol
+// choice and the URL derivation identical across the turn and the summarisers.
+lnb::net::Remote remote_for(const lnb::Assistant& assistant) {
+  lnb::net::Remote remote;
+  remote.url = lnb::net::derive_endpoint(assistant.api_url_, assistant.protocol_);
+  remote.key = assistant.authentication_token_;
+  remote.proxy = assistant.proxy_;
+  remote.model = assistant.model_;
+  remote.protocol = assistant.protocol_;
+  return remote;
+}
+
+} // namespace
 
 ConversationController::ConversationController(
     lnb::Application& app, std::uint32_t session_id
@@ -76,27 +94,25 @@ bool ConversationController::send(std::string text) {
     const lnb::Assistant assistant = app_.assistant();
     lnb::Session current = session();
 
-    const std::string& model = assistant.model_;
-    const std::string& url = assistant.api_url_;
-    const std::string& key = assistant.authentication_token_;
+    const lnb::net::Remote remote = remote_for(assistant);
 
     // Best-effort session summarisation before the turn, so the request carries
     // the freshest memory. A failure never blocks the reply. The user reviews
     // the request first; declining leaves the memory untouched.
     const std::string folded = lnb::net::maybe_summarize_session(
-        app_.db(), current, model, url, key, assistant.proxy_, task, stop_token,
-        review_summary
+        app_.db(), current, remote, task, stop_token, review_summary
     );
     if (!folded.empty()) {
       current.memory_ = folded;
     }
 
     const std::vector<lnb::Message> messages = app_.db().messages(session_id_);
-    QJsonObject payload = lnb::net::build_session_payload(assistant, current, messages);
+    lnb::net::Request request =
+        lnb::net::build_session_request(assistant, current, messages);
 
     const lnb::net::ChatCompletionResult result = lnb::net::generate_reply(
-        std::move(payload), task, stop_token, url, key, assistant.proxy_,
-        current.shared_directory_, current
+        std::move(request), remote, task, stop_token, current.shared_directory_,
+        current
     );
 
     // A cancelled turn keeps nothing; a completed one stores the reply.
@@ -109,8 +125,7 @@ bool ConversationController::send(std::string text) {
     // first, like the session pass above. This automatic pass stays best-effort:
     // a failure never fails the user's turn.
     const std::string assistant_memory = lnb::net::maybe_summarize_assistant(
-        app_.db(), assistant, model, url, key, assistant.proxy_, task, stop_token,
-        review_summary
+        app_.db(), assistant, remote, task, stop_token, review_summary
     );
     if (!assistant_memory.empty()) {
       std::lock_guard lock(result_mutex_);
@@ -141,11 +156,11 @@ void ConversationController::summarize() {
       const lnb::Assistant assistant = app_.assistant();
       const lnb::Session current = session();
 
+      const lnb::net::Remote remote = remote_for(assistant);
+
       // The user reviews the request first; declining leaves the memory untouched.
       lnb::net::summarize_session_now(
-          app_.db(), current, assistant.model_, assistant.api_url_,
-          assistant.authentication_token_, assistant.proxy_, task, stop_token,
-          review_summary
+          app_.db(), current, remote, task, stop_token, review_summary
       );
     });
     return;
@@ -166,13 +181,13 @@ void ConversationController::summarize() {
       return;
     }
 
+    const lnb::net::Remote remote = remote_for(assistant);
+
     // The user asked for the fold, so a failure is reported (in the tasks window)
     // rather than swallowed: unlike the automatic post-turn pass, this one is
     // strict.
     const std::string assistant_memory = lnb::net::summarize_assistant_now(
-        app_.db(), assistant, assistant.model_, assistant.api_url_,
-        assistant.authentication_token_, assistant.proxy_, task, stop_token,
-        review_summary
+        app_.db(), assistant, remote, task, stop_token, review_summary
     );
 
     if (!assistant_memory.empty()) {
@@ -208,13 +223,13 @@ void ConversationController::summarize_session_now(
       reviewer = review_summary;
     }
 
+    const lnb::net::Remote remote = remote_for(assistant);
+
     // Forced, so the manual action folds the overflow regardless of the automatic
     // trigger. Only the session memory is touched: the shared assistant memory is
     // left to its own trigger, matching the editor's intent.
     lnb::net::summarize_session_now(
-        app_.db(), current, assistant.model_, assistant.api_url_,
-        assistant.authentication_token_, assistant.proxy_, task, stop_token,
-        reviewer
+        app_.db(), current, remote, task, stop_token, reviewer
     );
   });
 }

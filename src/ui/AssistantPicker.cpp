@@ -11,6 +11,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QMessageBox>
 #include <QPainter>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -303,6 +304,14 @@ public:
   [[nodiscard]] lnb::Assistant assistant() const { return result_; }
 
   void accept() override {
+    // An unusable endpoint is refused here, before anything is written: the base
+    // must be an http(s) URL ending in /v1.
+    QString error;
+    if (!form_->validate_base_url(error)) {
+      QMessageBox::warning(this, trs("Invalid API URL"), error);
+      return;
+    }
+
     // Start from the original so every field the form does not own — memory_, in
     // particular — is carried through untouched.
     lnb::Assistant value = initial_;

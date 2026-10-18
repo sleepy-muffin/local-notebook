@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "model.hpp"
+#include "net/protocol.hpp"
 
 // A pure, side-effect-free layer (design-1.md §3). It decides what fits in a
 // request and what should be folded into memory; it never touches the network
@@ -62,17 +63,18 @@ std::vector<const Message*> summary_candidates(
     std::size_t max_tokens
 );
 
-// A self-contained, tool-free chat payload for the internal summariser. Like the
-// chat payload it requests a stream: the network client is SSE-only, so a
-// non-streaming body would never carry the `[DONE]` sentinel it waits for.
-QJsonObject session_summary_request(
+// A self-contained, tool-free request for the internal summariser. `include_tools`
+// stays false, so neither protocol advertises any tool.
+net::Request session_summary_request(
     const std::string& model, const std::string& existing_memory,
-    const std::vector<const Message*>& candidates, std::size_t max_tokens
+    const std::vector<const Message*>& candidates, std::size_t max_tokens,
+    const std::string& reasoning_effort
 );
 
-QJsonObject assistant_summary_request(
+net::Request assistant_summary_request(
     const std::string& model, const std::string& existing_memory,
-    const std::string& sessions_block, std::size_t max_tokens
+    const std::string& sessions_block, std::size_t max_tokens,
+    const std::string& reasoning_effort
 );
 
 // Truncates `text` so it costs at most `max_tokens`, appending a short notice

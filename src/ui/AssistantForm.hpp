@@ -5,9 +5,11 @@
 #include "model.hpp"
 
 class QComboBox;
+class QEvent;
 class QLineEdit;
 class QPlainTextEdit;
 class QSpinBox;
+class QWidget;
 
 namespace ui {
 
@@ -31,13 +33,28 @@ public:
   // does not own untouched.
   void write_into(lnb::Assistant& assistant) const;
 
+  // True when the API URL is usable (an http/https base ending in /v1). On false,
+  // `error` carries a message naming the expected shape. Callers must check this
+  // before writing the assistant, so an invalid endpoint is never saved.
+  [[nodiscard]] bool validate_base_url(QString& error) const;
+
 private:
+  // Rebuilds the reasoning list for the current model, appending `preferred`
+  // when the model no longer offers it (so a stale level stays visible and
+  // correctable instead of being silently dropped).
+  void rebuild_reasoning(const QString& preferred);
+
+  // Completes the URL scheme when the field loses focus.
+  bool eventFilter(QObject* watched, QEvent* event) override;
+
   QLineEdit* name_ = nullptr;
   QLineEdit* model_ = nullptr;
   QLineEdit* api_url_ = nullptr;
   QLineEdit* token_ = nullptr;
   QLineEdit* proxy_ = nullptr;
   QPlainTextEdit* instructions_ = nullptr;
+  QComboBox* protocol_ = nullptr;
+  QComboBox* reasoning_ = nullptr;
   QComboBox* preset_ = nullptr;
   QSpinBox* summary_token_budget_ = nullptr;
   QSpinBox* summary_reasoning_headroom_ = nullptr;

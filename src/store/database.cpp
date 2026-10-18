@@ -8,11 +8,11 @@ namespace {
 
 // design-1.md §9. The schema is versioned via PRAGMA user_version so future
 // migrations have a starting point; this is a fresh start, so there is no
-// migration from the legacy database. Version 2 added `session.pinned` and
-// version 3 `session.summary_keep_tokens`; an older file gains either column in
-// the constructor.
+// migration from the legacy database. Version 2 added `session.pinned`, version
+// 3 `session.summary_keep_tokens` and version 4 `session.reasoning_effort`; an
+// older file gains each column in the constructor.
 constexpr std::string_view SCHEMA = R"sql(
-PRAGMA user_version = 3;
+PRAGMA user_version = 4;
 
 CREATE TABLE IF NOT EXISTS session (
   id                                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS session (
   max_tool_rounds                   INTEGER NOT NULL DEFAULT 8,
   max_tool_calls                    INTEGER NOT NULL DEFAULT 32,
   tool_output_max_tokens            INTEGER NOT NULL DEFAULT 8000,
-  response_token_budget             INTEGER NOT NULL DEFAULT 8000
+  response_token_budget             INTEGER NOT NULL DEFAULT 8000,
+  reasoning_effort                  TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS message (
@@ -49,7 +50,8 @@ constexpr std::string_view SESSION_COLUMNS =
   "id, title, custom_instructions, memory, memory_watermark, "
   "assistant_memory_watermark, shared_directory, pinned, summary_keep_tokens, "
   "summary_trigger_tokens, summary_token_budget, summary_reasoning_headroom_tokens, "
-  "max_tool_rounds, max_tool_calls, tool_output_max_tokens, response_token_budget";
+  "max_tool_rounds, max_tool_calls, tool_output_max_tokens, response_token_budget, "
+  "reasoning_effort";
 
 constexpr std::string_view MESSAGE_COLUMNS = "id, session_id, role, content, made_at";
 
@@ -71,6 +73,7 @@ Session read_session(const statement& stmt) {
   session.max_tool_calls_ = static_cast<std::size_t>(stmt.column_int(13));
   session.tool_output_max_tokens_ = static_cast<std::size_t>(stmt.column_int(14));
   session.response_token_budget_ = static_cast<std::size_t>(stmt.column_int(15));
+  session.reasoning_effort_ = stmt.column_text(16);
   return session;
 }
 
@@ -117,6 +120,12 @@ database::database(std::string_view path) : connection_(path) {
       "ALTER TABLE session ADD COLUMN summary_keep_tokens INTEGER NOT NULL DEFAULT 4000"
     );
   }
+
+  if (!has_column(connection_, "session", "reasoning_effort")) {
+    connection_.exec(
+      "ALTER TABLE session ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT ''"
+    );
+  }
 }
 
 std::uint32_t database::insert_session(const Session& session) {
@@ -124,8 +133,9 @@ std::uint32_t database::insert_session(const Session& session) {
     "INSERT INTO session (title, custom_instructions, memory, memory_watermark, "
     "assistant_memory_watermark, shared_directory, pinned, summary_keep_tokens, "
     "summary_trigger_tokens, summary_token_budget, summary_reasoning_headroom_tokens, "
-    "max_tool_rounds, max_tool_calls, tool_output_max_tokens, response_token_budget) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "max_tool_rounds, max_tool_calls, tool_output_max_tokens, response_token_budget, "
+    "reasoning_effort) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   );
   stmt.bind(
     session.title_, session.custom_instructions_, session.memory_,
@@ -138,7 +148,8 @@ std::uint32_t database::insert_session(const Session& session) {
     static_cast<int>(session.max_tool_rounds_),
     static_cast<int>(session.max_tool_calls_),
     static_cast<int>(session.tool_output_max_tokens_),
-    static_cast<int>(session.response_token_budget_)
+    static_cast<int>(session.response_token_budget_),
+    session.reasoning_effort_
   );
   return stmt.execute_with_last_row_id();
 }
@@ -150,7 +161,7 @@ void database::update_session(const Session& session) {
     "pinned = ?, summary_keep_tokens = ?, summary_trigger_tokens = ?, "
     "summary_token_budget = ?, summary_reasoning_headroom_tokens = ?, "
     "max_tool_rounds = ?, max_tool_calls = ?, tool_output_max_tokens = ?, "
-    "response_token_budget = ? "
+    "response_token_budget = ?, reasoning_effort = ? "
     "WHERE id = ?"
   );
   stmt.bind(
@@ -164,7 +175,8 @@ void database::update_session(const Session& session) {
     static_cast<int>(session.max_tool_rounds_),
     static_cast<int>(session.max_tool_calls_),
     static_cast<int>(session.tool_output_max_tokens_),
-    static_cast<int>(session.response_token_budget_), session.id_
+    static_cast<int>(session.response_token_budget_), session.reasoning_effort_,
+    session.id_
   );
   stmt.execute();
 }
@@ -226,6 +238,16 @@ void database::set_assistant_memory_watermark(
     "UPDATE session SET assistant_memory_watermark = ? WHERE id = ?"
   );
   stmt.bind(watermark, session_id);
+  stmt.execute();
+}
+
+void database::set_session_reasoning_effort(
+  std::uint32_t session_id, const std::string& reasoning_effort
+) {
+  auto stmt = connection_.prepare(
+    "UPDATE session SET reasoning_effort = ? WHERE id = ?"
+  );
+  stmt.bind(reasoning_effort, session_id);
   stmt.execute();
 }
 

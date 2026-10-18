@@ -11,6 +11,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QSpinBox>
 #include <QTimer>
@@ -23,6 +24,7 @@
 
 #include "app/application.hpp"
 #include "net/client.hpp"
+#include "net/protocol.hpp"
 #include "support/generation_task.hpp"
 #include "support/i18n.hpp"
 #include "ui/BackgroundWidget.hpp"
@@ -174,8 +176,18 @@ QWidget* SessionEditor::build_content() {
         trs("Directory the assistant may read and list (optional)")
     );
 
+    // The reasoning level this session asks for. It is stored per session, so
+    // switching models (which changes the available levels) can be caught here.
+    reasoning_ = new ComboBox(content);
+    reasoning_->setObjectName(QStringLiteral("SessionReasoning"));
+    reasoning_->setToolTip(
+        trs("The reasoning level this session requests. The summariser uses the "
+            "same level.")
+    );
+
     form->addRow(field_label(content, trs("Title")), title_);
     form->addRow(field_label(content, trs("Shared directory")), shared_directory_);
+    form->addRow(field_label(content, trs("Reasoning")), reasoning_);
     layout->addLayout(form);
   }
 
@@ -291,6 +303,7 @@ QWidget* SessionEditor::build_content() {
     preset_row->setSpacing(8);
 
     preset_ = new ComboBox(content);
+    preset_->setObjectName(QStringLiteral("SessionPreset"));
     preset_->addItem(trs("Apply a preset..."));
     for (const BudgetPreset& budget_preset : kBudgetPresets) {
       preset_->addItem(trs(budget_preset.name));
@@ -404,6 +417,14 @@ void SessionEditor::load_session() {
   instructions_->setPlainText(to_qstring(session_.custom_instructions_));
   memory_->setPlainText(to_qstring(session_.memory_));
 
+  // A brand-new session starts on the assistant's level (which itself defaults to
+  // the model's first available one); an existing row keeps the level it stores.
+  // Either way an empty value resolves to the model's first available level.
+  const std::string preferred = session_id_ == 0
+      ? app_.assistant().reasoning_effort_
+      : session_.reasoning_effort_;
+  populate_reasoning(preferred);
+
   if (session_.shared_directory_.has_value()) {
     shared_directory_->setText(to_qstring(*session_.shared_directory_));
   }
@@ -422,6 +443,34 @@ void SessionEditor::load_session() {
 
   // Only a saved session has stored messages to fold.
   summarize_button_->setEnabled(session_id_ != 0);
+}
+
+void SessionEditor::populate_reasoning(const std::string& preferred) {
+  if (reasoning_ == nullptr) {
+    return;
+  }
+
+  const std::string model = app_.assistant().model_;
+  const std::string wanted = preferred;
+  const std::string target =
+      wanted.empty() ? lnb::net::default_reasoning_effort(model) : wanted;
+
+  const std::vector<std::string> efforts =
+      lnb::net::reasoning_efforts_with_stored(model, target);
+
+  const QSignalBlocker blocker(reasoning_);
+  reasoning_->clear();
+
+  int selected = 0;
+  for (std::size_t i = 0; i < efforts.size(); ++i) {
+    reasoning_->addItem(to_qstring(efforts[i]));
+
+    if (QString::compare(to_qstring(efforts[i]), to_qstring(target), Qt::CaseInsensitive) == 0) {
+      selected = static_cast<int>(i);
+    }
+  }
+
+  reasoning_->setCurrentIndex(selected);
 }
 
 void SessionEditor::save_session() {
@@ -483,6 +532,7 @@ void SessionEditor::save_session() {
   session.tool_output_max_tokens_ = static_cast<std::size_t>(tool_output_cap_->value());
   session.max_tool_rounds_ = static_cast<std::size_t>(max_tool_rounds_->value());
   session.max_tool_calls_ = static_cast<std::size_t>(max_tool_calls_->value());
+  session.reasoning_effort_ = reasoning_->currentText().toStdString();
 
   if (session_id_ == 0) {
     session_id_ = app_.sessions().create(session);

@@ -184,6 +184,7 @@ void test_session_round_trip(const std::filesystem::path& path) {
   session.max_tool_calls_ = 5;
   session.tool_output_max_tokens_ = 666;
   session.response_token_budget_ = 777;
+  session.reasoning_effort_ = "high";
 
   const std::uint32_t id = db.insert_session(session);
   CHECK(id > 0);
@@ -207,6 +208,7 @@ void test_session_round_trip(const std::filesystem::path& path) {
   CHECK(loaded->max_tool_calls_ == 5);
   CHECK(loaded->tool_output_max_tokens_ == 666);
   CHECK(loaded->response_token_budget_ == 777);
+  CHECK(loaded->reasoning_effort_ == "high");
 
   // shared_directory_ is nullable.
   lnb::Session no_dir;
@@ -216,6 +218,11 @@ void test_session_round_trip(const std::filesystem::path& path) {
   CHECK(loaded_no_dir.has_value());
   CHECK(!loaded_no_dir->shared_directory_.has_value());
   CHECK(!loaded_no_dir->pinned_);  // unpinned by default
+  CHECK(loaded_no_dir->reasoning_effort_.empty());  // unset by default
+
+  // The dedicated setter writes only the reasoning level.
+  db.set_session_reasoning_effort(id, "xhigh");
+  CHECK(db.session(id)->reasoning_effort_ == "xhigh");
 
   // Update round-trips.
   loaded->title_ = "Renamed";
@@ -518,12 +525,21 @@ void test_managers(const std::filesystem::path& path) {
 // stream: a non-streaming body carries no `data: [DONE]` sentinel and would be
 // rejected with "SSE stream ended before [DONE]".
 void test_summary_requests_stream() {
-  const QJsonObject session_request =
-    lnb::context::session_summary_request("model", "memory", {}, 1000);
+  // The stream flag lives in the serialised body, so each summary request is
+  // built exactly as the client would build it. Chat is enough: the flag is set
+  // for both protocols.
+  const QJsonObject session_request = lnb::net::build_request(
+      lnb::net::ApiProtocol::ChatCompletions,
+      lnb::context::session_summary_request("model", "memory", {}, 1000, "low")
+  );
   CHECK(session_request.value("stream").toBool() == true);
 
-  const QJsonObject assistant_request =
-    lnb::context::assistant_summary_request("model", "memory", "## Session: x\n", 1000);
+  const QJsonObject assistant_request = lnb::net::build_request(
+      lnb::net::ApiProtocol::ChatCompletions,
+      lnb::context::assistant_summary_request(
+          "model", "memory", "## Session: x\n", 1000, "low"
+      )
+  );
   CHECK(assistant_request.value("stream").toBool() == true);
 }
 

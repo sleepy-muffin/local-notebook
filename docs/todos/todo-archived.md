@@ -89,6 +89,33 @@ Error: Process completed with exit code 1.
 
   Implemented with the task abstraction below: the manual fold (Settings) runs as the shared assistant task, so it appears in the Tasks Window; every row for a running task carries a Cancel button; and a manual fold now surfaces both its request/response log (the summarizer runs on a silent task whose log is copied onto the visible one) and its failure (the manual paths fold strictly instead of swallowing the error).
 
+### Responses API path + reasoning selector
+
+An assistant now talks to one of two wire protocols, chosen in the assistant form.
+`Responses` is the default (and the only endpoint that supports tool calling for the
+GPT-6 family); `Chat Completions` remains for OpenAI-compatible servers that expose
+only that shape. The choice is stored in the assistant JSON and, absent a key, an
+older assistant routes through Responses.
+
+- The API URL control now takes a base like `xxx.com/v1`; it requires an explicit
+  `http://` or `https://`, and `https://` is prepended on focus-out when it is
+  missing. Saving is refused unless the value is an http(s) base ending in `/v1`.
+  A legacy full-endpoint value normalises to its base on load.
+- The endpoint derived from the base is `/responses` or `/chat/completions`,
+  matching the assistant's protocol. Summarisation follows the same protocol.
+- `reasoning_effort` is now user-visible: a borderless, fully transparent selector
+  with a right-hand chevron sits to the left of the composer's send button (clicking
+  anywhere on it opens the dropdown), and a matching selector appears on the
+  assistant settings page (JSON) and the session settings page (DB column). Each
+  list is inferred from the model id, leading with the cheapest level.
+- A stored level the current model no longer offers is **rejected at send time**,
+  never reset to an available one behind the user's back. The selectors still show
+  such a level so it can be corrected.
+- (Open) The second `GPT-6.1 Luna` entry in the original reasoning-level spec had
+  no distinct model name. Per the docs, `none` is unsupported by GPT-6 Astra and
+  GPT-6.1 Sol, so the no-`none` list is applied to the GPT-6 family except Luna.
+  Revisit if a real model name surfaces.
+
 ## Architectural Improvements
 
 - Make an abstract layer for tasks? Which prevents the UI from launching a "send" task when either session-level or assistant-level summarisation trigger is met (so, we will have another protection layer). And all tasks (send tasks, summarisation tasks) must go through it, so Tasks Window can show them without problems. To reduce UI sources from directly making decisions from their own.

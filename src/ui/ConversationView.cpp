@@ -11,6 +11,9 @@
 #include <QInputDialog>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QMenu>
+#include <QMouseEvent>
+#include <QPainter>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollArea>
@@ -30,11 +33,16 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <functional>
+#include <string>
+#include <vector>
 
 #include "app/application.hpp"
 #include "app/task_manager.hpp"
 #include "context/context.hpp"
 #include "net/client.hpp"
+#include "net/protocol.hpp"
+#include "store/database.hpp"
 #include "support/i18n.hpp"
 #include "ui/StatusNotice.hpp"
 #include "ui/theme.hpp"
@@ -244,6 +252,152 @@ QString render_plain(const QString& text) {
 }
 
 } // namespace
+
+// -----------------------------------------------------------------------------
+// ReasoningSelector
+// -----------------------------------------------------------------------------
+
+// The composer's reasoning-effort control. It is deliberately bare: no frame, no
+// background, no border — just the level's text with a chevron on its right, so
+// it reads as part of the composer surface. Clicking anywhere on it (text or
+// chevron) opens the dropdown. The app has no Q_OBJECT, so the widget paints
+// itself and dispatches through a plain std::function.
+class ReasoningSelector : public QWidget {
+public:
+  explicit ReasoningSelector(QWidget* parent = nullptr) : QWidget(parent) {
+    setObjectName(QStringLiteral("ReasoningSelector"));
+    setCursor(Qt::PointingHandCursor);
+    // Never take focus: the composer field keeps it, so typing is uninterrupted.
+    setFocusPolicy(Qt::NoFocus);
+    setFont(ui_font());
+    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    // Fully transparent: no background is ever painted. Hover only brightens the
+    // text and chevron, never fills a surface.
+    setAttribute(Qt::WA_Hover, true);
+    setAutoFillBackground(false);
+    setFixedHeight(28);
+  }
+
+  // Shows `current` and offers `levels`. A level not present in `levels` is not
+  // shown (the caller builds the list with reasoning_efforts_with_stored so the
+  // stored value is always included).
+  void set_levels(const std::vector<std::string>& levels, const std::string& current) {
+    levels_ = levels;
+    current_ = current;
+    update_geometry();
+    update();
+  }
+
+  void set_on_selected(std::function<void(const std::string&)> handler) {
+    on_selected_ = std::move(handler);
+  }
+
+  // Re-reads the font (a metric change) and repaints after a theme change.
+  void refresh_style() {
+    setFont(ui_font());
+    update_geometry();
+    update();
+  }
+
+protected:
+  void paintEvent(QPaintEvent*) override {
+    if (current_.empty()) {
+      return;
+    }
+
+    const ThemeColors& colors = theme().colors;
+    const QColor ink = (hovered_ || menu_open_) ? colors.text : colors.text_muted;
+
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    const int text_pad = 6;
+    const int arrow = 9;
+    const QRect text_rect = rect().adjusted(text_pad, 0, -(arrow + text_pad), 0);
+
+    painter.setPen(ink);
+    painter.drawText(
+        text_rect, Qt::AlignLeft | Qt::AlignVCenter, from_utf8(current_)
+    );
+
+    // A small chevron on the right, the only chrome the control carries.
+    const qreal cx = static_cast<qreal>(width()) - text_pad - arrow / 2.0;
+    const qreal cy = height() / 2.0;
+    QPen pen(ink);
+    pen.setWidthF(1.4);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    painter.setPen(pen);
+    painter.drawLine(QPointF(cx - 3.0, cy - 1.5), QPointF(cx, cy + 1.5));
+    painter.drawLine(QPointF(cx, cy + 1.5), QPointF(cx + 3.0, cy - 1.5));
+  }
+
+  void mouseReleaseEvent(QMouseEvent* event) override {
+    if (event->button() == Qt::LeftButton && !levels_.empty()) {
+      open_menu();
+      return;
+    }
+
+    QWidget::mouseReleaseEvent(event);
+  }
+
+  void enterEvent(QEnterEvent* event) override {
+    hovered_ = true;
+    update();
+    QWidget::enterEvent(event);
+  }
+
+  void leaveEvent(QEvent* event) override {
+    hovered_ = false;
+    update();
+    QWidget::leaveEvent(event);
+  }
+
+private:
+  void update_geometry() {
+    const QFontMetrics metrics(font());
+    int text_width = 0;
+
+    for (const std::string& level : levels_) {
+      text_width = std::max(text_width, metrics.horizontalAdvance(from_utf8(level)));
+    }
+
+    // Text, a gap, the chevron, and the same padding on both sides.
+    setFixedWidth(text_width + 9 + 12);
+  }
+
+  void open_menu() {
+    QMenu menu(this);
+
+    for (const std::string& level : levels_) {
+      QAction* action = menu.addAction(from_utf8(level));
+      action->setCheckable(true);
+      action->setChecked(level == current_);
+      action->setData(from_utf8(level));
+    }
+
+    menu_open_ = true;
+    update();
+
+    // Drop above the control: it sits at the very bottom of the window.
+    QAction* chosen = menu.exec(
+        mapToGlobal(QPoint(0, -menu.sizeHint().height() - 2))
+    );
+
+    menu_open_ = false;
+    update();
+
+    if (chosen != nullptr && on_selected_ && chosen->data().toString() != from_utf8(current_)) {
+      on_selected_(chosen->data().toString().toStdString());
+    }
+  }
+
+  std::vector<std::string> levels_;
+  std::string current_;
+  std::function<void(const std::string&)> on_selected_;
+  bool hovered_ = false;
+  bool menu_open_ = false;
+};
 
 // -----------------------------------------------------------------------------
 // MessageBubble
@@ -900,8 +1054,25 @@ ConversationView::ConversationView(
 
   buttons->addWidget(expand_button_, 0, Qt::AlignTop | Qt::AlignRight);
   buttons->addStretch(1);
-  buttons->addWidget(send_button_, 0, Qt::AlignBottom | Qt::AlignRight);
-  buttons->addWidget(cancel_button_, 0, Qt::AlignBottom | Qt::AlignRight);
+
+  // The reasoning control sits immediately to the left of the send button, at the
+  // block's bottom-right. Reading it as part of the composer, it is borderless and
+  // fully transparent; the group it belongs to takes width from the input field.
+  reasoning_selector_ = new ReasoningSelector(composer);
+  reasoning_selector_->set_on_selected([this](const std::string& level) {
+    app_.db().set_session_reasoning_effort(session_id_, level);
+    refresh_reasoning_selector();
+  });
+
+  auto* bottom_actions = new QHBoxLayout();
+  bottom_actions->setContentsMargins(0, 0, 0, 0);
+  bottom_actions->setSpacing(2);
+  bottom_actions->addStretch(1);
+  bottom_actions->addWidget(reasoning_selector_, 0, Qt::AlignVCenter);
+  bottom_actions->addWidget(send_button_, 0, Qt::AlignVCenter);
+  bottom_actions->addWidget(cancel_button_, 0, Qt::AlignVCenter);
+
+  buttons->addLayout(bottom_actions);
 
   composer_layout->addWidget(input_, 1);
   composer_layout->addLayout(buttons);
@@ -1038,6 +1209,7 @@ void ConversationView::reload() {
   update_load_older_visibility();
   set_busy(controller_.busy());
   update_send_mode();
+  refresh_reasoning_selector();
   updating_ = false;
 
   // Reposition once the rebuilt layout has settled. Following pins to the true
@@ -1100,6 +1272,10 @@ void ConversationView::refresh_style() {
   content_side_margin_ = -1;
   update_content_margins();
 
+  if (reasoning_selector_ != nullptr) {
+    reasoning_selector_->refresh_style();
+  }
+
   if (notice_ != nullptr) {
     notice_->refresh_style();
   }
@@ -1110,6 +1286,27 @@ void ConversationView::refresh_style() {
       row->refresh_action_icons();
     }
   }
+}
+
+void ConversationView::refresh_reasoning_selector() {
+  if (reasoning_selector_ == nullptr) {
+    return;
+  }
+
+  const std::string model = app_.assistant().model_;
+  const auto stored = app_.db().session(session_id_);
+  const std::string current =
+      stored.has_value() ? stored->reasoning_effort_ : std::string{};
+
+  // An unset level shows the model's first available one. A stored level the
+  // model no longer offers is still shown, so it can be corrected rather than
+  // silently dropped.
+  const std::string shown =
+      current.empty() ? lnb::net::default_reasoning_effort(model) : current;
+
+  reasoning_selector_->set_levels(
+      lnb::net::reasoning_efforts_with_stored(model, shown), shown
+  );
 }
 
 void ConversationView::render_message_at(std::size_t index, int layout_index) {

@@ -20,6 +20,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListView>
 #include <QListWidget>
 #include <QMouseEvent>
@@ -54,6 +55,7 @@
 #include <thread>
 
 #include "app/application.hpp"
+#include "app/assistant_io.hpp"
 #include "app/data_location.hpp"
 #include "app/metrics.hpp"
 #include "app/settings.hpp"
@@ -268,7 +270,8 @@ void test_assistant_form_round_trip() {
 
   CHECK(written.name_ == "Alpha");
   CHECK(written.model_ == "model-x");
-  CHECK(written.api_url_ == "https://example.invalid/v1/chat/completions");
+  // A legacy full endpoint is normalised to its base on write.
+  CHECK(written.api_url_ == "https://example.invalid/v1");
   CHECK(written.authentication_token_ == "secret");
   CHECK(written.proxy_.has_value() && *written.proxy_ == "socks5h://127.0.0.1:1080");
   CHECK(written.custom_instructions_ == "Be terse.");
@@ -276,6 +279,10 @@ void test_assistant_form_round_trip() {
   CHECK(written.summary_reasoning_headroom_tokens_ == 222);
   CHECK(written.summary_trigger_tokens_ == 333);
   CHECK(written.summary_token_budget_for_session_summarization_ == 444);
+  // The protocol defaults to Responses; an unset reasoning level resolves to the
+  // model's first available one.
+  CHECK(written.protocol_ == lnb::net::ApiProtocol::Responses);
+  CHECK(written.reasoning_effort_ == "none");
 
   // The one field the form must never touch.
   CHECK(written.memory_ == "Remembered across sessions.");
@@ -286,6 +293,74 @@ void test_assistant_form_round_trip() {
   form.write_into(blank);
   CHECK(blank.name_ == "Untitled assistant");
   CHECK(!blank.proxy_.has_value());
+}
+
+// The assistant form's protocol switch, reasoning selector and base-URL rules.
+void test_assistant_form_protocol_and_reasoning() {
+  ui::AssistantForm form;
+
+  lnb::Assistant original;
+  original.name_ = "Luna";
+  original.model_ = "GPT-6.1 Luna";
+  original.api_url_ = "https://api.example.com/v1";
+  original.protocol_ = lnb::net::ApiProtocol::ChatCompletions;
+  original.reasoning_effort_ = "xhigh";
+
+  form.set_assistant(original);
+
+  lnb::Assistant written;
+  form.write_into(written);
+  CHECK(written.protocol_ == lnb::net::ApiProtocol::ChatCompletions);
+  CHECK(written.reasoning_effort_ == "xhigh");
+
+  // A valid base passes validation.
+  QString error;
+  CHECK(form.validate_base_url(error));
+
+  // An unsupported stored level stays visible in the reasoning list rather than
+  // being silently dropped.
+  lnb::Assistant stale = original;
+  stale.model_ = "gpt-6-astra";  // no `none`
+  stale.reasoning_effort_ = "none";
+  form.set_assistant(stale);
+  auto* reasoning = form.findChild<QComboBox*>(QStringLiteral("AssistantReasoning"));
+  CHECK(reasoning != nullptr);
+  if (reasoning != nullptr) {
+    CHECK(reasoning->currentText() == QStringLiteral("none"));
+    CHECK(reasoning->count() == 6);  // the model's five, plus the stale `none`
+  }
+}
+
+// A base URL that is not an http(s) /v1 endpoint is refused, so it can never be
+// saved.
+void test_assistant_form_url_validation() {
+  ui::AssistantForm form;
+
+  lnb::Assistant assistant;
+  assistant.name_ = "V";
+  assistant.model_ = "m";
+  assistant.api_url_ = "https://api.example.com/v1/chat/completions";
+  form.set_assistant(assistant);
+
+  // A scheme-less base is completed on write, and validates.
+  auto* url = form.findChild<QLineEdit*>(QStringLiteral("AssistantApiUrl"));
+  CHECK(url != nullptr);
+  if (url == nullptr) {
+    return;
+  }
+
+  url->setText(QStringLiteral("example.com/v1"));
+  QString error;
+  CHECK(form.validate_base_url(error));
+
+  lnb::Assistant written;
+  form.write_into(written);
+  CHECK(written.api_url_ == "https://example.com/v1");
+
+  // Anything not ending in /v1 is refused, with a message.
+  url->setText(QStringLiteral("https://api.example.com/v2"));
+  CHECK(!form.validate_base_url(error));
+  CHECK(!error.isEmpty());
 }
 
 // --- Main window chrome -------------------------------------------------------
@@ -1105,7 +1180,7 @@ void test_settings_restore_defaults(QApplication& app) {
 void test_assistant_form_preset() {
   ui::AssistantForm form;
 
-  auto* preset = form.findChild<QComboBox*>();
+  auto* preset = form.findChild<QComboBox*>(QStringLiteral("SummaryPreset"));
   CHECK(preset != nullptr);
   if (preset == nullptr) {
     return;
@@ -1134,7 +1209,7 @@ void test_session_editor_preset() {
 
   ui::SessionEditor editor(notebook, 0);
 
-  auto* preset = editor.findChild<QComboBox*>();
+  auto* preset = editor.findChild<QComboBox*>(QStringLiteral("SessionPreset"));
   CHECK(preset != nullptr);
   if (preset == nullptr) {
     return;
@@ -1633,9 +1708,15 @@ void test_summary_review_decline() {
   lnb::GenerationTask task;
   task.start();
 
+  // The fold follows the assistant's protocol; pin Chat here so the request
+  // shape this test inspects stays the `messages` array.
+  lnb::net::Remote remote;
+  remote.url = "https://example.invalid/v1/chat/completions";
+  remote.model = "test-model";
+  remote.protocol = lnb::net::ApiProtocol::ChatCompletions;
+
   const std::string result = lnb::net::summarize_session_now(
-      notebook.db(), *stored, "test-model", "https://example.invalid/v1/chat/completions", "",
-      std::nullopt, task, std::stop_token{}, approver
+      notebook.db(), *stored, remote, task, std::stop_token{}, approver
   );
 
   CHECK(called);
@@ -1682,9 +1763,14 @@ void test_manual_summary_no_overflow_keeps_watermark() {
   lnb::GenerationTask task;
   task.start();
 
+  lnb::net::Remote remote;
+  remote.url = "https://example.invalid/v1/chat/completions";
+  remote.model = "test-model";
+  remote.protocol = lnb::net::ApiProtocol::ChatCompletions;
+
   const std::string result = lnb::net::summarize_session_now(
-      notebook.db(), *stored, "test-model", "https://example.invalid/v1/chat/completions", "",
-      std::nullopt, task, std::stop_token{}, lnb::net::SummaryApprover{}
+      notebook.db(), *stored, remote, task, std::stop_token{},
+      lnb::net::SummaryApprover{}
   );
 
   CHECK(result == "Previous memory.");
@@ -2215,6 +2301,94 @@ void test_composer_expand_toggle() {
   CHECK(send->size() == QSize(28, 28));
 }
 
+// The composer's reasoning selector exists to the left of the send button and
+// persists the chosen level to the session's row.
+void test_composer_reasoning_selector() {
+  enter_scratch("composer-reasoning");
+
+  lnb::Application notebook;
+  notebook.open_assistant("1a1a1a1a-1a1a-1a1a-1a1a-1a1a1a1a1a1a", make_assistant());
+  const std::uint32_t session_id = notebook.sessions().create(lnb::Session{});
+
+  ui::ConversationView view(notebook, session_id);
+  view.resize(800, 600);
+  view.show();
+  QApplication::processEvents();
+
+  auto* selector = view.findChild<QWidget*>(QStringLiteral("ReasoningSelector"));
+  auto* send = view.findChild<QToolButton*>(QStringLiteral("SendButton"));
+  CHECK(selector != nullptr);
+  CHECK(send != nullptr);
+
+  if (selector != nullptr && send != nullptr) {
+    // The control is laid out immediately to the left of the send button and is
+    // never a frame (no background, no border).
+    CHECK(selector->width() > 0);
+    CHECK(selector->geometry().right() <= send->geometry().left());
+  }
+
+  // A fresh session stores no level.
+  const auto stored = notebook.db().session(session_id);
+  CHECK(stored.has_value());
+  CHECK(stored->reasoning_effort_.empty());
+
+  // The level the selector writes is what the session then carries.
+  notebook.db().set_session_reasoning_effort(session_id, "high");
+  view.reload();
+  CHECK(notebook.db().session(session_id)->reasoning_effort_ == "high");
+}
+
+// The session editor offers a reasoning level, defaulting a new session to the
+// assistant's model's first available level.
+void test_session_editor_reasoning() {
+  enter_scratch("session-editor-reasoning");
+
+  lnb::Application notebook;
+  notebook.open_assistant("2b2b2b2b-2b2b-2b2b-2b2b-2b2b2b2b2b2b", make_assistant());
+
+  ui::SessionEditor editor(notebook, 0);
+
+  auto* reasoning = editor.findChild<QComboBox*>(QStringLiteral("SessionReasoning"));
+  CHECK(reasoning != nullptr);
+  if (reasoning == nullptr) {
+    return;
+  }
+
+  // test-model falls back to none/low/high; a fresh session starts on the first.
+  CHECK(reasoning->count() == 3);
+  CHECK(reasoning->currentText() == QStringLiteral("none"));
+}
+
+// The assistant JSON round-trips the protocol and reasoning level, and a legacy
+// full-endpoint URL normalises to its base on load.
+void test_assistant_protocol_persistence() {
+  enter_scratch("assistant-protocol");
+
+  const std::string uuid = "3c3c3c3c-3c3c-3c3c-3c3c-3c3c3c3c3c3c";
+
+  lnb::Assistant assistant;
+  assistant.name_ = "Proto";
+  assistant.model_ = "GPT-6.1 Luna";
+  // A legacy full endpoint: it must migrate to the base on the next load.
+  assistant.api_url_ = "https://api.example.com/v1/chat/completions";
+  assistant.protocol_ = lnb::net::ApiProtocol::ChatCompletions;
+  assistant.reasoning_effort_ = "xhigh";
+
+  lnb::save_assistant(uuid, assistant);
+
+  const lnb::Assistant loaded = lnb::load_assistant(uuid);
+  CHECK(loaded.protocol_ == lnb::net::ApiProtocol::ChatCompletions);
+  CHECK(loaded.reasoning_effort_ == "xhigh");
+  CHECK(loaded.api_url_ == "https://api.example.com/v1");
+
+  // The default protocol round-trips too.
+  lnb::Assistant defaults;
+  defaults.name_ = "Defaults";
+  defaults.api_url_ = "https://api.example.com/v1";
+  lnb::save_assistant(uuid, defaults);
+  CHECK(lnb::load_assistant(uuid).protocol_ == lnb::net::ApiProtocol::Responses);
+}
+
 // The column a scrollbar sits in must stay transparent, so the window behind it
 // shows through. Qt resolves a background that an *ancestor* stylesheet gives a
 // scrolling widget into the widget's own palette, and a style that paints from
@@ -2315,6 +2489,8 @@ int main(int argc, char** argv) {
   test_settings_round_trip();
   test_i18n();
   test_assistant_form_round_trip();
+  test_assistant_form_protocol_and_reasoning();
+  test_assistant_form_url_validation();
   test_spin_box_wheel();
   test_font_combo_wheel();
   test_combo_box_wheel();
@@ -2344,6 +2520,8 @@ int main(int argc, char** argv) {
   test_settings_restore_defaults(app);
   test_assistant_form_preset();
   test_session_editor_preset();
+  test_session_editor_reasoning();
+  test_assistant_protocol_persistence();
   test_translucent_theme_buttons(app);
   test_code_block_restyles_on_theme_change(app);
   test_conversation_backgrounds(app);
@@ -2364,6 +2542,7 @@ int main(int argc, char** argv) {
   test_task_manager_assistant_slot_cancel();
   test_tasks_window_cancel_button();
   test_composer_expand_toggle();
+  test_composer_reasoning_selector();
   test_scrollbar_columns_transparent(app);
 
   if (g_failures != 0) {

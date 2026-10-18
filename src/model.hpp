@@ -5,6 +5,8 @@
 #include <optional>
 #include <string>
 
+#include "net/protocol.hpp"
+
 // The reconstructed domain model (design-1.md §2). One Assistant per process;
 // many Sessions per assistant; all sessions of an assistant share one memory.
 //
@@ -33,6 +35,12 @@ public:
   std::string title_;
   std::string custom_instructions_;  // user-authored; kept separate from memory_
   std::string memory_;               // generated session summarisation
+
+  // Which reasoning level this session asks for. Empty means "use the model's
+  // own default", which is how a row written before the selector existed reads.
+  // A concrete level the current model does not support is refused at send time
+  // rather than silently reset (see net::reasoning_effort_supported).
+  std::string reasoning_effort_;
 
   // Trigger bookkeeping only: the highest message id already folded. See
   // design-1.md §7 — they are never used to select what a summariser reads.
@@ -76,6 +84,16 @@ public:
   std::string model_;
   std::optional<std::string> proxy_;
   std::string memory_;  // generated cross-session memory
+
+  // The wire protocol this assistant talks. Responses is the default for every
+  // assistant, including ones created before the switch existed, because it is
+  // the only endpoint that supports tool calling for the GPT-6 family.
+  net::ApiProtocol protocol_ = net::ApiProtocol::Responses;
+
+  // Assistant::reasoning_effort_ is the level a new session starts on
+  // and the level the assistant-level summariser runs at.
+  // It is not what normal chat turns use.
+  std::string reasoning_effort_;
 
   // Target size of the generated assistant memory_.
   std::size_t summary_token_budget_ = 4000;

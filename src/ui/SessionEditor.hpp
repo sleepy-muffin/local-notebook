@@ -46,6 +46,10 @@ private:
   void load_session();
   void save_session();
 
+  // Rebuilds the reasoning list for the assistant's current model, keeping
+  // `preferred` visible even when the model no longer offers it.
+  void populate_reasoning(const std::string& preferred);
+
   // Folds the whole transcript into the memory box on demand, regardless of the
   // automatic trigger. Runs as the session's own background task (through the
   // conversation view) and reloads the persisted memory when it finishes.
@@ -60,6 +64,10 @@ private:
   QLineEdit* title_ = nullptr;
   QPlainTextEdit* instructions_ = nullptr;
   QLineEdit* shared_directory_ = nullptr;
+
+  // The reasoning level this session asks for. The list is model-specific; a
+  // stale level stays selectable so it can be corrected rather than dropped.
+  QComboBox* reasoning_ = nullptr;
 
   QPlainTextEdit* memory_ = nullptr;
   QSpinBox* watermark_ = nullptr;

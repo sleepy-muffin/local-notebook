@@ -7,6 +7,7 @@
 
 #include <filesystem>
 
+#include "net/protocol.hpp"
 #include "store/util.hpp"
 #include "support/log.hpp"
 
@@ -24,6 +25,12 @@ QJsonObject to_json(const Assistant& assistant) {
       ? QJsonValue(QString::fromStdString(*assistant.proxy_))
       : QJsonValue(QJsonValue::Null);
   object["memory"] = QString::fromStdString(assistant.memory_);
+
+  // The wire protocol this assistant talks, and the reasoning level a new
+  // session starts on. Both are written even when defaulted, so the file always
+  // states the choice explicitly.
+  object["protocol"] = QString::fromStdString(net::protocol_name(assistant.protocol_));
+  object["reasoning_effort"] = QString::fromStdString(assistant.reasoning_effort_);
 
   object["summary_token_budget"] = static_cast<double>(assistant.summary_token_budget_);
   object["summary_reasoning_headroom_tokens"] =
@@ -56,6 +63,10 @@ Assistant from_json(const QJsonObject& object) {
 
   assistant.memory_ = object.value("memory").toString().toStdString();
 
+  // A missing `protocol` reads as Responses, so an assistant written before the
+  // switch existed routes through the Responses API by default. The base URL is
+  // normalised so the pre-update full-endpoint value migrates to the base.
+
   assistant.summary_token_budget_ = static_cast<std::size_t>(
       object.value("summary_token_budget").toDouble(assistant.summary_token_budget_));
   assistant.summary_reasoning_headroom_tokens_ = static_cast<std::size_t>(
@@ -66,6 +77,12 @@ Assistant from_json(const QJsonObject& object) {
   assistant.summary_token_budget_for_session_summarization_ = static_cast<std::size_t>(
       object.value("summary_token_budget_for_session_summarization")
           .toDouble(assistant.summary_token_budget_for_session_summarization_));
+
+  assistant.protocol_ =
+      net::protocol_from_name(object.value("protocol").toString().toStdString());
+  assistant.reasoning_effort_ =
+      object.value("reasoning_effort").toString().toStdString();
+  assistant.api_url_ = net::normalize_base_url(assistant.api_url_);
 
   return assistant;
 }

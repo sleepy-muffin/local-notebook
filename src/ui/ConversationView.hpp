@@ -30,6 +30,7 @@ class Application;
 
 namespace ui {
 
+class ReasoningSelector;
 class StatusNotice;
 
 // A single rendered chat message body. The user's own messages get a rounded
@@ -275,6 +276,10 @@ private:
   // changed, swaps the send button's icon and tooltip.
   void update_send_mode();
 
+  // Reloads the composer's reasoning dropdown from the stored session and the
+  // assistant's model. Called on every reload and after a theme change.
+  void refresh_reasoning_selector();
+
   // (Re)applies the two composer action icons for the active theme.
   void apply_composer_icons();
 
@@ -322,6 +327,11 @@ private:
   QToolButton* send_button_ = nullptr;
   QToolButton* expand_button_ = nullptr;
   QToolButton* cancel_button_ = nullptr;
+
+  // The reasoning-effort control, sitting to the left of the send button. It
+  // writes the chosen level straight to the session's row.
+  ReasoningSelector* reasoning_selector_ = nullptr;
+
   QWidget* composer_bar_ = nullptr;
 
   // The small notice above the composer that points at the status bar's tasks

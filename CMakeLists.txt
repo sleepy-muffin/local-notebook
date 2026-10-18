@@ -58,6 +58,8 @@ add_library(local-notebook-core STATIC
         src/net/search.cpp
         src/net/client.hpp
         src/net/client.cpp
+        src/net/protocol.hpp
+        src/net/protocol.cpp
 
         src/ui/theme.hpp
         src/ui/theme.cpp
@@ -163,6 +165,21 @@ target_link_libraries(
 
 add_test(NAME ui COMMAND local-notebook-ui-tests)
 set_tests_properties(ui PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Headless tests for the wire-protocol layer: the two request bodies, the tool
+# schema shapes, base-URL handling and the per-model reasoning levels. No Qt
+# event loop is involved.
+add_executable(local-notebook-protocol-tests
+        tests/protocol_tests.cpp
+)
+
+target_link_libraries(
+        local-notebook-protocol-tests
+        PRIVATE
+        local-notebook-core
+)
+
+add_test(NAME protocol COMMAND local-notebook-protocol-tests)
 
 # The README screenshot generator. It is a development tool rather than a test:
 # it renders the windows under the offscreen platform plugin and writes PNGs to

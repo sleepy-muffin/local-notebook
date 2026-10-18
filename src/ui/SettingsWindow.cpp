@@ -1027,6 +1027,17 @@ void SettingsWindow::restore_metrics_defaults() {
 }
 
 void SettingsWindow::save() {
+  // Refuse to save an unusable API endpoint: an invalid base would make every
+  // request fail, so the window stays open for correction instead of persisting
+  // it.
+  if (assistant_form_ != nullptr) {
+    QString url_error;
+    if (!assistant_form_->validate_base_url(url_error)) {
+      QMessageBox::warning(this, trs("Invalid API URL"), url_error);
+      return;
+    }
+  }
+
   const lnb::Settings previous = app_.settings();
 
   write_config();
@@ -1106,10 +1117,13 @@ void SettingsWindow::summarize_assistant_now() {
 
   lnb::store::database* db = &app_.db();
   const lnb::Assistant assistant = app_.assistant();
-  const std::string model = assistant.model_;
-  const std::string url = assistant.api_url_;
-  const std::string key = assistant.authentication_token_;
-  const std::optional<std::string> proxy = assistant.proxy_;
+
+  lnb::net::Remote remote;
+  remote.url = lnb::net::derive_endpoint(assistant.api_url_, assistant.protocol_);
+  remote.key = assistant.authentication_token_;
+  remote.proxy = assistant.proxy_;
+  remote.model = assistant.model_;
+  remote.protocol = assistant.protocol_;
 
   // The review runs on the worker thread and blocks on the interface thread, so
   // a decline is recorded here and read after the task is reclaimed.
@@ -1129,11 +1143,11 @@ void SettingsWindow::summarize_assistant_now() {
   // and can be cancelled there like any other job.
   auto task = app_.tasks().submit(
       lnb::TaskKind::AssistantSummary, 0,
-      [produced, declined, db, assistant, model, url, key, proxy, approver](
+      [produced, declined, db, assistant, remote, approver](
           lnb::GenerationTask& state, std::stop_token stop_token
       ) {
         *produced = lnb::net::summarize_assistant_now(
-            *db, assistant, model, url, key, proxy, state, stop_token, approver
+            *db, assistant, remote, state, stop_token, approver
         );
       }
   );

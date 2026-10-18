@@ -40,6 +40,12 @@ public:
     std::uint32_t session_id, std::uint32_t watermark
   );
 
+  // The session's reasoning level, written on its own so the composer's selector
+  // does not have to round-trip the whole row.
+  void set_session_reasoning_effort(
+    std::uint32_t session_id, const std::string& reasoning_effort
+  );
+
   // Messages.
   [[nodiscard]] std::uint32_t insert_message(const Message& message);
   void update_message(std::uint32_t message_id, const std::string& content);
