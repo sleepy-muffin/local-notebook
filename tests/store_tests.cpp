@@ -177,7 +177,7 @@ void test_session_round_trip(const std::filesystem::path& path) {
   session.shared_directory_ = "/tmp/shared";
   session.pinned_ = true;
   session.summary_keep_tokens_ = 101;
-  session.summary_trigger_tokens_ = 111;
+  session.memory_trigger_tokens_ = 111;
   session.summary_token_budget_ = 222;
   session.summary_reasoning_headroom_tokens_ = 333;
   session.max_tool_rounds_ = 4;
@@ -410,7 +410,7 @@ void test_pinned_ordering(const std::filesystem::path& path) {
 // unpinned with the default retained level.
 void test_pinned_migration(const std::filesystem::path& path) {
   {
-    lnb::store::connection conn(path.string());
+    mmc::sqlite::connection conn(path.string());
     conn.exec(R"sql(
 PRAGMA user_version = 1;
 CREATE TABLE session (
