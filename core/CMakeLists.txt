@@ -44,6 +44,7 @@ add_library(local-notebook-core STATIC
     src/net/http.cpp
     src/net/tools.hpp
     src/net/tools.cpp
+    src/net/search_results.hpp
     src/net/search.hpp
     src/net/search.cpp
     src/net/client.hpp
@@ -74,3 +75,6 @@ target_link_libraries(
       OpenSSL::Crypto
       Threads::Threads
 )
+
+# Regression tests for the public core API.
+add_subdirectory(tests)

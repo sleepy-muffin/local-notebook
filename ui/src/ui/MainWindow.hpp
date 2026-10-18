@@ -16,7 +16,10 @@ class QTimer;
 class QToolButton;
 
 namespace lnb {
-class Application;
+struct Settings;
+namespace api {
+class interface;
+}
 }
 
 namespace ui {
@@ -33,7 +36,10 @@ class TasksWindow;
 // so a generation keeps running while its session is off screen.
 class MainWindow : public BackgroundWidget {
 public:
-  explicit MainWindow(lnb::Application& app, QWidget* parent = nullptr);
+  explicit MainWindow(
+      lnb::api::interface& api, lnb::Settings& settings,
+      QWidget* parent = nullptr
+  );
   ~MainWindow() override;
 
 protected:
@@ -102,7 +108,8 @@ private:
   // Refreshes the current-session block at the foot of the sidebar.
   void update_current_block();
 
-  lnb::Application& app_;
+  lnb::api::interface& api_;
+  lnb::Settings& settings_;
 
   QWidget* sidebar_ = nullptr;
   QWidget* sidebar_separator_ = nullptr;

@@ -32,6 +32,13 @@ using BodyHandler = std::function<bool(std::string_view chunk)>;
 // "Generation cancelled" when `stop` is requested.
 //
 // `max_redirects` is 0 by default: a POST must never be silently replayed.
+//
+// `inactivity_timeout_ms` bounds connecting, the TLS handshake and writing the
+// request. `read_timeout_ms` bounds each wait for response headers or body
+// bytes; 0 means "use `inactivity_timeout_ms`". Streaming turns pass a
+// three-minute read window and summariser requests a seven-minute one, because
+// a reasoning model can stream nothing for minutes before it emits its first
+// event.
 int http_request(
     std::string_view method,
     const std::string& url,
@@ -42,16 +49,20 @@ int http_request(
     const ResponseHandler& on_response,
     const BodyHandler& on_body,
     int inactivity_timeout_ms = 60'000,
-    int max_redirects = 0
+    int max_redirects = 0,
+    int read_timeout_ms = 0
 );
 
 // A GET that follows redirects and returns at most `max_bytes` of the body.
-// Throws when the final status is not 2xx.
+// Throws when the final status is not 2xx. `extra_headers` are merged over the
+// defaults (a header with the same name replaces the default), which lets a
+// caller present a browser User-Agent to sites that reject non-browser clients.
 std::string http_get_body(
     const std::string& url,
     const std::optional<std::string>& proxy,
     int max_bytes,
-    std::stop_token stop = std::stop_token{}
+    std::stop_token stop = std::stop_token{},
+    const std::vector<HttpHeader>& extra_headers = {}
 );
 
 } // namespace lnb::net

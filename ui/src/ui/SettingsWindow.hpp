@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "settings/metrics.hpp"
-#include "app/settings.hpp"
+#include "settings/settings.hpp"
 
 class QLabel;
 class QListWidget;
@@ -18,7 +18,9 @@ class QStackedWidget;
 class QWidget;
 
 namespace lnb {
-class Application;
+namespace api {
+class interface;
+}
 }
 
 namespace ui {
@@ -36,7 +38,10 @@ class AssistantForm;
 // per process), but its configuration is editable here.
 class SettingsWindow : public QDialog {
 public:
-  explicit SettingsWindow(lnb::Application& app, QWidget* parent = nullptr);
+  explicit SettingsWindow(
+      lnb::api::interface& api, lnb::Settings& settings,
+      QWidget* parent = nullptr
+  );
 
   // Tells the Account page which session is current. Called before the window is
   // shown, since the window does not track the selection itself.
@@ -93,7 +98,8 @@ private:
 
   void update_account_page();
 
-  lnb::Application& app_;
+  lnb::api::interface& api_;
+  lnb::Settings& settings_;
 
   // The edited copies; nothing is committed until Save.
   lnb::Settings pending_;

@@ -9,7 +9,10 @@ class QListWidget;
 class QPushButton;
 
 namespace lnb {
-class Application;
+struct Settings;
+namespace api {
+class interface;
+}
 }
 
 namespace ui {
@@ -22,7 +25,9 @@ namespace ui {
 // are edited solely inside the (separate) assistant form.
 class AssistantPicker : public QDialog {
 public:
-  explicit AssistantPicker(lnb::Application& app, QWidget* parent = nullptr);
+  explicit AssistantPicker(
+      lnb::api::interface& api, lnb::Settings& settings, QWidget* parent = nullptr
+  );
 
 private:
   // Rebuilds the list from disk and selects the last-opened assistant.
@@ -39,7 +44,8 @@ private:
   [[nodiscard]] QString selected_uuid() const;
   void select_uuid(const QString& uuid);
 
-  lnb::Application& app_;
+  lnb::api::interface& api_;
+  lnb::Settings& settings_;
 
   QListWidget* list_ = nullptr;
   QLabel* preview_name_ = nullptr;

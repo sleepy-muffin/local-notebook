@@ -9,6 +9,7 @@ compile_commands.json
 .zed/
 .cache/
 docs/plans/
+docs/deprecated/
 
 # Runtime state and local database
 /run/

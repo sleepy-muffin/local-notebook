@@ -32,10 +32,9 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
-#include "app/application.hpp"
-#include "app/task_manager.hpp"
-#include "net/client.hpp"
+#include "local-notebook-core/interface.hpp"
 #include "local-notebook-core/generation_task.hpp"
 #include "support/i18n.hpp"
 #include "ui/AssistantForm.hpp"
@@ -149,10 +148,13 @@ bool theme_inputs_equal(const lnb::Settings& a, const lnb::Settings& b) {
 
 } // namespace
 
-SettingsWindow::SettingsWindow(lnb::Application& app, QWidget* parent)
+SettingsWindow::SettingsWindow(
+    lnb::api::interface& api, lnb::Settings& settings, QWidget* parent
+)
     : QDialog(parent),
-      app_(app),
-      pending_(app.settings()),
+      api_(api),
+      settings_(settings),
+      pending_(settings),
       pending_metrics_(metrics()) {
   setObjectName(QStringLiteral("SettingsWindow"));
   setWindowTitle(trs("Settings"));
@@ -735,7 +737,7 @@ QWidget* SettingsWindow::build_assistant_page() {
   layout->setSpacing(12);
 
   assistant_form_ = new AssistantForm(content);
-  assistant_form_->set_assistant(app_.assistant());
+  assistant_form_->set_assistant(api_.assistant());
   layout->addWidget(assistant_form_);
 
   // ---- Assistant memory ----
@@ -773,7 +775,7 @@ QWidget* SettingsWindow::build_assistant_page() {
           "correct it, or clear it to rebuild it from the transcript."
       )
   );
-  assistant_memory_->setPlainText(to_qstring(app_.assistant().memory_));
+  assistant_memory_->setPlainText(to_qstring(api_.assistant().memory_));
   memory_layout->addWidget(assistant_memory_);
 
   auto* docs = new QLabel(memory_block);
@@ -929,7 +931,7 @@ void SettingsWindow::update_account_page() {
     return;
   }
 
-  const auto session = app_.db().session(current_session_);
+  const auto session = api_.session(current_session_);
 
   if (!session.has_value()) {
     account_session_name_->setText(trs("No session selected"));
@@ -969,7 +971,7 @@ void SettingsWindow::showEvent(QShowEvent* event) {
 }
 
 void SettingsWindow::reload_from_app() {
-  pending_ = app_.settings();
+  pending_ = settings_;
   pending_metrics_ = metrics();
 
   for (const auto& reload : config_reloaders_) {
@@ -981,11 +983,11 @@ void SettingsWindow::reload_from_app() {
   }
 
   if (assistant_form_ != nullptr) {
-    assistant_form_->set_assistant(app_.assistant());
+    assistant_form_->set_assistant(api_.assistant());
   }
 
   if (assistant_memory_ != nullptr) {
-    assistant_memory_->setPlainText(to_qstring(app_.assistant().memory_));
+    assistant_memory_->setPlainText(to_qstring(api_.assistant().memory_));
   }
 
   update_account_page();
@@ -1038,41 +1040,44 @@ void SettingsWindow::save() {
     }
   }
 
-  const lnb::Settings previous = app_.settings();
+  const lnb::Settings previous = settings_;
 
   write_config();
   write_metrics();
 
   pending_.metrics = pending_metrics_;
 
-  app_.settings() = pending_;
-  app_.save_settings();
+  settings_ = pending_;
+  lnb::save_settings(settings_);
 
   // A language change cannot reach the already-built windows (their text is set
   // once, at construction), so it is applied for this run and the user is offered
   // a restart to see the rest of the interface follow.
-  const bool language_changed = previous.language != app_.settings().language;
+  const bool language_changed = previous.language != settings_.language;
   if (language_changed) {
-    lnb::i18n::set_language(lnb::i18n::language_from_code(app_.settings().language));
+    lnb::i18n::set_language(lnb::i18n::language_from_code(settings_.language));
   }
 
   // The assistant's own configuration is persisted to its directory, not the
-  // global settings file.
+  // global settings file. Build the edited copy and publish it in one step, so
+  // a worker never observes a half-written assistant.
   if (assistant_form_ != nullptr) {
-    assistant_form_->write_into(app_.assistant());
+    lnb::Assistant updated = api_.assistant();
+    assistant_form_->write_into(updated);
     if (assistant_memory_ != nullptr) {
-      app_.assistant().memory_ = assistant_memory_->toPlainText().toStdString();
+      updated.memory_ = assistant_memory_->toPlainText().toStdString();
     }
-    app_.save_assistant();
+    api_.set_assistant(std::move(updated));
+    api_.save_assistant();
   }
 
   // Re-apply the theme at runtime so the change is visible immediately, but only
   // when something the theme depends on actually changed. A full restyle rebuilds
   // the application stylesheet and re-decodes the background image, which is far
   // too expensive to run for a save that touched none of it.
-  if (!theme_inputs_equal(previous, app_.settings())) {
+  if (!theme_inputs_equal(previous, settings_)) {
     if (auto* application = qobject_cast<QApplication*>(QApplication::instance())) {
-      ui::apply_theme(*application, app_.settings());
+      ui::apply_theme(*application, settings_);
     }
   }
 
@@ -1101,13 +1106,14 @@ void SettingsWindow::save() {
 }
 
 void SettingsWindow::summarize_assistant_now() {
-  if (assistant_summarizing_ || !app_.has_assistant() || assistant_memory_ == nullptr) {
+  if (assistant_summarizing_ || !api_.has_assistant() ||
+      assistant_memory_ == nullptr) {
     return;
   }
 
-  // The shared assistant fold occupies one slot; a fold already in flight is left
-  // to finish (it can be watched — and cancelled — in the tasks window).
-  if (app_.tasks().assistant_busy()) {
+  // The interface runs one task at a time; a fold already in flight is left to
+  // finish (it can be watched — and cancelled — in the tasks window).
+  if (api_.busy()) {
     return;
   }
 
@@ -1115,42 +1121,22 @@ void SettingsWindow::summarize_assistant_now() {
   assistant_summarize_->setEnabled(false);
   assistant_summarize_->setText(trs("Summarizing..."));
 
-  lnb::store::database* db = &app_.db();
-  const lnb::Assistant assistant = app_.assistant();
-
-  lnb::net::Remote remote;
-  remote.url = lnb::net::derive_endpoint(assistant.api_url_, assistant.protocol_);
-  remote.key = assistant.authentication_token_;
-  remote.proxy = assistant.proxy_;
-  remote.model = assistant.model_;
-  remote.protocol = assistant.protocol_;
-
   // The review runs on the worker thread and blocks on the interface thread, so
-  // a decline is recorded here and read after the task is reclaimed.
-  auto produced = std::make_shared<std::string>();
-  auto declined = std::make_shared<bool>(false);
+  // a decline is recorded here and read after the task finishes.
+  bool declined = false;
 
-  const lnb::net::SummaryApprover approver =
-      [declined](const lnb::net::SummaryPlan& plan) {
+  const lnb::SummaryApprover approver =
+      [&declined](const lnb::SummaryPlan& plan) {
         const bool approved = review_summary(plan);
         if (!approved) {
-          *declined = true;
+          declined = true;
         }
         return approved;
       };
 
-  // The fold runs as the shared assistant task, so it appears in the tasks window
-  // and can be cancelled there like any other job.
-  auto task = app_.tasks().submit(
-      lnb::TaskKind::AssistantSummary, 0,
-      [produced, declined, db, assistant, remote, approver](
-          lnb::GenerationTask& state, std::stop_token stop_token
-      ) {
-        *produced = lnb::net::summarize_assistant_now(
-            *db, assistant, remote, state, stop_token, approver
-        );
-      }
-  );
+  // The interface snapshots the assistant and owns the worker. The fold persists
+  // the resulting memory itself, so nothing has to be copied back here.
+  auto task = api_.summarize_assistant(true, approver);
 
   if (task == nullptr) {
     assistant_summarizing_ = false;
@@ -1160,13 +1146,14 @@ void SettingsWindow::summarize_assistant_now() {
   }
 
   // Keep the modal window responsive while the worker folds every session: the
-  // nested loop only pumps events until the worker has exited. The main window's
-  // poll timer keeps firing inside it, so the tasks window updates live.
+  // nested loop only pumps events until the task reaches a terminal state. The
+  // main window's poll timer keeps firing inside it, so the tasks window updates
+  // live.
   QEventLoop loop;
   QTimer timer;
 
   QObject::connect(&timer, &QTimer::timeout, &loop, [&task, &loop]() {
-    if (task->finished()) {
+    if (task->is_terminal()) {
       loop.quit();
     }
   });
@@ -1175,15 +1162,12 @@ void SettingsWindow::summarize_assistant_now() {
   loop.exec();
   timer.stop();
 
-  // Reclaim the worker before its captures (produced/declined) are read.
-  task->reap();
-
   assistant_summarizing_ = false;
   assistant_summarize_->setEnabled(true);
   assistant_summarize_->setText(trs("Summarize now"));
 
   // A declined review is a deliberate no-op: say nothing about it.
-  if (*declined) {
+  if (declined) {
     return;
   }
 
@@ -1202,14 +1186,12 @@ void SettingsWindow::summarize_assistant_now() {
   }
 
   const QString previous = assistant_memory_->toPlainText();
-  const QString memory = to_qstring(*produced);
+  const QString memory = to_qstring(api_.assistant().memory_);
 
   assistant_memory_->setPlainText(memory);
-  app_.assistant().memory_ = *produced;
-  app_.save_assistant();
   // The fold advanced every session's assistant watermark, so the cached trigger
   // (which the composer's summarize mode reads) must be recomputed.
-  app_.mark_assistant_summary_stale();
+  api_.mark_assistant_summary_stale();
 
   if (memory.isEmpty() || memory == previous) {
     QMessageBox::information(

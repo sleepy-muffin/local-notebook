@@ -14,7 +14,9 @@ class QSpinBox;
 class QWidget;
 
 namespace lnb {
-class Application;
+namespace api {
+class interface;
+}
 }
 
 namespace ui {
@@ -30,7 +32,10 @@ class ConversationView;
 // session_id().
 class SessionEditor : public QDialog {
 public:
-  SessionEditor(lnb::Application& app, std::uint32_t session_id, QWidget* parent = nullptr);
+  SessionEditor(
+      lnb::api::interface& api, std::uint32_t session_id,
+      QWidget* parent = nullptr
+  );
 
   [[nodiscard]] std::uint32_t session_id() const { return session_id_; }
 
@@ -55,7 +60,7 @@ private:
   // conversation view) and reloads the persisted memory when it finishes.
   void summarize_now();
 
-  lnb::Application& app_;
+  lnb::api::interface& api_;
 
   // 0 while creating; the stored id once the session exists.
   std::uint32_t session_id_ = 0;

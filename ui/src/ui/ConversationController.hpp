@@ -30,6 +30,11 @@ public:
 
   [[nodiscard]] std::uint32_t session_id() const { return session_id_; }
 
+  // The task the controller is polling, or nullptr before the first send. It
+  // is shared with the interface, so the window can identify which task belongs
+  // to which session for the running-task readout.
+  [[nodiscard]] std::shared_ptr<GenerationTask> task() const { return task_; }
+
   // The session as stored (a fresh read).
   [[nodiscard]] lnb::Session session() const;
 

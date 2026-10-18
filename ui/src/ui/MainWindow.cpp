@@ -26,9 +26,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "app/application.hpp"
-#include "app/task_manager.hpp"
-#include "net/client.hpp"
+#include "local-notebook-core/interface.hpp"
+#include "settings/settings.hpp"
 #include "support/i18n.hpp"
 #include "ui/ConversationView.hpp"
 #include "ui/SessionItemDelegate.hpp"
@@ -60,12 +59,6 @@ constexpr int kBandHeight = 38;
 // The status bar's height. It is a touch shorter than the title bar, so it reads
 // as a status strip rather than a second header.
 constexpr int kStatusBarHeight = 26;
-
-// How many recent messages are read to estimate the conversation's token
-// usage. Reading the whole transcript on every header refresh would be
-// wasteful, and the count only needs the messages above the watermark — which
-// the collapse keeps within a trigger's worth — so the newest page suffices.
-constexpr std::size_t kContextSampleMessages = 400;
 
 QString from_utf8(const std::string& value) {
   return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
@@ -115,16 +108,19 @@ QString format_time(const std::optional<std::string>& iso) {
 
 } // namespace
 
-MainWindow::MainWindow(lnb::Application& app, QWidget* parent)
+MainWindow::MainWindow(
+    lnb::api::interface& api, lnb::Settings& settings, QWidget* parent
+)
     : BackgroundWidget(parent, /*use_background_image=*/true),
-      app_(app) {
+      api_(api),
+      settings_(settings) {
   setWindowTitle(QStringLiteral("Local Notebook"));
   resize(1080, 720);
   setMinimumSize(720, 480);
 
-  if (app_.settings().geometry.has_value()) {
+  if (settings_.geometry.has_value()) {
     restoreGeometry(QByteArray::fromBase64(
-        QByteArray::fromStdString(*app_.settings().geometry)
+        QByteArray::fromStdString(*settings_.geometry)
     ));
   }
 
@@ -135,7 +131,8 @@ MainWindow::MainWindow(lnb::Application& app, QWidget* parent)
   refresh_sessions();
 
   // Open the most recent session so the app is useful immediately.
-  const std::vector<lnb::Session> sessions = app_.sessions().most_recent(kSessionListLimit);
+  const std::vector<lnb::Session> sessions =
+      api_.recent_sessions(kSessionListLimit);
   if (!sessions.empty()) {
     open_conversation(sessions.front().id_);
   } else {
@@ -163,8 +160,8 @@ void MainWindow::closeEvent(QCloseEvent* event) {
   }
 
   // Persist the window geometry for the next launch.
-  app_.settings().geometry = saveGeometry().toBase64().toStdString();
-  app_.save_settings();
+  settings_.geometry = saveGeometry().toBase64().toStdString();
+  lnb::save_settings(settings_);
 
   BackgroundWidget::closeEvent(event);
 }
@@ -677,12 +674,12 @@ void MainWindow::refresh_sessions() {
     return;
   }
 
-  std::vector<lnb::Session> sessions = app_.sessions().most_recent(kSessionListLimit);
+  std::vector<lnb::Session> sessions = api_.recent_sessions(kSessionListLimit);
 
   // The newest message time of every session, in one query, aligned with the
   // ordered snapshot for the rows' second line.
   const std::unordered_map<std::uint32_t, std::string> last_times =
-      app_.db().session_last_times();
+      api_.session_last_times();
 
   // Split into the two categories. most_recent() already returns pinned sessions
   // first and each group keeps its newest-message order, so no extra sort is
@@ -730,11 +727,9 @@ void MainWindow::refresh_sessions() {
     }
 
     workspace_->removeWidget(it->second);
+    it->second->cancel();
     it->second->deleteLater();
     conversations_.erase(it);
-
-    // The session is gone, so its task has no row to appear on any more.
-    app_.tasks().forget_session(id);
 
     if (current_session_ == id) {
       current_session_ = 0;
@@ -816,13 +811,13 @@ ConversationView* MainWindow::ensure_conversation_view(std::uint32_t session_id)
     return existing->second;
   }
 
-  const auto session = app_.db().session(session_id);
+  const auto session = api_.session(session_id);
 
   if (!session.has_value()) {
     return nullptr;
   }
 
-  auto* view = new ConversationView(app_, session_id, workspace_);
+  auto* view = new ConversationView(api_, settings_, session_id, workspace_);
   view->set_on_changed([this]() {
     refresh_sessions();
     update_header();
@@ -879,7 +874,7 @@ void MainWindow::open_conversation(std::uint32_t session_id) {
 }
 
 void MainWindow::new_session() {
-  SessionEditor editor(app_, 0, this);
+  SessionEditor editor(api_, 0, this);
 
   if (editor.exec() != QDialog::Accepted) {
     return;
@@ -894,7 +889,7 @@ void MainWindow::new_session() {
 
 void MainWindow::open_settings() {
   if (settings_window_ == nullptr) {
-    settings_window_ = new SettingsWindow(app_, this);
+    settings_window_ = new SettingsWindow(api_, settings_, this);
 
     // A theme change must restyle this window's hand-painted chrome and the
     // transcript on screen; an assistant change can move the context budget, so
@@ -923,9 +918,17 @@ void MainWindow::open_settings() {
 
       // The assistant and session summary budgets may have moved, so the cached
       // assistant trigger and every composer's primary action are re-evaluated.
-      app_.mark_assistant_summary_stale();
-      last_assistant_due_ = app_.assistant_summary_due();
-      last_assistant_busy_ = app_.tasks().assistant_busy();
+      api_.mark_assistant_summary_stale();
+      last_assistant_due_ = api_.assistant_summary_due();
+
+      const std::shared_ptr<lnb::GenerationTask> current = api_.current_task();
+      last_assistant_busy_ = current != nullptr && !current->is_terminal() &&
+          std::none_of(
+              conversations_.begin(), conversations_.end(),
+              [&current](const auto& entry) {
+                return entry.second != nullptr && entry.second->task() == current;
+              }
+          );
 
       for (auto& [id, view] : conversations_) {
         if (view != nullptr) {
@@ -963,8 +966,22 @@ void MainWindow::poll_conversations() {
   // sending in every session until it finishes. The application caches the
   // trigger, so this is a cheap compare; the views are asked to re-evaluate only
   // when one of the two flags actually flips.
-  const bool assistant_due = app_.assistant_summary_due();
-  const bool assistant_busy = app_.tasks().assistant_busy();
+  const bool assistant_due = api_.assistant_summary_due();
+
+  // "Busy" here means the shared assistant fold, not a session turn: a session
+  // turn already disables every composer through api_.busy(), and querying the
+  // session trigger while that turn writes the database is unnecessary.
+  const std::shared_ptr<lnb::GenerationTask> current = api_.current_task();
+  bool assistant_busy = false;
+
+  if (current != nullptr && !current->is_terminal()) {
+    assistant_busy = std::none_of(
+        views.begin(), views.end(),
+        [&current](ConversationView* view) {
+          return view != nullptr && view->task() == current;
+        }
+    );
+  }
 
   if (assistant_due != last_assistant_due_ || assistant_busy != last_assistant_busy_) {
     last_assistant_due_ = assistant_due;
@@ -1014,9 +1031,36 @@ void MainWindow::update_task_indicator() {
     return;
   }
 
-  // The status bar counts the tasks whose workers are still running. This costs
-  // nothing: it never touches the database.
-  const int running = static_cast<int>(app_.tasks().running_count());
+  // Count the running tasks without touching the database: this runs on every
+  // poll tick, while the full entry list is only built for a visible window.
+  const std::shared_ptr<lnb::GenerationTask> current = api_.current_task();
+  bool current_is_view = false;
+  int running = 0;
+
+  for (const auto& [id, view] : conversations_) {
+    if (view == nullptr) {
+      continue;
+    }
+
+    const std::shared_ptr<lnb::GenerationTask> task = view->task();
+
+    if (task == nullptr) {
+      continue;
+    }
+
+    if (task == current) {
+      current_is_view = true;
+    }
+
+    if (view->busy()) {
+      ++running;
+    }
+  }
+
+  // The shared assistant fold is not owned by any session view.
+  if (current != nullptr && !current_is_view && !current->is_terminal()) {
+    ++running;
+  }
 
   if (running != shown_task_count_) {
     shown_task_count_ = running;
@@ -1032,57 +1076,77 @@ void MainWindow::update_task_indicator() {
   }
 
   // Only build (and refresh) the full list while the window is on screen, so a
-  // hidden one costs nothing.
+  // hidden one costs nothing — in particular, no per-session database reads.
   if (tasks_window_ == nullptr || !tasks_window_->isVisible()) {
     return;
   }
 
-  // One entry per occupied slot, straight from the manager: every task — turns,
-  // session folds and the shared assistant fold — is listed, with no widget
-  // deciding what shows.
+  const auto describe = [](lnb::GenerationTask::Status status) -> QString {
+    switch (status) {
+      case lnb::GenerationTask::Status::PENDING:
+      case lnb::GenerationTask::Status::RUNNING:
+        return trs("Running");
+      case lnb::GenerationTask::Status::FAILED:
+        return trs("Failed");
+      case lnb::GenerationTask::Status::CANCELLED:
+        return trs("Cancelled");
+      default:
+        return trs("Completed");
+    }
+  };
+
+  // One entry per session view that has a task (running or the last finished
+  // one), plus the shared assistant fold when it is not owned by a view. The
+  // interface runs one task at a time, so a finished view task stays visible
+  // until the next turn replaces it.
   std::vector<TasksWindow::Entry> entries;
 
-  for (const std::shared_ptr<lnb::Task>& task : app_.tasks().active_tasks()) {
-    if (task == nullptr) {
+  for (const auto& [id, view] : conversations_) {
+    if (view == nullptr) {
       continue;
     }
 
-    TasksWindow::Entry entry;
-    entry.id = task->id();
-    entry.session_id = task->session_id();
-    entry.running = !task->terminal();
-    entry.cancellable = !task->terminal();
-
-    if (entry.session_id == 0) {
-      // The shared assistant memory has no session of its own.
-      entry.title = trs("Assistant memory");
-    } else {
-      const auto session = app_.db().session(entry.session_id);
-      entry.title = session.has_value() && !session->title_.empty()
-          ? from_utf8(session->title_)
-          : trs("Session #%1").arg(entry.session_id);
+    if (view->task() == nullptr) {
+      continue;
     }
 
-    const lnb::GenerationTask::Snapshot snapshot = task->snapshot();
+    const bool busy = view->busy();
+
+    TasksWindow::Entry entry;
+    entry.id = id;
+    entry.session_id = id;
+    entry.running = busy;
+    entry.cancellable = busy;
+
+    const auto session = api_.session(id);
+    entry.title = session.has_value() && !session->title_.empty()
+        ? from_utf8(session->title_)
+        : trs("Session #%1").arg(id);
+
+    const lnb::GenerationTask::Snapshot snapshot = view->last_snapshot();
     entry.rounds = snapshot.rounds;
     entry.elapsed_ms = snapshot.elapsed_ms;
     entry.error = from_utf8(snapshot.error);
+    entry.state = describe(snapshot.status);
 
-    switch (snapshot.status) {
-      case lnb::GenerationTask::Status::PENDING:
-      case lnb::GenerationTask::Status::RUNNING:
-        entry.state = trs("Running");
-        break;
-      case lnb::GenerationTask::Status::FAILED:
-        entry.state = trs("Failed");
-        break;
-      case lnb::GenerationTask::Status::CANCELLED:
-        entry.state = trs("Cancelled");
-        break;
-      default:
-        entry.state = trs("Completed");
-        break;
-    }
+    entries.push_back(std::move(entry));
+  }
+
+  if (current != nullptr && !current_is_view) {
+    const bool busy = !current->is_terminal();
+
+    TasksWindow::Entry entry;
+    entry.id = 0;
+    entry.session_id = 0;
+    entry.running = busy;
+    entry.cancellable = busy;
+    entry.title = trs("Assistant memory");
+
+    const lnb::GenerationTask::Snapshot snapshot = current->snapshot();
+    entry.rounds = snapshot.rounds;
+    entry.elapsed_ms = snapshot.elapsed_ms;
+    entry.error = from_utf8(snapshot.error);
+    entry.state = describe(snapshot.status);
 
     entries.push_back(std::move(entry));
   }
@@ -1097,13 +1161,30 @@ void MainWindow::open_tasks_window() {
     // The log is only composed when the reader opens a task, so a hidden window
     // never pays for the (potentially large) request bodies it recorded.
     tasks_window_->set_log_provider([this](std::uint64_t id) -> QString {
-      return from_utf8(app_.tasks().log_text(id));
+      if (id == 0) {
+        const auto task = api_.current_task();
+        return task != nullptr ? from_utf8(task->log_text()) : QString();
+      }
+
+      const auto it = conversations_.find(static_cast<std::uint32_t>(id));
+      return it != conversations_.end() && it->second != nullptr
+          ? from_utf8(it->second->task_log())
+          : QString();
     });
 
     // A running task can be stopped from here. This is the only place a shared
     // assistant fold can be cancelled: the session composer never offers it.
     tasks_window_->set_cancel_handler([this](std::uint64_t id) {
-      app_.tasks().cancel(id);
+      if (id == 0) {
+        api_.cancel_generation();
+      } else {
+        const auto it = conversations_.find(static_cast<std::uint32_t>(id));
+
+        if (it != conversations_.end() && it->second != nullptr) {
+          it->second->cancel();
+        }
+      }
+
       update_task_indicator();
     });
   }
@@ -1122,7 +1203,7 @@ void MainWindow::pin_session(std::uint32_t session_id) {
     return;
   }
 
-  const auto stored = app_.db().session(session_id);
+  const auto stored = api_.session(session_id);
 
   if (!stored.has_value()) {
     return;
@@ -1130,7 +1211,7 @@ void MainWindow::pin_session(std::uint32_t session_id) {
 
   lnb::Session updated = *stored;
   updated.pinned_ = !updated.pinned_;
-  app_.sessions().save(updated);
+  api_.save_session(updated);
 
   refresh_sessions();
 }
@@ -1140,7 +1221,7 @@ void MainWindow::edit_session(std::uint32_t session_id) {
     return;
   }
 
-  SessionEditor editor(app_, session_id, this);
+  SessionEditor editor(api_, session_id, this);
 
   // A manual "Summarize now" runs as the session's own background task, so it
   // shows up in the tasks window like any other turn and can never race a
@@ -1180,17 +1261,16 @@ void MainWindow::delete_session(std::uint32_t session_id) {
     return;
   }
 
-  app_.db().remove_session(session_id);
+  api_.delete_session(session_id);
   // A removed session's messages no longer contribute to the assistant trigger,
   // and its task has no row to appear on any more.
-  app_.tasks().forget_session(session_id);
-  app_.mark_assistant_summary_stale();
+  api_.mark_assistant_summary_stale();
   refresh_sessions();
   update_header();
 }
 
 void MainWindow::update_header() {
-  const auto session = app_.db().session(current_session_);
+  const auto session = api_.session(current_session_);
 
   if (!session.has_value()) {
     // No session open: the conversation info is simply absent; the banner on the
@@ -1204,10 +1284,7 @@ void MainWindow::update_header() {
 
   header_subtitle_->setText(trs("Session #%1").arg(session->id_));
 
-  const std::vector<lnb::Message> sample =
-      app_.db().recent_messages(current_session_, kContextSampleMessages);
-  const lnb::net::ContextUsage usage =
-      lnb::net::context_usage(*session, sample);
+  const lnb::api::ContextUsage usage = api_.context_usage(current_session_);
 
   header_summarization_trigger_->setText(trs("summarisation trigger: ") + format_tokens(usage.used_tokens, usage.limit_tokens));
   header_summarization_trigger_->setToolTip(
@@ -1217,11 +1294,11 @@ void MainWindow::update_header() {
           .arg(usage.limit_tokens)
   );
 
-  header_time_->setText(format_time(app_.db().last_message_time(current_session_)));
+  header_time_->setText(format_time(api_.last_message_time(current_session_)));
 }
 
 void MainWindow::update_current_block() {
-  const lnb::Assistant& assistant = app_.assistant();
+  const lnb::Assistant assistant = api_.assistant();
 
   const QString name = from_utf8(assistant.name_);
   current_name_->setText(name.isEmpty() ? trs("Assistant") : name);

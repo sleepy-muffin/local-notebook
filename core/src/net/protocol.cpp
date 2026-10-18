@@ -259,7 +259,11 @@ std::string normalize_base_url(const std::string& url) {
 }
 
 bool is_valid_base_url(const std::string& url) {
-  const auto result = boost::urls::parse_uri(trim(url));
+  // parse_uri returns a view over the input, so the trimmed string must outlive
+  // it. Parsing a temporary here leaves `result` pointing at freed storage and
+  // makes scheme()/host()/path() return garbage.
+  const std::string text = trim(url);
+  const auto result = boost::urls::parse_uri(text);
 
   if (!result) {
     return false;
@@ -280,10 +284,12 @@ bool is_valid_base_url(const std::string& url) {
     return false;
   }
 
-  std::string_view path = view.path();
+  // `path()` decodes percent-escapes and returns a temporary string, so it must
+  // be owned here rather than bound to a `string_view`.
+  std::string path = view.path();
 
-  while (path.ends_with('/')) {
-    path.remove_suffix(1);
+  while (!path.empty() && path.back() == '/') {
+    path.pop_back();
   }
 
   return path.ends_with("/v1");

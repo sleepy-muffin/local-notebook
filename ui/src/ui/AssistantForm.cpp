@@ -13,7 +13,8 @@
 #include <optional>
 #include <string>
 
-#include "net/protocol.hpp"
+#include "local-notebook-core/interface.hpp"
+#include "local-notebook-core/model.hpp"
 #include "support/i18n.hpp"
 #include "ui/dialog_style.hpp"
 
@@ -147,9 +148,44 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
     proxy_ = new QLineEdit(this);
     proxy_->setPlaceholderText(trs("Optional"));
 
+    // Request windows live with the connection because they describe how long a
+    // silent socket is tolerated, not how much context is sent. A turn and a
+    // summarisation pass legitimately need different windows.
+    turn_timeout_ = make_spin(this, 180);
+    turn_timeout_->setObjectName(QStringLiteral("AssistantTurnTimeout"));
+    turn_timeout_->setRange(30, 3600);
+    turn_timeout_->setSingleStep(30);
+    turn_timeout_->setSuffix(QStringLiteral(" s"));
+    turn_timeout_->setToolTip(
+        trs("Maximum silence, in seconds, while a chat turn streams its reply.")
+    );
+
+    summary_timeout_ = make_spin(this, 420);
+    summary_timeout_->setObjectName(QStringLiteral("AssistantSummaryTimeout"));
+    summary_timeout_->setRange(30, 7200);
+    summary_timeout_->setSingleStep(60);
+    summary_timeout_->setSuffix(QStringLiteral(" s"));
+    summary_timeout_->setToolTip(
+        trs("Maximum silence, in seconds, while a session or assistant "
+            "summarisation runs. Reasoning models often need longer.")
+    );
+
     form->addRow(field_label(this, trs("API URL")), api_url_);
     form->addRow(field_label(this, trs("Token")), token_);
     form->addRow(field_label(this, trs("Proxy")), proxy_);
+    form->addRow(field_label(this, trs("Turn timeout")), turn_timeout_);
+    form->addRow(
+        field_label(this, trs("Summarisation timeout")), summary_timeout_
+    );
+    form->addRow(
+        QString(), field_label(this, trs(
+                       "Seconds a request may wait for the next response byte "
+                       "before it is abandoned. Chat turns use the turn timeout; "
+                       "session and assistant summarisation use the summarisation "
+                       "timeout. Connecting and uploading keep a fixed 60-second "
+                       "window."
+                   ))
+    );
     content->addLayout(form);
   }
 
@@ -249,6 +285,10 @@ void AssistantForm::set_assistant(const lnb::Assistant& assistant) {
   proxy_->setText(
       assistant.proxy_.has_value() ? to_qstring(*assistant.proxy_) : QString()
   );
+  turn_timeout_->setValue(static_cast<int>(assistant.turn_timeout_seconds_));
+  summary_timeout_->setValue(
+      static_cast<int>(assistant.summary_timeout_seconds_)
+  );
   instructions_->setPlainText(to_qstring(assistant.custom_instructions_));
 
   summary_token_budget_->setValue(static_cast<int>(assistant.summary_token_budget_));
@@ -277,7 +317,7 @@ void AssistantForm::write_into(lnb::Assistant& assistant) const {
   const std::string url_text = api_url_->text().trimmed().toStdString();
   assistant.api_url_ = url_text.empty()
       ? std::string{}
-      : lnb::net::normalize_base_url(lnb::net::ensure_scheme(url_text));
+      : lnb::api::normalize_base_url(lnb::api::ensure_scheme(url_text));
 
   assistant.protocol_ = static_cast<lnb::net::ApiProtocol>(
       protocol_->currentData().toInt()
@@ -288,6 +328,11 @@ void AssistantForm::write_into(lnb::Assistant& assistant) const {
   assistant.proxy_ = proxy.isEmpty()
       ? std::nullopt
       : std::optional<std::string>(proxy.toStdString());
+
+  assistant.turn_timeout_seconds_ =
+      static_cast<std::size_t>(turn_timeout_->value());
+  assistant.summary_timeout_seconds_ =
+      static_cast<std::size_t>(summary_timeout_->value());
 
   assistant.custom_instructions_ = instructions_->toPlainText().toStdString();
 
@@ -304,11 +349,11 @@ void AssistantForm::write_into(lnb::Assistant& assistant) const {
 bool AssistantForm::validate_base_url(QString& error) const {
   // The stored base is passed through the same completion a focus-out performs,
   // so typing "example.com/v1" validates as "https://example.com/v1".
-  const std::string url = lnb::net::ensure_scheme(
+  const std::string url = lnb::api::ensure_scheme(
       api_url_->text().trimmed().toStdString()
   );
 
-  if (!lnb::net::is_valid_base_url(url)) {
+  if (!lnb::api::is_valid_base_url(url)) {
     error = trs("The API URL must be an http:// or https:// base ending in /v1, "
                 "for example https://api.example.com/v1.");
     return false;
@@ -323,10 +368,10 @@ void AssistantForm::rebuild_reasoning(const QString& preferred) {
 
   // An empty selection (a fresh form) starts on the model's first available level.
   const std::string target =
-      wanted.empty() ? lnb::net::default_reasoning_effort(model) : wanted;
+      wanted.empty() ? lnb::api::reasoning_default_for(model) : wanted;
 
   const std::vector<std::string> efforts =
-      lnb::net::reasoning_efforts_with_stored(model, target);
+      lnb::api::reasoning_levels_for(model, target);
 
   // Rebuilding the list would otherwise emit spurious change signals.
   const QSignalBlocker blocker(reasoning_);
@@ -352,7 +397,7 @@ bool AssistantForm::eventFilter(QObject* watched, QEvent* event) {
       // Completing the scheme is a visible, explicit edit: the field now shows
       // exactly the base that will be stored.
       api_url_->setText(
-          to_qstring(lnb::net::ensure_scheme(text.toStdString()))
+          to_qstring(lnb::api::ensure_scheme(text.toStdString()))
       );
     }
   }

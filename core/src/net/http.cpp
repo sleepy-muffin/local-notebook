@@ -193,18 +193,31 @@ public:
     while (!done()) {
       if (stop_.stop_requested()) {
         cancel_();
-        ioc_.run_for(std::chrono::milliseconds(50));
+        run_slice();
         throw std::runtime_error("Generation cancelled");
       }
 
       if (std::chrono::steady_clock::now() > deadline) {
         cancel_();
-        ioc_.run_for(std::chrono::milliseconds(50));
+        run_slice();
         throw std::runtime_error("HTTP request timed out");
       }
 
-      ioc_.run_for(std::chrono::milliseconds(50));
+      run_slice();
     }
+  }
+
+private:
+  // `run_for` leaves the context stopped once it runs out of work. This class is
+  // used for every step of a request over one shared io_context, so without the
+  // restart the second and later steps return immediately: the loop then spins
+  // at 100% CPU until the deadline and reports a bogus timeout.
+  void run_slice() {
+    if (ioc_.stopped()) {
+      ioc_.restart();
+    }
+
+    ioc_.run_for(std::chrono::milliseconds(50));
   }
 
 private:
@@ -463,6 +476,14 @@ beast::tcp_stream connect_stream(
     );
   }
 
+  // `expires_after` above armed Beast's internal timer for the connect
+  // operation, and Beast does not disarm it once that operation finishes. The
+  // expiry is an absolute deadline, so leaving it armed would abort the first
+  // read or write that happens after connect+timeout — even when the caller
+  // passed a much longer read window. Every later phase is already bounded by
+  // `pump`, which also observes cancellation, so disable the Beast timer now.
+  stream.expires_never();
+
   if (proxy != nullptr) {
     if (proxy->type == Proxy::Type::Socks5) {
       socks5_handshake(stream.socket(), target, *proxy, ioc, stop, timeout_ms);
@@ -487,9 +508,9 @@ template<typename Stream>
 int do_request(
     Stream& stream, const parsed_url& target, std::string_view method,
     const std::vector<HttpHeader>& headers, const std::string& body,
-    bool absolute_form, std::stop_token stop, int timeout_ms,
-    const ResponseHandler& on_response, const BodyHandler& on_body,
-    asio::io_context& ioc
+    bool absolute_form, std::stop_token stop, int write_timeout_ms,
+    int read_timeout_ms, const ResponseHandler& on_response,
+    const BodyHandler& on_body, asio::io_context& ioc
 ) {
   http::request<http::string_body> request;
   request.method(verb_for(method));
@@ -515,7 +536,7 @@ int do_request(
       }
   );
 
-  pump(ioc, stop, timeout_ms, cancel_for(stream)).run([&] { return done; });
+  pump(ioc, stop, write_timeout_ms, cancel_for(stream)).run([&] { return done; });
 
   if (error) {
     throw std::runtime_error("HTTP write failed: " + error.message());
@@ -536,7 +557,7 @@ int do_request(
       }
   );
 
-  pump(ioc, stop, timeout_ms, cancel_for(stream)).run([&] { return done; });
+  pump(ioc, stop, read_timeout_ms, cancel_for(stream)).run([&] { return done; });
 
   if (error) {
     throw std::runtime_error("HTTP read failed: " + error.message());
@@ -573,7 +594,7 @@ int do_request(
         }
     );
 
-    pump(ioc, stop, timeout_ms, cancel_for(stream)).run([&] { return done; });
+    pump(ioc, stop, read_timeout_ms, cancel_for(stream)).run([&] { return done; });
 
     const std::size_t produced = chunk.size() - parser.get().body().size;
 
@@ -605,13 +626,19 @@ int http_request(
     const std::optional<std::string>& proxy_spec,
     const std::vector<HttpHeader>& headers, const std::string& body,
     std::stop_token stop, const ResponseHandler& on_response,
-    const BodyHandler& on_body, int inactivity_timeout_ms, int max_redirects
+    const BodyHandler& on_body, int inactivity_timeout_ms, int max_redirects,
+    int read_timeout_ms
 ) {
   std::optional<Proxy> proxy;
 
   if (proxy_spec.has_value() && !proxy_spec->empty()) {
     proxy = parse_proxy(*proxy_spec);
   }
+
+  // A zero read window means the caller wants the transport window for both
+  // phases, preserving the previous single-timeout behaviour.
+  const int response_timeout_ms =
+      read_timeout_ms > 0 ? read_timeout_ms : inactivity_timeout_ms;
 
   std::string current = url;
 
@@ -676,12 +703,14 @@ int http_request(
 
       status = do_request(
           tls, target, method, headers, body, false, stop,
-          inactivity_timeout_ms, response_handler, on_body, ioc
+          inactivity_timeout_ms, response_timeout_ms, response_handler, on_body,
+          ioc
       );
     } else {
       status = do_request(
           plain, target, method, headers, body, absolute_form, stop,
-          inactivity_timeout_ms, response_handler, on_body, ioc
+          inactivity_timeout_ms, response_timeout_ms, response_handler, on_body,
+          ioc
       );
     }
 
@@ -697,12 +726,30 @@ int http_request(
 
 std::string http_get_body(
     const std::string& url, const std::optional<std::string>& proxy, int max_bytes,
-    std::stop_token stop
+    std::stop_token stop, const std::vector<HttpHeader>& extra_headers
 ) {
-  const std::vector<HttpHeader> headers{
+  std::vector<HttpHeader> headers{
       {"User-Agent", "Mozilla/5.0 (compatible; local-notebook/1.0)"},
       {"Accept", "text/html,application/xhtml+xml,text/plain"},
   };
+
+  // A caller-supplied header replaces the default of the same name rather than
+  // producing a duplicate (which some servers treat as malformed).
+  for (const HttpHeader& extra: extra_headers) {
+    bool replaced = false;
+
+    for (HttpHeader& header: headers) {
+      if (equals_ignore_case(header.name, extra.name)) {
+        header = extra;
+        replaced = true;
+        break;
+      }
+    }
+
+    if (!replaced) {
+      headers.push_back(extra);
+    }
+  }
 
   std::string body;
   bool keep = false;

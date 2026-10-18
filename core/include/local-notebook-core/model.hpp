@@ -85,6 +85,13 @@ public:
   std::optional<std::string> proxy_;
   std::string memory_;  // generated cross-session memory
 
+  // Request windows, in seconds. A streaming turn may wait this long for the
+  // next response byte before the request is abandoned; summarisation gets its
+  // own, longer window because a reasoning model can stay silent while folding
+  // a large transcript. Both live in the assistant's settings.json.
+  std::size_t turn_timeout_seconds_ = 180;
+  std::size_t summary_timeout_seconds_ = 420;
+
   // The wire protocol this assistant talks. Responses is the default for every
   // assistant, including ones created before the switch existed, because it is
   // the only endpoint that supports tool calling for the GPT-6 family.

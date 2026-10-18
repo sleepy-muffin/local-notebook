@@ -2,6 +2,7 @@
 
 #include "net/http.hpp"
 #include "net/search.hpp"
+#include "net/search_results.hpp"
 
 #include <boost/json/parse.hpp>
 #include <boost/json/value.hpp>
@@ -441,10 +442,17 @@ std::string html_to_text(const std::string& html) {
           boost::regex_constants::mod_s
   );
   static const boost::regex tag("<[^>]*>", boost::regex_constants::perl);
+  // Stripping adjacent tags leaves runs of spaces ("<b>x</b> y" becomes
+  // " x  y"); collapse those without touching newlines, which carry the
+  // paragraph structure of a fetched page.
+  static const boost::regex space_run(
+      "[ \\t]{2,}", boost::regex_constants::perl
+  );
 
   std::string text = boost::regex_replace(html, script, " ");
   text = boost::regex_replace(text, style, " ");
   text = boost::regex_replace(text, tag, " ");
+  text = boost::regex_replace(text, space_run, " ");
 
   return trim(decode_entities(text));
 }
@@ -532,10 +540,256 @@ std::string resolve_ddg_url(const std::string& href) {
 
 } // namespace
 
+bool is_ddg_challenge(const std::string& html) {
+  const std::string lowered = to_lower(html);
+
+  // DuckDuckGo answers its bot-mitigation page with HTTP 202, so the response
+  // status cannot distinguish it from a result page. These markers are unique
+  // to that page ("anomaly" alone would also match a query for that word).
+  return lowered.find("anomaly-modal") != std::string::npos ||
+      lowered.find("bots use duckduckgo") != std::string::npos ||
+      lowered.find("select all squares containing a duck") != std::string::npos;
+}
+
+std::vector<SearchResult> parse_ddg_results(const std::string& html) {
+  const auto links = collect_marked(html, "result__a");
+  const auto snippets = collect_marked(html, "result__snippet");
+
+  std::vector<SearchResult> out;
+  out.reserve(links.size());
+
+  for (std::size_t i = 0; i < links.size(); ++i) {
+    SearchResult result;
+    result.title = links[i].text;
+    result.url = resolve_ddg_url(links[i].href);
+
+    if (result.title.empty() || result.url.empty()) {
+      continue;
+    }
+
+    if (i < snippets.size()) {
+      result.snippet = snippets[i].text;
+    }
+
+    out.push_back(std::move(result));
+  }
+
+  return out;
+}
+
+std::vector<SearchResult> parse_brave_results(const std::string& html) {
+  static const boost::regex anchor(
+      "<a\\b([^>]*)>(.*?)</a>",
+      boost::regex_constants::perl | boost::regex_constants::icase |
+          boost::regex_constants::mod_s
+  );
+  static const boost::regex title_tag(
+      "<[^>]*\\sclass\\s*=\\s*\"[^\"]*\\bsearch-snippet-title\\b[^\"]*\"[^>]*>",
+      boost::regex_constants::perl | boost::regex_constants::icase
+  );
+  static const boost::regex snippet_block(
+      "<div\\b[^>]*\\sclass\\s*=\\s*\"[^\"]*\\bgeneric-snippet\\b[^\"]*\""
+      "[^>]*>\\s*<div\\b[^>]*\\sclass\\s*=\\s*\"[^\"]*\\bcontent\\b"
+      "[^\"]*\"[^>]*>(.*?)</div>",
+      boost::regex_constants::perl | boost::regex_constants::icase |
+          boost::regex_constants::mod_s
+  );
+
+  struct Anchor {
+    std::string attributes;
+    std::string inner;
+    std::size_t begin = 0;
+    std::size_t end = 0;
+  };
+
+  std::vector<Anchor> anchors;
+
+  for (boost::sregex_iterator it(html.begin(), html.end(), anchor), end;
+       it != end; ++it) {
+    const boost::smatch& match = *it;
+    const std::size_t begin =
+        static_cast<std::size_t>(match.position());
+
+    anchors.push_back({
+        match[1].str(),
+        match[2].str(),
+        begin,
+        begin + static_cast<std::size_t>(match.length(0)),
+    });
+  }
+
+  // Only anchors wrapping a result title are results; the page has many other
+  // anchors (navigation, thumbnails, related queries).
+  std::vector<std::size_t> result_anchors;
+
+  for (std::size_t i = 0; i < anchors.size(); ++i) {
+    if (anchors[i].inner.find("search-snippet-title") != std::string::npos) {
+      result_anchors.push_back(i);
+    }
+  }
+
+  std::vector<SearchResult> out;
+  out.reserve(result_anchors.size());
+
+  for (std::size_t n = 0; n < result_anchors.size(); ++n) {
+    const Anchor& anchor = anchors[result_anchors[n]];
+
+    SearchResult result;
+    result.url = decode_entities(attribute(anchor.attributes, "href"));
+
+    if (result.url.starts_with("//")) {
+      result.url = "https:" + result.url;
+    }
+
+    if (!result.url.starts_with("http://") &&
+        !result.url.starts_with("https://")) {
+      continue;
+    }
+
+    const auto parsed = boost::urls::parse_uri(result.url);
+
+    if (parsed) {
+      const std::string host(parsed->host());
+
+      if (equals_ignore_case(host, "search.brave.com")) {
+        continue;
+      }
+    }
+
+    boost::smatch title_match;
+
+    if (boost::regex_search(anchor.inner, title_match, title_tag)) {
+      result.title = decode_entities(attribute(title_match.str(), "title"));
+    }
+
+    if (result.title.empty()) {
+      result.title = html_to_text(anchor.inner);
+    }
+
+    if (result.title.empty()) {
+      continue;
+    }
+
+    // The snippet follows the anchor. Scope it to the text before the next
+    // result anchor so one result cannot pick up the next result's snippet.
+    const std::size_t block_end = n + 1 < result_anchors.size()
+        ? anchors[result_anchors[n + 1]].begin
+        : html.size();
+
+    if (anchor.end < block_end) {
+      const std::string block = html.substr(anchor.end, block_end - anchor.end);
+      boost::smatch snippet_match;
+
+      if (boost::regex_search(block, snippet_match, snippet_block)) {
+        result.snippet = html_to_text(snippet_match[1].str());
+      }
+    }
+
+    out.push_back(std::move(result));
+  }
+
+  return out;
+}
+
+std::vector<SearchResult> parse_bing_rss(const std::string& xml) {
+  static const boost::regex item(
+      "<item\\b[^>]*>(.*?)</item>",
+      boost::regex_constants::perl | boost::regex_constants::icase |
+          boost::regex_constants::mod_s
+  );
+  static const boost::regex title_tag(
+      "<title\\b[^>]*>(.*?)</title>",
+      boost::regex_constants::perl | boost::regex_constants::icase |
+          boost::regex_constants::mod_s
+  );
+  static const boost::regex link_tag(
+      "<link\\b[^>]*>(.*?)</link>",
+      boost::regex_constants::perl | boost::regex_constants::icase |
+          boost::regex_constants::mod_s
+  );
+  static const boost::regex description_tag(
+      "<description\\b[^>]*>(.*?)</description>",
+      boost::regex_constants::perl | boost::regex_constants::icase |
+          boost::regex_constants::mod_s
+  );
+
+  // Reads one child element and unwraps a CDATA section when present, so the
+  // markup inside a description is not mistaken for XML tags.
+  const auto field = [](const std::string& block, const boost::regex& tag) {
+    boost::smatch match;
+
+    if (!boost::regex_search(block, match, tag)) {
+      return std::string{};
+    }
+
+    std::string value = match[1].str();
+    constexpr std::string_view kCdataOpen = "<![CDATA[";
+
+    if (value.starts_with(kCdataOpen)) {
+      const std::size_t close = value.rfind("]]>");
+
+      if (close != std::string::npos) {
+        value = value.substr(kCdataOpen.size(), close - kCdataOpen.size());
+      }
+    }
+
+    return value;
+  };
+
+  std::vector<SearchResult> out;
+
+  for (boost::sregex_iterator it(xml.begin(), xml.end(), item), end;
+       it != end; ++it) {
+    const std::string block = (*it)[1].str();
+
+    SearchResult result;
+    result.title = html_to_text(field(block, title_tag));
+    result.url = decode_entities(field(block, link_tag));
+    result.snippet = html_to_text(field(block, description_tag));
+
+    if (result.title.empty() || result.url.empty()) {
+      continue;
+    }
+
+    if (!result.url.starts_with("http://") &&
+        !result.url.starts_with("https://")) {
+      continue;
+    }
+
+    // The feed's own navigation links point back at Bing; they are not results.
+    const auto parsed = boost::urls::parse_uri(result.url);
+
+    if (parsed) {
+      const std::string host(parsed->host());
+
+      if (equals_ignore_case(host, "bing.com") ||
+          equals_ignore_case(host, "www.bing.com")) {
+        continue;
+      }
+    }
+
+    out.push_back(std::move(result));
+  }
+
+  return out;
+}
+
+// Public search and content endpoints reject non-browser clients: DuckDuckGo
+// serves its bot-challenge page to the plain `local-notebook` User-Agent that
+// `http_get_body` sends by default. These headers make the request look like an
+// ordinary page load, which is what keeps the HTML result pages readable.
+const std::vector<HttpHeader> kBrowserHeaders{
+    {"User-Agent",
+     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+     "Chrome/124.0 Safari/537.36"},
+    {"Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+    {"Accept-Language", "en-US,en;q=0.9"},
+};
+
 std::string http_get(
     const std::string& url, const std::optional<std::string>& proxy, int max_bytes
 ) {
-  return http_get_body(url, proxy, max_bytes);
+  return http_get_body(url, proxy, max_bytes, std::stop_token{}, kBrowserHeaders);
 }
 
 std::string fetch_url(
@@ -561,6 +815,40 @@ std::string fetch_url(
   return text;
 }
 
+namespace {
+
+constexpr std::size_t kMaxSearchResults = 8;
+
+// Renders parsed hits in the "Title / URL / snippet" shape the model expects.
+std::string format_search_results(const std::vector<SearchResult>& results) {
+  std::ostringstream out;
+  std::size_t count = 0;
+
+  for (const SearchResult& result: results) {
+    if (result.title.empty() || result.url.empty()) {
+      continue;
+    }
+
+    ++count;
+    out << count << ". " << result.title << '\n';
+    out << result.url << '\n';
+
+    if (!result.snippet.empty()) {
+      out << result.snippet << '\n';
+    }
+
+    out << '\n';
+
+    if (count == kMaxSearchResults) {
+      break;
+    }
+  }
+
+  return out.str();
+}
+
+} // namespace
+
 std::string web_search(
     const std::string& query, const std::optional<std::string>& proxy
 ) {
@@ -570,42 +858,79 @@ std::string web_search(
     throw std::runtime_error("A search query is required");
   }
 
-  const std::string url =
-      "https://html.duckduckgo.com/html/?q=" + url_encode(trimmed_query);
+  std::vector<std::string> failures;
 
-  const std::string html = http_get(url, proxy, kFetchBodyLimit);
+  // DuckDuckGo's HTML endpoint is the primary source, but it answers automated
+  // traffic with a bot-challenge page (HTTP 202), so a parsed page is the only
+  // reliable success signal.
+  try {
+    const std::string url =
+        "https://html.duckduckgo.com/html/?q=" + url_encode(trimmed_query);
+    const std::string html = http_get(url, proxy, kFetchBodyLimit);
 
-  const auto links = collect_marked(html, "result__a");
-  const auto snippets = collect_marked(html, "result__snippet");
+    if (is_ddg_challenge(html)) {
+      failures.emplace_back("DuckDuckGo returned a bot challenge");
+    } else {
+      const auto results = parse_ddg_results(html);
 
-  constexpr int kMaxResults = 8;
+      if (!results.empty()) {
+        return format_search_results(results);
+      }
+
+      failures.emplace_back("DuckDuckGo returned no parseable results");
+    }
+  } catch (const std::exception& error) {
+    failures.emplace_back(std::string("DuckDuckGo failed: ") + error.what());
+  }
+
+  // Bing's RSS feed is the second source. Unlike the HTML page it is designed
+  // for machine consumption, needs no JavaScript, and answers HTTP/1.1. The
+  // market parameters keep a geo-located proxy from returning local results.
+  try {
+    const std::string url = "https://www.bing.com/search?q=" +
+        url_encode(trimmed_query) +
+        "&format=rss&mkt=en-US&setlang=en-US&cc=US";
+    const std::string xml = http_get(url, proxy, kFetchBodyLimit);
+    const auto results = parse_bing_rss(xml);
+
+    if (!results.empty()) {
+      return format_search_results(results);
+    }
+
+    failures.emplace_back("Bing returned no parseable results");
+  } catch (const std::exception& error) {
+    failures.emplace_back(std::string("Bing failed: ") + error.what());
+  }
+
+  // Brave is kept last: it serves HTTP/2 normally but rate-limits (HTTP 429)
+  // many HTTP/1.1 clients, so it is the least reliable of the three here.
+  try {
+    const std::string url = "https://search.brave.com/search?q=" +
+        url_encode(trimmed_query) + "&source=web";
+    const std::string html = http_get(url, proxy, kFetchBodyLimit);
+    const auto results = parse_brave_results(html);
+
+    if (!results.empty()) {
+      return format_search_results(results);
+    }
+
+    failures.emplace_back("Brave returned no parseable results");
+  } catch (const std::exception& error) {
+    failures.emplace_back(std::string("Brave failed: ") + error.what());
+  }
 
   std::ostringstream out;
-  int count = 0;
+  out << "Web search failed (";
 
-  for (std::size_t i = 0; i < links.size() && count < kMaxResults; ++i) {
-    const std::string& title = links[i].text;
-    const std::string target = resolve_ddg_url(links[i].href);
-
-    if (title.empty() || target.empty()) {
-      continue;
+  for (std::size_t i = 0; i < failures.size(); ++i) {
+    if (i != 0) {
+      out << "; ";
     }
 
-    ++count;
-    out << count << ". " << title << '\n';
-    out << target << '\n';
-
-    if (i < snippets.size() && !snippets[i].text.empty()) {
-      out << snippets[i].text << '\n';
-    }
-
-    out << '\n';
+    out << failures[i];
   }
 
-  if (count == 0) {
-    return "No search results could be parsed. DuckDuckGo's HTML endpoint may be "
-           "unreachable or its markup changed; try fetch_url on a known URL.";
-  }
+  out << "). Try fetch_url on a known URL, or check the assistant's proxy settings.";
 
   return out.str();
 }

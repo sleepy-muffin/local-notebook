@@ -33,6 +33,12 @@ struct Remote {
   std::optional<std::string> proxy;
   std::string model;
   ApiProtocol protocol = ApiProtocol::Responses;
+
+  // Per-request read windows, in milliseconds, taken from the assistant's
+  // settings. `turn` bounds a chat turn; `summary` bounds a session or
+  // assistant summarisation pass, which may legitimately stay silent longer.
+  int turn_read_timeout_ms = 3 * 60'000;
+  int summary_read_timeout_ms = 7 * 60'000;
 };
 
 // The outcome of one streaming request. `assistant_message` is the exact

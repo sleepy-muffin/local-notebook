@@ -175,6 +175,15 @@ public:
     return controller_.progress();
   }
 
+  // The task the session's controller is polling, so the window can map it back
+  // to this view for the running-task readout.
+  [[nodiscard]] std::shared_ptr<lnb::GenerationTask> task() const {
+    return controller_.task();
+  }
+
+  // Requests the session's in-flight task to stop.
+  void cancel() { controller_.cancel(); }
+
   // Rebuilds the transcript from the database.
   void reload();
 

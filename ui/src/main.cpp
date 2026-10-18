@@ -1,19 +1,47 @@
 #include <QApplication>
 #include <QDialog>
+#include <QStandardPaths>
+#include <QStringList>
 
 #include <algorithm>
+#include <filesystem>
 #include <string>
 #include <vector>
 
-#include "app/application.hpp"
-#include "app/assistant_io.hpp"
-#include "app/data_location.hpp"
-#include "store/util.hpp"
+#include "local-notebook-core/interface.hpp"
+#include "mmc/log.hpp"
+#include "settings/settings.hpp"
 #include "support/i18n.hpp"
-#include "support/log.hpp"
 #include "ui/AssistantPicker.hpp"
 #include "ui/MainWindow.hpp"
 #include "ui/theme.hpp"
+
+namespace {
+
+// The per-user application data directory, or the --user-data override. This is
+// resolved in the UI because it is the only place that knows about Qt's
+// platform-specific locations; the core only receives the resulting root.
+std::filesystem::path resolve_data_root(const QStringList& arguments) {
+  for (int i = 1; i < arguments.size(); ++i) {
+    const QString& argument = arguments.at(i);
+
+    if (argument == QStringLiteral("--user-data") && i + 1 < arguments.size()) {
+      return arguments.at(i + 1).toStdString();
+    }
+
+    if (argument.startsWith(QStringLiteral("--user-data="))) {
+      return argument.mid(12).toStdString();
+    }
+  }
+
+  const QString location =
+      QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+
+  return location.isEmpty() ? std::filesystem::path{"data"}
+                            : std::filesystem::path{location.toStdString()};
+}
+
+} // namespace
 
 int main(int argc, char** argv) {
   QApplication app(argc, argv);
@@ -25,50 +53,52 @@ int main(int argc, char** argv) {
   QApplication::setWindowIcon(ui::application_icon());
 
   // Point the whole on-disk tree at the per-user application data directory, or at
-  // the --user-data override. This must run before the Application reads the
-  // global settings.
-  lnb::store::paths::set_data_root(lnb::app::resolve_data_root(app.arguments()));
-  lnb::log::info("data root: {}", lnb::store::paths::data_root().string());
+  // the --user-data override. This must run before the settings are read.
+  lnb::api::set_data_root(resolve_data_root(app.arguments()));
+  mmc::log::info("data root: {}", lnb::api::data_root().string());
 
-  lnb::Application notebook;
+  lnb::Settings settings = lnb::load_settings();
 
   // Select the stored UI language before any window is created, so every string
   // is looked up in the right language the first time it is built.
   lnb::i18n::set_language(
-      lnb::i18n::language_from_code(notebook.settings().language)
+      lnb::i18n::language_from_code(settings.language)
   );
 
   // Install the theme before any window is created.
-  ui::apply_theme(app, notebook.settings());
+  ui::apply_theme(app, settings);
+
+  lnb::api::interface api;
 
   // Reopen the last assistant when auto-login is on and it is still on disk;
   // otherwise ask.
-  const std::string last = notebook.settings().last_assistant;
+  const std::string last = settings.last_assistant;
   bool opened = false;
 
-  if (notebook.settings().auto_login && !last.empty()) {
-    const std::vector<std::string> uuids = lnb::store::scan_assistants();
+  if (settings.auto_login && !last.empty()) {
+    const std::vector<std::string> uuids = lnb::api::scan_assistants();
 
     if (std::find(uuids.begin(), uuids.end(), last) != uuids.end()) {
-      notebook.open_assistant(last, lnb::load_assistant(last));
+      api.open_assistant(last, lnb::api::load_assistant(last));
       opened = true;
     }
   }
 
   if (!opened) {
-    ui::AssistantPicker picker(notebook);
+    ui::AssistantPicker picker(api, settings);
 
     if (picker.exec() != QDialog::Accepted) {
       return 0;
     }
   }
 
-  ui::MainWindow window(notebook);
+  ui::MainWindow window(api, settings);
   window.show();
 
   const int code = app.exec();
 
-  notebook.shutdown();
-  lnb::log::debug("local-notebook exited with code {}", code);
+  lnb::save_settings(settings);
+  api.wait_for_generation();
+  mmc::log::debug("local-notebook exited with code {}", code);
   return code;
 }

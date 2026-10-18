@@ -22,10 +22,9 @@
 #include <optional>
 #include <string>
 
-#include "app/application.hpp"
-#include "net/client.hpp"
-#include "net/protocol.hpp"
+#include "local-notebook-core/interface.hpp"
 #include "local-notebook-core/generation_task.hpp"
+#include "local-notebook-core/model.hpp"
 #include "support/i18n.hpp"
 #include "ui/BackgroundWidget.hpp"
 #include "ui/ConversationView.hpp"
@@ -87,10 +86,10 @@ constexpr BudgetPreset kBudgetPresets[] = {
 } // namespace
 
 SessionEditor::SessionEditor(
-    lnb::Application& app, std::uint32_t session_id, QWidget* parent
+    lnb::api::interface& api, std::uint32_t session_id, QWidget* parent
 )
     : QDialog(parent),
-      app_(app),
+      api_(api),
       session_id_(session_id) {
   setObjectName(QStringLiteral("SessionEditor"));
   setWindowTitle(session_id == 0 ? trs("New Session") : trs("Edit Session"));
@@ -365,7 +364,7 @@ QWidget* SessionEditor::build_content() {
   const lnb::Session defaults;
 
   add_spin(
-      trs("Summary trigger"), static_cast<int>(defaults.summary_trigger_tokens_), 256,
+      trs("Summary trigger"), static_cast<int>(defaults.memory_trigger_tokens_), 256,
       2'000'000'000, 256, &summary_trigger_
   );
   add_spin(
@@ -406,7 +405,7 @@ QWidget* SessionEditor::build_content() {
 
 void SessionEditor::load_session() {
   if (session_id_ != 0) {
-    const auto stored = app_.db().session(session_id_);
+    const auto stored = api_.session(session_id_);
 
     if (stored.has_value()) {
       session_ = *stored;
@@ -421,7 +420,7 @@ void SessionEditor::load_session() {
   // the model's first available one); an existing row keeps the level it stores.
   // Either way an empty value resolves to the model's first available level.
   const std::string preferred = session_id_ == 0
-      ? app_.assistant().reasoning_effort_
+      ? api_.assistant().reasoning_effort_
       : session_.reasoning_effort_;
   populate_reasoning(preferred);
 
@@ -433,7 +432,7 @@ void SessionEditor::load_session() {
   assistant_watermark_->setValue(static_cast<int>(session_.assistant_memory_watermark_));
 
   summary_keep_->setValue(static_cast<int>(session_.summary_keep_tokens_));
-  summary_trigger_->setValue(static_cast<int>(session_.summary_trigger_tokens_));
+  summary_trigger_->setValue(static_cast<int>(session_.memory_trigger_tokens_));
   summary_budget_->setValue(static_cast<int>(session_.summary_token_budget_));
   summary_headroom_->setValue(static_cast<int>(session_.summary_reasoning_headroom_tokens_));
   response_budget_->setValue(static_cast<int>(session_.response_token_budget_));
@@ -450,13 +449,13 @@ void SessionEditor::populate_reasoning(const std::string& preferred) {
     return;
   }
 
-  const std::string model = app_.assistant().model_;
+  const std::string model = api_.assistant().model_;
   const std::string wanted = preferred;
   const std::string target =
-      wanted.empty() ? lnb::net::default_reasoning_effort(model) : wanted;
+      wanted.empty() ? lnb::api::reasoning_default_for(model) : wanted;
 
   const std::vector<std::string> efforts =
-      lnb::net::reasoning_efforts_with_stored(model, target);
+      lnb::api::reasoning_levels_for(model, target);
 
   const QSignalBlocker blocker(reasoning_);
   reasoning_->clear();
@@ -524,7 +523,7 @@ void SessionEditor::save_session() {
       static_cast<std::uint32_t>(assistant_watermark_->value());
 
   session.summary_keep_tokens_ = static_cast<std::size_t>(summary_keep_->value());
-  session.summary_trigger_tokens_ = static_cast<std::size_t>(summary_trigger_->value());
+  session.memory_trigger_tokens_ = static_cast<std::size_t>(summary_trigger_->value());
   session.summary_token_budget_ = static_cast<std::size_t>(summary_budget_->value());
   session.summary_reasoning_headroom_tokens_ =
       static_cast<std::size_t>(summary_headroom_->value());
@@ -535,10 +534,10 @@ void SessionEditor::save_session() {
   session.reasoning_effort_ = reasoning_->currentText().toStdString();
 
   if (session_id_ == 0) {
-    session_id_ = app_.sessions().create(session);
+    session_id_ = api_.create_session(session);
   } else {
     session.id_ = session_id_;
-    app_.sessions().save(session);
+    api_.save_session(session);
   }
 
   session_ = session;
@@ -554,12 +553,11 @@ void SessionEditor::summarize_now() {
   // while a turn is already in flight: the one-task-per-session model is what
   // guarantees a generation and a summarisation cannot touch the same session's
   // memory, watermark and messages at once.
-  if (conversation_view_->busy()) {
+  if (conversation_view_->busy() || api_.busy()) {
     QMessageBox::information(
         this, trs("Session Busy"),
         trs(
-            "This session is already running a task. Wait for it to finish, then "
-            "summarize."
+            "A task is already running. Wait for it to finish, then summarize."
         )
     );
     return;
@@ -633,7 +631,7 @@ void SessionEditor::summarize_now() {
 
   // The summariser persists the new memory; reload it so the box shows the result
   // and a later Save keeps the advanced watermark.
-  const auto updated = app_.db().session(session_id_);
+  const auto updated = api_.session(session_id_);
 
   if (!updated.has_value()) {
     return;

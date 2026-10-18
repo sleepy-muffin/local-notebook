@@ -58,7 +58,10 @@ bool ConversationController::track(std::shared_ptr<GenerationTask> task) {
 }
 
 bool ConversationController::send(std::string text) {
-  if (busy() || text.empty()) {
+  // The interface runs one task at a time. Refuse a send while any task is in
+  // flight (including another session's), so starting this turn cannot silently
+  // cancel that work.
+  if (busy() || api_.busy() || text.empty()) {
     return false;
   }
 
@@ -81,7 +84,7 @@ bool ConversationController::send(std::string text) {
 }
 
 void ConversationController::summarize() {
-  if (busy()) {
+  if (busy() || api_.busy()) {
     return;
   }
 
@@ -107,7 +110,7 @@ void ConversationController::summarize() {
 void ConversationController::summarize_session_now(
     lnb::SummaryApprover approver
 ) {
-  if (busy()) {
+  if (busy() || api_.busy()) {
     return;
   }
 

@@ -30,6 +30,11 @@ boost::json::object to_json(const Assistant& assistant) {
       : boost::json::value(nullptr);
   object["memory"] = assistant.memory_;
 
+  object["turn_timeout_seconds"] =
+      static_cast<std::uint64_t>(assistant.turn_timeout_seconds_);
+  object["summary_timeout_seconds"] =
+      static_cast<std::uint64_t>(assistant.summary_timeout_seconds_);
+
   // The wire protocol this assistant talks, and the reasoning level a new
   // session starts on. Both are written even when defaulted, so the file always
   // states the choice explicitly.
@@ -87,6 +92,13 @@ Assistant from_json(const boost::json::object& object) {
   }
 
   assistant.memory_ = string_or(object, "memory");
+
+  assistant.turn_timeout_seconds_ = size_or(
+      object, "turn_timeout_seconds", assistant.turn_timeout_seconds_
+  );
+  assistant.summary_timeout_seconds_ = size_or(
+      object, "summary_timeout_seconds", assistant.summary_timeout_seconds_
+  );
 
   // A missing `protocol` reads as Responses, so an assistant written before the
   // switch existed routes through the Responses API by default. The base URL is

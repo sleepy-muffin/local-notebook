@@ -4,6 +4,7 @@
 #include <exception>
 #include <filesystem>
 #include <mutex>
+#include <unordered_map>
 #include <utility>
 
 #include "app/assistant_io.hpp"
@@ -27,6 +28,26 @@ net::Remote remote_for(const Assistant& assistant) {
   remote.proxy = assistant.proxy_;
   remote.model = assistant.model_;
   remote.protocol = assistant.protocol_;
+
+  // The settings store seconds; the transport wants milliseconds. A missing or
+  // zero value falls back to the shipped default, and the upper bound keeps a
+  // hand-edited file from overflowing the conversion.
+  const auto to_milliseconds = [](std::size_t seconds, std::size_t fallback) {
+    constexpr std::size_t kMinimum = 30;
+    constexpr std::size_t kMaximum = 24 * 60 * 60;
+
+    if (seconds == 0) {
+      seconds = fallback;
+    }
+
+    return static_cast<int>(std::clamp(seconds, kMinimum, kMaximum) * 1000);
+  };
+
+  remote.turn_read_timeout_ms =
+      to_milliseconds(assistant.turn_timeout_seconds_, 180);
+  remote.summary_read_timeout_ms =
+      to_milliseconds(assistant.summary_timeout_seconds_, 420);
+
   return remote;
 }
 
@@ -36,12 +57,14 @@ struct interface::impl {
   using executor = mmc::async::multi_executor<void()>;
 
   impl() {
-    logger = std::make_unique<mmc::log::backend>();
     // Two lanes: one for the turn, one so a summarisation pass can run without
     // the executor ever needing a thread of its own. The interface still keeps
     // at most one task in flight, so the second lane is headroom, not a licence
     // to run turns concurrently.
-    multi_executor_ = std::make_unique<executor>(2);
+    //
+    // Important: Since we don't block other sessions while a session is running.
+    // There should be more than 2 threads so the user can launch many tasks.
+    multi_executor_ = std::make_unique<executor>(5);
   }
 
   ~impl() {
@@ -53,13 +76,13 @@ struct interface::impl {
     const auto path = store::paths::assistant_log(uuid);
 
     try {
-      logger->set_output_file(path);
+      mmc::log::set_output_file(path);
     } catch (const std::exception& error) {
       // Logging stays on the previous sink; a bad path is never fatal.
-      logger->error("cannot open log file {}: {}", path.string(), error.what());
+      mmc::log::error("cannot open log file {}: {}", path.string(), error.what());
     }
 
-    logger->info("===== local-notebook session started =====");
+    mmc::log::info("===== local-notebook session started =====");
   }
 
   // Cancels the in-flight turn (if any) and waits for its executor job. Called
@@ -106,12 +129,16 @@ struct interface::impl {
     return next;
   }
 
-  std::unique_ptr<mmc::log::backend> logger;
+  // std::unique_ptr<mmc::log::backend> logger;
   std::unique_ptr<executor> multi_executor_;
 
   std::string assistant_uuid;
   Assistant assistant;
   mutable std::mutex assistant_mutex;
+
+  // The cached assistant-memory trigger. Guarded by assistant_mutex, and
+  // dropped whenever a change can move it.
+  mutable std::optional<bool> assistant_due_cache;
 
   // The manager owns the database; the interface only talks to the store
   // through it.
@@ -139,6 +166,7 @@ void interface::open_assistant(std::string uuid, Assistant assistant) {
     std::scoped_lock lock(impl_->assistant_mutex);
     impl_->assistant_uuid = std::move(uuid);
     impl_->assistant = std::move(assistant);
+    impl_->assistant_due_cache.reset();
   }
 
   const auto directory = store::paths::assistant_dir(impl_->assistant_uuid);
@@ -157,7 +185,7 @@ void interface::open_assistant(std::string uuid, Assistant assistant) {
 
   impl_->pending_session_id.reset();
 
-  impl_->logger->info(
+  mmc::log::info(
       "opened assistant {} at {}", impl_->assistant_uuid, directory.string()
   );
 }
@@ -176,9 +204,16 @@ Assistant interface::assistant() const {
   return impl_->assistant;
 }
 
+void interface::set_assistant(Assistant assistant) {
+  std::scoped_lock lock(impl_->assistant_mutex);
+  impl_->assistant = std::move(assistant);
+  impl_->assistant_due_cache.reset();
+}
+
 void interface::set_assistant_memory(std::string memory) {
   std::scoped_lock lock(impl_->assistant_mutex);
   impl_->assistant.memory_ = std::move(memory);
+  impl_->assistant_due_cache.reset();
 }
 
 void interface::save_assistant() {
@@ -236,12 +271,57 @@ std::vector<Session> interface::recent_sessions(std::size_t count) const {
   return impl_->sessions->most_recent(count);
 }
 
+std::unordered_map<std::uint32_t, std::string>
+interface::session_last_times() const {
+  if (impl_->sessions == nullptr) {
+    return {};
+  }
+
+  return impl_->sessions->db().session_last_times();
+}
+
+std::optional<std::string> interface::last_message_time(
+    std::uint32_t session_id
+) const {
+  if (impl_->sessions == nullptr) {
+    return std::nullopt;
+  }
+
+  return impl_->sessions->db().last_message_time(session_id);
+}
+
+ContextUsage interface::context_usage(std::uint32_t session_id) const {
+  ContextUsage out;
+
+  if (impl_->sessions == nullptr) {
+    return out;
+  }
+
+  const auto session = impl_->sessions->get(session_id);
+  if (!session.has_value()) {
+    return out;
+  }
+
+  const auto message_mgr = impl_->sessions->get_messages(session_id);
+  if (!message_mgr.has_value()) {
+    return out;
+  }
+
+  const net::ContextUsage usage =
+      net::context_usage(*session, message_mgr->all());
+  out.used_tokens = usage.used_tokens;
+  out.limit_tokens = usage.limit_tokens;
+  return out;
+}
+
 std::uint32_t interface::create_session(const Session& session) {
   if (impl_->sessions == nullptr) {
     return 0;
   }
 
-  return impl_->sessions->create(session);
+  const std::uint32_t id = impl_->sessions->create(session);
+  mark_assistant_summary_stale();
+  return id;
 }
 
 void interface::save_session(const Session& session) {
@@ -250,6 +330,7 @@ void interface::save_session(const Session& session) {
   }
 
   impl_->sessions->save(session);
+  mark_assistant_summary_stale();
 }
 
 void interface::delete_session(std::uint32_t session_id) {
@@ -258,6 +339,7 @@ void interface::delete_session(std::uint32_t session_id) {
   }
 
   impl_->sessions->remove(session_id);
+  mark_assistant_summary_stale();
 }
 
 void interface::set_session_reasoning_effort(
@@ -276,6 +358,7 @@ void interface::delete_message(std::uint32_t message_id) {
   }
 
   (void)impl_->sessions->db().remove_message(message_id);
+  mark_assistant_summary_stale();
 }
 
 void interface::edit_message(
@@ -286,6 +369,7 @@ void interface::edit_message(
   }
 
   impl_->sessions->db().update_message(message_id, content);
+  mark_assistant_summary_stale();
 }
 
 std::size_t interface::message_tokens(const Message& message) const {
@@ -362,11 +446,41 @@ error_code interface::session_prompt(
   // Persist the prompt before the turn starts, so a failed generation still
   // leaves the user's message in the transcript.
   message_mgr->append(Role::User, prompt);
+  mark_assistant_summary_stale();
 
   // Remember which session the next start_generation() belongs to.
   impl_->pending_session_id = session_id;
 
   return error_code::SUCCESS;
+}
+
+bool interface::busy() const {
+  return impl_->task != nullptr && !impl_->task->is_terminal();
+}
+
+std::shared_ptr<GenerationTask> interface::current_task() const {
+  return impl_->task;
+}
+
+bool interface::assistant_summary_due() const {
+  if (impl_->sessions == nullptr) {
+    return false;
+  }
+
+  std::scoped_lock lock(impl_->assistant_mutex);
+
+  if (!impl_->assistant_due_cache.has_value()) {
+    impl_->assistant_due_cache = net::assistant_trigger_reached(
+        impl_->sessions->db(), impl_->assistant
+    );
+  }
+
+  return *impl_->assistant_due_cache;
+}
+
+void interface::mark_assistant_summary_stale() {
+  std::scoped_lock lock(impl_->assistant_mutex);
+  impl_->assistant_due_cache.reset();
 }
 
 std::shared_ptr<GenerationTask> interface::start_generation() {
@@ -419,6 +533,7 @@ std::shared_ptr<GenerationTask> interface::start_generation() {
         // A cancelled turn keeps nothing; a completed one stores the reply.
         if (!stop.stop_requested() && !result.text.empty()) {
           message_mgr->append(Role::Assistant, result.text);
+          mark_assistant_summary_stale();
         }
       }
   );
@@ -455,6 +570,10 @@ std::shared_ptr<GenerationTask> interface::summarize_session(
               impl_->sessions->db(), *session, remote, task, stop, approver
           );
         }
+
+        // The fold advances the session watermark, so the assistant trigger
+        // may have moved.
+        mark_assistant_summary_stale();
       }
   );
 }
@@ -493,6 +612,9 @@ std::shared_ptr<GenerationTask> interface::summarize_assistant(
           set_assistant_memory(std::move(memory));
           save_assistant();
         }
+
+        // The fold advanced every session's assistant watermark.
+        mark_assistant_summary_stale();
       }
   );
 }
@@ -505,6 +627,62 @@ void interface::cancel_generation() {
 
 void interface::wait_for_generation() {
   impl_->worker.wait();
+}
+
+// --- Process-wide storage and assistant registry ------------------------
+
+void set_data_root(std::filesystem::path root) {
+  store::paths::set_data_root(std::move(root));
+}
+
+std::filesystem::path data_root() {
+  return store::paths::data_root();
+}
+
+std::filesystem::path global_settings_path() {
+  return store::paths::global_settings();
+}
+
+std::vector<std::string> scan_assistants() {
+  return store::scan_assistants();
+}
+
+Assistant load_assistant(const std::string& uuid) {
+  return ::lnb::load_assistant(uuid);
+}
+
+void save_assistant(const std::string& uuid, const Assistant& assistant) {
+  ::lnb::save_assistant(uuid, assistant);
+}
+
+std::string make_uuid() {
+  return store::make_uuid();
+}
+
+std::string now_iso8601_utc() {
+  return store::now_iso8601_utc();
+}
+
+std::string ensure_scheme(const std::string& url) {
+  return net::ensure_scheme(url);
+}
+
+std::string normalize_base_url(const std::string& url) {
+  return net::normalize_base_url(url);
+}
+
+bool is_valid_base_url(const std::string& url) {
+  return net::is_valid_base_url(url);
+}
+
+std::string reasoning_default_for(const std::string& model) {
+  return net::default_reasoning_effort(model);
+}
+
+std::vector<std::string> reasoning_levels_for(
+    const std::string& model, const std::string& stored
+) {
+  return net::reasoning_efforts_with_stored(model, stored);
 }
 
 } // namespace lnb::api

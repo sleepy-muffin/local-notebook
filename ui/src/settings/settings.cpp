@@ -1,4 +1,4 @@
-#include "app/settings.hpp"
+#include "settings/settings.hpp"
 
 #include <QFile>
 #include <QJsonArray>
@@ -8,8 +8,8 @@
 
 #include <filesystem>
 
-#include "store/util.hpp"
-#include "support/log.hpp"
+#include "local-notebook-core/interface.hpp"
+#include "mmc/log.hpp"
 
 namespace lnb {
 namespace {
@@ -168,7 +168,7 @@ Settings from_json(const QJsonObject& object) {
 } // namespace
 
 Settings load_settings() {
-  const auto path = store::paths::global_settings();
+  const auto path = lnb::api::global_settings_path();
 
   QFile file(QString::fromStdString(path.string()));
   if (!file.open(QIODevice::ReadOnly)) {
@@ -177,7 +177,7 @@ Settings load_settings() {
 
   const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
   if (!document.isObject()) {
-    log::error("{} is not a JSON object; using defaults", path.string());
+    mmc::log::error("{} is not a JSON object; using defaults", path.string());
     return Settings{};
   }
 
@@ -185,14 +185,14 @@ Settings load_settings() {
 }
 
 void save_settings(const Settings& settings) {
-  const auto path = store::paths::global_settings();
+  const auto path = lnb::api::global_settings_path();
 
   std::error_code error;
   std::filesystem::create_directories(path.parent_path(), error);
 
   QFile file(QString::fromStdString(path.string()));
   if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-    log::error("cannot write {}", path.string());
+    mmc::log::error("cannot write {}", path.string());
     return;
   }
 

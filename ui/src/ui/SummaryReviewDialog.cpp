@@ -1,6 +1,7 @@
 #include "ui/SummaryReviewDialog.hpp"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QCoreApplication>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -12,7 +13,10 @@
 #include <QThread>
 #include <QVBoxLayout>
 
+#include <boost/json/serialize.hpp>
+
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "support/i18n.hpp"
@@ -26,55 +30,336 @@ using namespace dialog_style;
 
 namespace {
 
-// Renders the exact request body as plain text: the model, the completion cap
-// and every message with its role. This is the same JSON that send_message_once
-// posts, only formatted for reading.
-QString render_request(const boost::json::object& request) {
+QString as_qstring(const boost::json::value& value) {
+  return QString::fromStdString(std::string(value.as_string()));
+}
+
+QString string_field(const boost::json::object& object, std::string_view key) {
+  const boost::json::value* value = object.if_contains(key);
+  return value != nullptr && value->is_string() ? as_qstring(*value) : QString{};
+}
+
+QString compact_json(const boost::json::value& value) {
+  return QString::fromStdString(boost::json::serialize(value));
+}
+
+// Indents a request so the exact body is still readable in the preview. Scalars
+// are delegated to Boost's serializer, which guarantees the same escaping as the
+// bytes actually sent.
+void append_pretty(
+    QString& out, const boost::json::value& value, int depth
+) {
+  const QString pad(depth * 2, QLatin1Char(' '));
+  const QString inner((depth + 1) * 2, QLatin1Char(' '));
+
+  if (value.is_object()) {
+    const boost::json::object& object = value.as_object();
+
+    if (object.empty()) {
+      out += QStringLiteral("{}");
+      return;
+    }
+
+    out += QStringLiteral("{\n");
+    bool first = true;
+
+    for (const boost::json::key_value_pair& entry: object) {
+      if (!first) {
+        out += QStringLiteral(",\n");
+      }
+      first = false;
+      out += inner;
+      out += compact_json(boost::json::value(entry.key()));
+      out += QStringLiteral(": ");
+      append_pretty(out, entry.value(), depth + 1);
+    }
+
+    out += QLatin1Char('\n');
+    out += pad;
+    out += QLatin1Char('}');
+    return;
+  }
+
+  if (value.is_array()) {
+    const boost::json::array& array = value.as_array();
+
+    if (array.empty()) {
+      out += QStringLiteral("[]");
+      return;
+    }
+
+    out += QStringLiteral("[\n");
+    bool first = true;
+
+    for (const boost::json::value& element: array) {
+      if (!first) {
+        out += QStringLiteral(",\n");
+      }
+      first = false;
+      out += inner;
+      append_pretty(out, element, depth + 1);
+    }
+
+    out += QLatin1Char('\n');
+    out += pad;
+    out += QLatin1Char(']');
+    return;
+  }
+
+  out += compact_json(value);
+}
+
+// Content is a plain string in both protocols, but Chat content parts and
+// Responses output can also be an array of typed parts. Text parts are shown
+// verbatim; non-text parts are named so they are not silently dropped.
+QString content_text(const boost::json::value* content) {
+  if (content == nullptr) {
+    return {};
+  }
+
+  if (content->is_string()) {
+    return as_qstring(*content);
+  }
+
+  if (!content->is_array()) {
+    return {};
+  }
+
   QString text;
 
-  const boost::json::value* model = request.if_contains("model");
-  text += trs("Model: %1\n").arg(
-      model != nullptr && model->is_string()
-          ? QString::fromStdString(std::string(model->as_string()))
-          : QString{}
-  );
+  for (const boost::json::value& part: content->as_array()) {
+    if (part.is_string()) {
+      if (!text.isEmpty()) {
+        text += QLatin1Char('\n');
+      }
+      text += as_qstring(part);
+      continue;
+    }
 
-  int max_tokens = 0;
-  if (const boost::json::value* cap = request.if_contains("max_tokens");
-      cap != nullptr && cap->is_number()) {
-    max_tokens = static_cast<int>(cap->to_number<double>());
+    if (!part.is_object()) {
+      continue;
+    }
+
+    const boost::json::object& object = part.as_object();
+    const QString part_text = string_field(object, "text");
+
+    if (!text.isEmpty()) {
+      text += QLatin1Char('\n');
+    }
+
+    if (!part_text.isEmpty()) {
+      text += part_text;
+      continue;
+    }
+
+    const QString type = string_field(object, "type");
+
+    if (!type.isEmpty()) {
+      text += QStringLiteral("[%1]").arg(type);
+    } else if (object.if_contains("image_url") != nullptr) {
+      text += trs("[image]");
+    } else {
+      text += compact_json(part);
+    }
   }
 
-  text += trs("Completion cap: %1 tokens\n\n").arg(max_tokens);
+  return text;
+}
 
-  const boost::json::value* messages = request.if_contains("messages");
+QString reasoning_text(const boost::json::object& item) {
+  if (const boost::json::value* summary = item.if_contains("summary");
+      summary != nullptr) {
+    QString text = content_text(summary);
 
-  if (messages == nullptr || !messages->is_array()) {
-    return text;
+    if (!text.isEmpty()) {
+      return text;
+    }
   }
 
-  for (const boost::json::value& value: messages->as_array()) {
+  return content_text(item.if_contains("content"));
+}
+
+// Chat nests tool calls under `function`; Responses puts the name and arguments
+// on the item itself. Accept either shape.
+QString render_tool_calls(const boost::json::value* calls) {
+  if (calls == nullptr || !calls->is_array()) {
+    return {};
+  }
+
+  QString text;
+
+  for (const boost::json::value& value: calls->as_array()) {
     if (!value.is_object()) {
       continue;
     }
 
-    const boost::json::object& message = value.as_object();
-    const boost::json::value* role = message.if_contains("role");
-    const boost::json::value* content = message.if_contains("content");
+    const boost::json::object& call = value.as_object();
+    const boost::json::object* function = &call;
 
-    text += QStringLiteral("----- %1 -----\n").arg(
-        role != nullptr && role->is_string()
-            ? QString::fromStdString(std::string(role->as_string()))
-            : QString{}
-    );
-
-    if (content != nullptr && content->is_string()) {
-      text += QString::fromStdString(std::string(content->as_string()));
+    if (const boost::json::value* nested = call.if_contains("function");
+        nested != nullptr && nested->is_object()) {
+      function = &nested->as_object();
     }
 
-    text += QStringLiteral("\n\n");
+    if (!text.isEmpty()) {
+      text += QLatin1Char('\n');
+    }
+
+    text += trs("Tool call: %1").arg(string_field(*function, "name"));
+
+    const QString id = string_field(call, "id");
+
+    if (!id.isEmpty()) {
+      text += QStringLiteral(" (%1)").arg(id);
+    }
+
+    const QString arguments = string_field(*function, "arguments");
+
+    if (!arguments.isEmpty()) {
+      text += QLatin1Char('\n');
+      text += arguments;
+    }
   }
 
+  return text;
+}
+
+QString render_item(const boost::json::object& item) {
+  const QString type = string_field(item, "type");
+  const QString role = string_field(item, "role");
+  QString label;
+  QString body;
+
+  if (type == QStringLiteral("function_call")) {
+    label = trs("function call: %1").arg(string_field(item, "name"));
+
+    const QString call_id = string_field(item, "call_id");
+
+    if (!call_id.isEmpty()) {
+      label += QStringLiteral(" (%1)").arg(call_id);
+    }
+
+    const boost::json::value* arguments = item.if_contains("arguments");
+    body = content_text(arguments);
+
+    if (body.isEmpty() && arguments != nullptr) {
+      body = compact_json(*arguments);
+    }
+  } else if (type == QStringLiteral("function_call_output")) {
+    const QString call_id = string_field(item, "call_id");
+    label = trs("function result (%1)").arg(call_id);
+
+    const boost::json::value* output = item.if_contains("output");
+    body = content_text(output);
+
+    if (body.isEmpty() && output != nullptr) {
+      body = compact_json(*output);
+    }
+  } else if (type == QStringLiteral("reasoning")) {
+    label = trs("reasoning");
+    body = reasoning_text(item);
+  } else {
+    label = !role.isEmpty() ? role : (!type.isEmpty() ? type : trs("item"));
+
+    if (role == QStringLiteral("tool")) {
+      const QString call_id = string_field(item, "tool_call_id");
+
+      if (!call_id.isEmpty()) {
+        label += QStringLiteral(" (%1)").arg(call_id);
+      }
+    }
+
+    body = content_text(item.if_contains("content"));
+
+    const QString calls = render_tool_calls(item.if_contains("tool_calls"));
+
+    if (!calls.isEmpty()) {
+      if (!body.isEmpty()) {
+        body += QLatin1Char('\n');
+      }
+      body += calls;
+    }
+  }
+
+  if (body.isEmpty()) {
+    body = trs("(empty)");
+  }
+
+  return QStringLiteral("----- %1 -----\n%2\n\n").arg(label, body);
+}
+
+// Renders the request body as plain text: the model, the completion cap and
+// every message with its role. Responses sends the system prompt as top-level
+// `instructions` and the conversation as `input`; Chat Completions puts the
+// system prompt at the head of `messages`. Both shapes are handled, so the
+// preview is faithful whichever protocol the assistant uses.
+QString render_request(const boost::json::object& request) {
+  QString text;
+
+  const QString model = string_field(request, "model");
+  text += trs("Model: %1\n").arg(model.isEmpty() ? trs("(not set)") : model);
+
+  int max_tokens = 0;
+
+  for (const std::string_view key: {"max_output_tokens", "max_tokens"}) {
+    if (const boost::json::value* cap = request.if_contains(key);
+        cap != nullptr && cap->is_number()) {
+      max_tokens = static_cast<int>(cap->to_number<double>());
+      break;
+    }
+  }
+
+  text += trs("Completion cap: %1 tokens\n").arg(max_tokens);
+
+  QString effort;
+
+  if (const boost::json::value* value = request.if_contains("reasoning_effort");
+      value != nullptr && value->is_string()) {
+    effort = as_qstring(*value);
+  } else if (const boost::json::value* reasoning = request.if_contains("reasoning");
+             reasoning != nullptr && reasoning->is_object()) {
+    effort = string_field(reasoning->as_object(), "effort");
+  }
+
+  if (!effort.isEmpty()) {
+    text += trs("Reasoning effort: %1\n").arg(effort);
+  }
+
+  const boost::json::value* input = request.if_contains("input");
+  const bool responses = input != nullptr && input->is_array();
+  const boost::json::value* items = responses ? input : request.if_contains("messages");
+
+  if (items == nullptr || !items->is_array()) {
+    text += trs("Messages: 0\n\n");
+    text += trs("(no messages in this request)\n");
+    return text;
+  }
+
+  text += (responses ? trs("Input items: %1\n\n") : trs("Messages: %1\n\n"))
+              .arg(static_cast<qlonglong>(items->as_array().size()));
+
+  const QString instructions = string_field(request, "instructions");
+
+  if (!instructions.isEmpty()) {
+    text += trs("----- system (instructions) -----\n%1\n\n").arg(instructions);
+  }
+
+  for (const boost::json::value& value: items->as_array()) {
+    if (!value.is_object()) {
+      text += QStringLiteral("----- item -----\n%1\n\n").arg(compact_json(value));
+      continue;
+    }
+
+    text += render_item(value.as_object());
+  }
+
+  return text;
+}
+
+QString render_exact(const boost::json::object& request) {
+  QString text;
+  append_pretty(text, boost::json::value(request), 0);
+  text += QLatin1Char('\n');
   return text;
 }
 
@@ -137,12 +422,30 @@ SummaryReviewDialog::SummaryReviewDialog(
   outer->addWidget(subtitle);
   outer->addSpacing(14);
 
+  const QString readable = render_request(plan.request);
+  const QString exact = render_exact(plan.request);
+
+  auto* exact_toggle = new QCheckBox(trs("Show exact JSON request body"), background);
+  exact_toggle->setToolTip(
+      trs("Shows the pretty-printed JSON that is posted to the API, including "
+          "every field the readable view does not spell out.")
+  );
+  outer->addWidget(exact_toggle);
+  outer->addSpacing(8);
+
   auto* preview = new QPlainTextEdit(background);
   preview->setObjectName(QStringLiteral("SummaryPreview"));
   preview->setReadOnly(true);
-  preview->setPlainText(render_request(plan.request));
+  preview->setPlainText(readable);
   preview->setLineWrapMode(QPlainTextEdit::NoWrap);
   outer->addWidget(preview, 1);
+
+  connect(
+      exact_toggle, &QCheckBox::toggled, preview,
+      [preview, readable, exact](bool checked) {
+        preview->setPlainText(checked ? exact : readable);
+      }
+  );
 
   if (!plan.watermark_text.empty()) {
     outer->addSpacing(10);

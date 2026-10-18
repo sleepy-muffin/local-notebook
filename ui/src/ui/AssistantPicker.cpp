@@ -27,12 +27,11 @@
 #include <algorithm>
 #include <string>
 
-#include "app/application.hpp"
-#include "app/assistant_io.hpp"
+#include "local-notebook-core/interface.hpp"
 #include "local-notebook-core/model.hpp"
-#include "store/util.hpp"
+#include "mmc/log.hpp"
+#include "settings/settings.hpp"
 #include "support/i18n.hpp"
-#include "support/log.hpp"
 #include "ui/AssistantForm.hpp"
 #include "ui/BackgroundWidget.hpp"
 #include "ui/theme.hpp"
@@ -328,8 +327,10 @@ private:
 
 } // namespace
 
-AssistantPicker::AssistantPicker(lnb::Application& app, QWidget* parent)
-    : QDialog(parent), app_(app) {
+AssistantPicker::AssistantPicker(
+    lnb::api::interface& api, lnb::Settings& settings, QWidget* parent
+)
+    : QDialog(parent), api_(api), settings_(settings) {
   setObjectName(QStringLiteral("AssistantPicker"));
   setWindowTitle(trs("Assistants"));
   setModal(true);
@@ -426,7 +427,7 @@ AssistantPicker::AssistantPicker(lnb::Application& app, QWidget* parent)
   new_button->setObjectName(QStringLiteral("Secondary"));
 
   auto_login_ = new QCheckBox(trs("Open automatically at startup"), background);
-  auto_login_->setChecked(app_.settings().auto_login);
+  auto_login_->setChecked(settings_.auto_login);
 
   edit_button_ = new QPushButton(trs("Edit"), background);
   edit_button_->setObjectName(QStringLiteral("Secondary"));
@@ -469,10 +470,10 @@ AssistantPicker::AssistantPicker(lnb::Application& app, QWidget* parent)
 void AssistantPicker::refresh() {
   list_->clear();
 
-  const std::vector<std::string> uuids = lnb::store::scan_assistants();
+  const std::vector<std::string> uuids = lnb::api::scan_assistants();
 
   for (const std::string& uuid : uuids) {
-    const lnb::Assistant assistant = lnb::load_assistant(uuid);
+    const lnb::Assistant assistant = lnb::api::load_assistant(uuid);
 
     const QString name = to_qstring(assistant.name_);
     const QString model = to_qstring(assistant.model_);
@@ -486,11 +487,11 @@ void AssistantPicker::refresh() {
     item->setToolTip(name);
   }
 
-  lnb::log::debug("assistant picker listed {} assistant(s)", uuids.size());
+  mmc::log::debug("assistant picker listed {} assistant(s)", uuids.size());
 
   if (list_->count() > 0) {
     // Prefer the last-opened assistant when it is still present.
-    const QString last = to_qstring(app_.settings().last_assistant);
+    const QString last = to_qstring(settings_.last_assistant);
     int target = 0;
     if (!last.isEmpty()) {
       for (int row = 0; row < list_->count(); ++row) {
@@ -525,7 +526,7 @@ void AssistantPicker::update_preview() {
     return;
   }
 
-  const lnb::Assistant assistant = lnb::load_assistant(uuid.toStdString());
+  const lnb::Assistant assistant = lnb::api::load_assistant(uuid.toStdString());
 
   const QString name = to_qstring(assistant.name_);
   const QString model = to_qstring(assistant.model_);
@@ -563,10 +564,11 @@ void AssistantPicker::open_selected() {
   }
 
   const std::string id = uuid.toStdString();
-  lnb::log::info("opening assistant {}", id);
+  mmc::log::info("opening assistant {}", id);
 
-  app_.settings().auto_login = auto_login_->isChecked();
-  app_.open_assistant(id, lnb::load_assistant(id));
+  settings_.auto_login = auto_login_->isChecked();
+  settings_.last_assistant = id;
+  api_.open_assistant(id, lnb::api::load_assistant(id));
   accept();
 }
 
@@ -577,13 +579,14 @@ void AssistantPicker::create_new() {
   }
 
   const lnb::Assistant assistant = form.assistant();
-  const std::string uuid = lnb::store::make_uuid();
+  const std::string uuid = lnb::api::make_uuid();
 
-  lnb::save_assistant(uuid, assistant);
-  lnb::log::info("created assistant {}", uuid);
+  lnb::api::save_assistant(uuid, assistant);
+  mmc::log::info("created assistant {}", uuid);
 
-  app_.settings().auto_login = auto_login_->isChecked();
-  app_.open_assistant(uuid, assistant);
+  settings_.auto_login = auto_login_->isChecked();
+  settings_.last_assistant = uuid;
+  api_.open_assistant(uuid, assistant);
   accept();
 }
 
@@ -594,7 +597,7 @@ void AssistantPicker::edit_selected() {
   }
 
   const std::string id = uuid.toStdString();
-  const lnb::Assistant existing = lnb::load_assistant(id);
+  const lnb::Assistant existing = lnb::api::load_assistant(id);
 
   AssistantFormDialog form(trs("Edit assistant"), existing, this);
   if (form.exec() != QDialog::Accepted) {
@@ -602,13 +605,13 @@ void AssistantPicker::edit_selected() {
   }
 
   const lnb::Assistant assistant = form.assistant();
-  lnb::save_assistant(id, assistant);
-  lnb::log::info("updated assistant {}", id);
+  lnb::api::save_assistant(id, assistant);
+  mmc::log::info("updated assistant {}", id);
 
   // Keep the in-memory assistant in step when the edited one is the open one.
-  if (app_.has_assistant() && app_.assistant_uuid() == id) {
-    app_.assistant() = assistant;
-    app_.save_assistant();
+  if (api_.has_assistant() && api_.assistant_uuid() == id) {
+    api_.set_assistant(assistant);
+    api_.save_assistant();
   }
 
   refresh();

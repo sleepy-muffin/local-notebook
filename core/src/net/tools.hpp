@@ -62,8 +62,10 @@ std::string fetch_url(
 );
 
 // Searches the web and returns the top results as "Title / URL / snippet"
-// blocks. Best-effort: it scrapes the DuckDuckGo HTML endpoint, so an empty or
-// changed result page yields a clear message rather than an exception.
+// blocks. Best-effort: it scrapes DuckDuckGo's HTML endpoint, falls back to
+// Bing's RSS feed, then to Brave when the earlier sources are blocked. An empty
+// or changed result page yields a clear message rather than an exception. All
+// requests go through `proxy` when one is configured.
 std::string web_search(
     const std::string& query, const std::optional<std::string>& proxy
 );

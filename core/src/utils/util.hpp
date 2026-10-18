@@ -26,7 +26,7 @@ namespace lnb::store {
 // The root defaults to the relative "data" so headless tests and the screenshot
 // tool can sandbox it by changing the working directory. The application calls
 // set_data_root() at startup with the per-user application data directory, or the
-// --user-data override; see app/data_location.hpp.
+// --user-data override; the UI resolves it before opening the interface.
 namespace paths {
 
 // Points every derived path at `root`. main() calls this once before constructing

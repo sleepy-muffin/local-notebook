@@ -732,8 +732,12 @@ ChatCompletionResult send_message_once(
   mmc::log::info("request {}: {}", kind, body);
 
   // The same body goes into the task's own log, so the tasks window can dump the
-  // exact bytes that were posted when a turn is inspected.
-  task.append_log("[request " + std::string(kind) + "]\n" + body);
+  // exact bytes that were posted when a turn is inspected. The endpoint is
+  // included (it carries no credentials) so a timeout can be attributed to the
+  // exact host that was contacted.
+  task.append_log(
+      "[request " + std::string(kind) + "] POST " + remote.url + "\n" + body
+  );
 
   std::vector<HttpHeader> headers{
       {"Content-Type", "application/json"},
@@ -794,10 +798,22 @@ ChatCompletionResult send_message_once(
 
   int status = 0;
 
+  // A reasoning model may stay silent for a while before it emits its first
+  // streamed event, so the read window comes from the assistant's connection
+  // settings: a chat turn and a summariser pass can have different windows.
+  // Connecting, the TLS handshake and the write keep the 60 s transport window,
+  // and the stop token is still observed every 50 ms, so cancelling stays
+  // responsive regardless of the read window.
+  const bool summary =
+      kind == "session-summary" || kind == "assistant-summary";
+
+  const int read_timeout_ms = summary ? remote.summary_read_timeout_ms
+                                      : remote.turn_read_timeout_ms;
+
   try {
     status = http_request(
         "POST", remote.url, remote.proxy, headers, body, stop_token, on_response,
-        on_body, 60'000, 0
+        on_body, 60'000, 0, read_timeout_ms
     );
   } catch (const std::exception&) {
     flush();
@@ -1125,9 +1141,21 @@ std::string fold_session_memory(
     GenerationTask silent_task;
     silent_task.start();
 
-    const ChatCompletionResult result = send_message_once(
-        request, remote, silent_task, stop_token, "session-summary"
-    );
+    ChatCompletionResult result;
+
+    try {
+      result = send_message_once(
+          request, remote, silent_task, stop_token, "session-summary"
+      );
+    } catch (const std::exception& error) {
+      // Keep the request that was already recorded even when the send fails:
+      // the exact bytes are the most useful part of a failed pass.
+      task.append_log(silent_task.log_text());
+      task.append_log(
+          "[session-summary] request failed: " + std::string(error.what())
+      );
+      throw;
+    }
 
     // The summariser's own diagnostics (the exact request and response) are
     // copied onto the visible task, so the tasks window shows what was sent
@@ -1246,7 +1274,15 @@ std::string fold_assistant_memory(
     }
   };
 
+  // Always leave a trace: an assistant pass can legitimately end without a
+  // request (nothing to fold, a declined review, an unreached trigger), and an
+  // empty log makes those outcomes indistinguishable from a broken task.
+  task.append_log("[assistant-summary] starting");
+
   const std::vector<Session> sessions = db.sessions_by_recent();
+  task.append_log(
+      "[assistant-summary] sessions=" + std::to_string(sessions.size())
+  );
 
   // Load each session's messages once; the gathered pool points into these.
   std::vector<std::vector<Message>> session_messages;
@@ -1328,10 +1364,19 @@ std::string fold_assistant_memory(
     recent_by_session[message->session_id_].push_back(message);
   }
 
+  task.append_log(
+      "[assistant-summary] recent messages=" +
+      std::to_string(gather.recent.size()) + ", compacted sessions=" +
+      std::to_string(gather.compacted.size())
+  );
+
   const std::string sessions_block =
       build_sessions_block(sessions, recent_by_session, gather.compacted);
 
   if (sessions_block.empty()) {
+    task.append_log(
+        "[assistant-summary] nothing to fold: no session memory or recent messages"
+    );
     return assistant.memory_;
   }
 
@@ -1388,6 +1433,7 @@ std::string fold_assistant_memory(
     plan.watermark_text = watermarks;
 
     if (!approver(plan)) {
+      task.append_log("[assistant-summary] review declined; nothing was sent");
       return assistant.memory_;
     }
   }
@@ -1395,9 +1441,21 @@ std::string fold_assistant_memory(
   GenerationTask silent_task;
   silent_task.start();
 
-  const ChatCompletionResult result = send_message_once(
-      request, remote, silent_task, stop_token, "assistant-summary"
-  );
+  ChatCompletionResult result;
+
+  try {
+    result = send_message_once(
+        request, remote, silent_task, stop_token, "assistant-summary"
+    );
+  } catch (const std::exception& error) {
+    // Keep the request that was already recorded even when the send fails: the
+    // exact bytes are the most useful part of a failed pass.
+    task.append_log(silent_task.log_text());
+    task.append_log(
+        "[assistant-summary] request failed: " + std::string(error.what())
+    );
+    throw;
+  }
 
   // The summariser's own diagnostics (the exact request and response) are copied
   // onto the visible task, so the tasks window shows what was sent instead of an
@@ -1407,10 +1465,15 @@ std::string fold_assistant_memory(
   const std::string memory = trimmed(result.text);
 
   if (memory.empty()) {
-    if (strict) {
-      const std::string reason =
-          result.finish_reason.empty() ? "unknown" : result.finish_reason;
+    const std::string reason =
+        result.finish_reason.empty() ? "unknown" : result.finish_reason;
 
+    task.append_log(
+        "[assistant-summary] summariser returned no text (finish_reason=" +
+        reason + ")"
+    );
+
+    if (strict) {
       throw std::runtime_error(
           "The summariser returned no text (finish_reason=" + reason +
           "). Increase summary_reasoning_headroom_tokens for a reasoning model."
@@ -1467,6 +1530,9 @@ std::string maybe_summarize_session(
         "maybe_summarize_session: skipped for session {}: {}", session.id_,
         error.what()
     );
+    task.append_log(
+        "[session-summary] automatic pass skipped: " + std::string(error.what())
+    );
     return session.memory_;
   }
 }
@@ -1486,6 +1552,9 @@ std::string maybe_summarize_assistant(
     // Empty when the automatic trigger is not reached, so the caller only
     // overwrites Assistant::memory_ when there is a new memory to persist.
     if (!assistant_trigger_reached(db, assistant, stop_token)) {
+      task.append_log(
+          "[assistant-summary] automatic trigger not reached; nothing was sent"
+      );
       return {};
     }
 
@@ -1494,6 +1563,9 @@ std::string maybe_summarize_assistant(
     );
   } catch (const std::exception& error) {
     mmc::log::info("maybe_summarize_assistant: skipped: {}", error.what());
+    task.append_log(
+        "[assistant-summary] automatic pass skipped: " + std::string(error.what())
+    );
     return {};
   }
 }
