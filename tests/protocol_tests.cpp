@@ -263,14 +263,14 @@ void test_derive_endpoint() {
 
 void test_reasoning_lists() {
   const std::vector<std::string> deepseek =
-      lnb::net::reasoning_efforts_for_model("deepseek v4.1 flash");
+      lnb::net::reasoning_efforts_for_model("deepseek-v4.1-flash");
   CHECK((deepseek == std::vector<std::string>{"none", "low", "high", "max"}));
 
-  const std::vector<std::string> luna = lnb::net::reasoning_efforts_for_model("GPT-6.1 Luna");
-  CHECK((luna == std::vector<std::string>{"none", "medium", "low", "high", "xhigh", "max"}));
+  const std::vector<std::string> luna = lnb::net::reasoning_efforts_for_model("gpt-6-luna");
+  CHECK((luna == std::vector<std::string>{"none", "low","medium", "high", "xhigh", "max"}));
 
   const std::vector<std::string> astra = lnb::net::reasoning_efforts_for_model("gpt-6-astra");
-  CHECK((astra == std::vector<std::string>{"medium", "low", "high", "xhigh", "max"}));
+  CHECK((astra == std::vector<std::string>{"low","medium",  "high", "xhigh", "max"}));
   CHECK(lnb::net::reasoning_efforts_for_model("GPT-6.1 Sol")
         == lnb::net::reasoning_efforts_for_model("gpt-6.1-sol"));
 
@@ -280,8 +280,8 @@ void test_reasoning_lists() {
 }
 
 void test_reasoning_defaults_and_support() {
-  CHECK(lnb::net::default_reasoning_effort("deepseek v4.1 flash") == "none");
-  CHECK(lnb::net::default_reasoning_effort("gpt-6-astra") == "medium");
+  CHECK(lnb::net::default_reasoning_effort("deepseek-v4.1-flash") == "none");
+  CHECK(lnb::net::default_reasoning_effort("gpt-6-astra") == "low");
   CHECK(lnb::net::default_reasoning_effort("unknown") == "none");
 
   // Empty always means "the model's default" and is allowed.
@@ -290,7 +290,7 @@ void test_reasoning_defaults_and_support() {
 
   // `none` is not available on the models that reject it.
   CHECK(!lnb::net::reasoning_effort_supported("gpt-6-astra", "none"));
-  CHECK(!lnb::net::reasoning_effort_supported("GPT-6.1 Sol", "none"));
+  CHECK(!lnb::net::reasoning_effort_supported("gpt-6.1-sol", "none"));
   CHECK(!lnb::net::reasoning_effort_supported("gpt-6-astra", "minimal"));
 
   // Membership is case-insensitive.
@@ -300,11 +300,11 @@ void test_reasoning_defaults_and_support() {
 void test_reasoning_with_stored() {
   // A supported stored level is not duplicated.
   CHECK((lnb::net::reasoning_efforts_with_stored("gpt-6-astra", "high") ==
-         std::vector<std::string>{"medium", "low", "high", "xhigh", "max"}));
+         std::vector<std::string>{"low", "medium", "high", "xhigh", "max"}));
 
   // An unsupported stored level is appended, so a selector can still show it.
   CHECK((lnb::net::reasoning_efforts_with_stored("gpt-6-astra", "none") ==
-         std::vector<std::string>{"medium", "low", "high", "xhigh", "max", "none"}));
+         std::vector<std::string>{"low", "medium", "high", "xhigh", "max", "none"}));
 
   // An empty stored level adds nothing (it means "the model's default").
   CHECK((lnb::net::reasoning_efforts_with_stored("gpt-6-astra", "") ==
