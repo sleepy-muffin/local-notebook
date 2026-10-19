@@ -227,29 +227,47 @@ jobs:
           arch: win64_msvc2022_64
           cache: true
 
+      - name: Cache vcpkg downloads and binary packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\downloads
+            ${{ github.workspace }}\vcpkg-cache
+          # A fresh key per run makes actions/cache save the packages built
+          # this run; restore-keys then reuses them on later runs. vcpkg keys
+          # each cached package by its ABI hash, so stale entries are ignored.
+          key: vcpkg-x64-windows-release-${{ github.run_id }}
+          restore-keys: |
+            vcpkg-x64-windows-release-
+
       - name: Install SQLite, Boost and OpenSSL
         shell: pwsh
+        env:
+          VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}\vcpkg-cache,readwrite'
         run: |
+          # x64-windows builds Debug and Release; this is a release-only job,
+          # so use vcpkg's built-in release-only triplet instead.
           & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install `
-            sqlite3:x64-windows `
-            boost-json:x64-windows `
-            boost-regex:x64-windows `
-            boost-url:x64-windows `
-            boost-asio:x64-windows `
-            boost-beast:x64-windows `
-            openssl:x64-windows `
-            libjpeg-turbo:x64-windows `
-            libpng:x64-windows `
-            opus:x64-windows `
-            libopusenc:x64-windows `
-            opusfile:x64-windows `
-            mpg123:x64-windows `
-            mp3lame:x64-windows
+            --triplet x64-windows-release `
+            sqlite3 `
+            boost-json `
+            boost-regex `
+            boost-url `
+            boost-asio `
+            boost-beast `
+            openssl `
+            libjpeg-turbo `
+            libpng `
+            opus `
+            libopusenc `
+            opusfile `
+            mpg123 `
+            mp3lame
 
 
       - name: Configure
         run: |
-          $vcpkgLib = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib"
+          $vcpkgLib = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows-release/lib"
 
           # external/shark uses find_library() names that do not match the
           # vcpkg import-library filenames on MSVC. The mpg123 1.33 port
@@ -273,6 +291,8 @@ jobs:
             "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR" `
             "-DMPG123_LIBRARY=$mpg123" `
             "-DLAME_LIBRARY=$lame" `
+            "-DVCPKG_TARGET_TRIPLET=x64-windows-release" `
+            "-DCMAKE_CXX_SCAN_FOR_MODULES=OFF" `
             "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
 
 
@@ -314,7 +334,7 @@ jobs:
           # Deploy the vcpkg runtime libraries: SQLite, OpenSSL and the
           # dynamically linked Boost libraries (boost-json, boost-regex,
           # boost-url and their transitive dependencies).
-          $vcpkgBin = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin"
+          $vcpkgBin = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows-release/bin"
           $sqliteDll = "$vcpkgBin/sqlite3.dll"
 
           if (-not (Test-Path $sqliteDll)) {
