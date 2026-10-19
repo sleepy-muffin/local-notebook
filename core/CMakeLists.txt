@@ -64,12 +64,17 @@ target_include_directories(
 
 target_link_libraries(
         ${PROJECT_NAME}
-        PRIVATE
-        shark
-        ${SQLite3_LIBRARIES}
+        PUBLIC
+        # The tests (and the UI's loopback-server test) include Boost.Asio
+        # directly. Keeping the Boost targets public makes their include
+        # directories available to those consumers; on Windows the headers live
+        # in the vcpkg tree rather than the compiler's default include path.
         Boost::json
         Boost::regex
         Boost::url
+        PRIVATE
+        shark
+        ${SQLite3_LIBRARIES}
         OpenSSL::SSL
         OpenSSL::Crypto
         Threads::Threads

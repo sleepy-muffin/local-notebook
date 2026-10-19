@@ -310,7 +310,27 @@ jobs:
 
 
       - name: Build
-        run: cmake --build build --parallel
+        shell: pwsh
+        run: |
+          cmd /c "cmake --build build --parallel > build.log 2>&1"
+          $code = $LASTEXITCODE
+
+          if ($code -ne 0) {
+            Get-Content build.log -Tail 200
+
+            # Turn the first failures into check-run annotations: the raw job
+            # log needs repository admin rights to read through the API, while
+            # annotations are publicly visible.
+            Get-Content build.log |
+              Select-String -Pattern 'error C\d+|error LNK\d+|fatal error|FAILED: |ninja: error:' |
+              Select-Object -First 10 |
+              ForEach-Object {
+                $line = $_.Line.Trim().Replace('%', '%25')
+                Write-Host "::error::$line"
+              }
+
+            exit $code
+          }
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
