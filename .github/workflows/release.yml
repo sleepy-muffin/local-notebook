@@ -53,6 +53,11 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             clang \
             libsqlite3-dev \
+            libssl-dev \
+            libboost-dev \
+            libboost-json-dev \
+            libboost-regex-dev \
+            libboost-url-dev \
             qt6-base-dev \
             qt6-qpa-plugins \
             librsvg2-bin \
@@ -79,7 +84,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          executable="build/local-notebook"
+          executable="build/ui/local-notebook"
           appdir="AppDir"
 
           if [ ! -f "$executable" ]; then
@@ -202,10 +207,15 @@ jobs:
           arch: win64_msvc2022_64
           cache: true
 
-      - name: Install SQLite
+      - name: Install SQLite, Boost and OpenSSL
         shell: pwsh
         run: |
-          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install sqlite3:x64-windows
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install `
+            sqlite3:x64-windows `
+            boost-json:x64-windows `
+            boost-regex:x64-windows `
+            boost-url:x64-windows `
+            openssl:x64-windows
 
       - name: Configure
         run: |
@@ -227,7 +237,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $exe = "build/local-notebook.exe"
+          $exe = "build/ui/local-notebook.exe"
           $release = "release"
 
           if (-not (Test-Path $exe)) {
@@ -249,14 +259,17 @@ jobs:
             throw "windeployqt failed"
           }
 
-          # Deploy SQLite runtime.
-          $sqliteDll = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/sqlite3.dll"
+          # Deploy the vcpkg runtime libraries: SQLite, OpenSSL and the
+          # dynamically linked Boost libraries (boost-json, boost-regex,
+          # boost-url and their transitive dependencies).
+          $vcpkgBin = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin"
+          $sqliteDll = "$vcpkgBin/sqlite3.dll"
 
           if (-not (Test-Path $sqliteDll)) {
             throw "SQLite DLL not found: $sqliteDll"
           }
 
-          Copy-Item $sqliteDll $release
+          Copy-Item "$vcpkgBin/*.dll" $release
 
           # Package the complete application directory.
           Compress-Archive `
