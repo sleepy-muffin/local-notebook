@@ -25,8 +25,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          # Do not pin this to main: the workflow also runs for pull requests,
+          # and those must build the change under test. A manual dispatch
+          # builds the branch it was started from (normally main).
           fetch-depth: 0
+          # external/shark is a private repository. SUBMODULE_TOKEN must be a
+          # PAT with read access to it; github.token only works if the
+          # submodule is public.
+          token: ${{ secrets.SUBMODULE_TOKEN || github.token }}
+          submodules: recursive
 
       - name: Determine version
         id: version
@@ -58,6 +65,14 @@ jobs:
             libboost-json-dev \
             libboost-regex-dev \
             libboost-url-dev \
+            libjpeg-dev \
+            libpng-dev \
+            libgl-dev \
+            libopus-dev \
+            libopusenc-dev \
+            libopusfile-dev \
+            libmpg123-dev \
+            libmp3lame-dev \
             qt6-base-dev \
             qt6-qpa-plugins \
             librsvg2-bin \
@@ -171,8 +186,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          # Build the pull request's changes rather than main; leave the ref
+          # unset so a manual dispatch builds the branch it was started from.
           fetch-depth: 0
+          # external/shark is private, so fetching it needs a PAT with read
+          # access to that repository (see the Linux job).
+          token: ${{ secrets.SUBMODULE_TOKEN || github.token }}
+          submodules: recursive
 
       - name: Determine version
         id: version
@@ -215,13 +235,25 @@ jobs:
             boost-json:x64-windows `
             boost-regex:x64-windows `
             boost-url:x64-windows `
-            openssl:x64-windows
+            openssl:x64-windows `
+            libjpeg-turbo:x64-windows `
+            libpng:x64-windows `
+            opus:x64-windows `
+            libopusenc:x64-windows `
+            opusfile:x64-windows `
+            mpg123:x64-windows `
+            mp3lame:x64-windows
 
       - name: Configure
         run: |
+          # external/shark asks for mpg123/lame without the "lib" prefix that
+          # the vcpkg ports use, so point those variables at the installed
+          # files; a plain find_library() would miss them on MSVC.
           cmake -S . -B build -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
             "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR" `
+            "-DMPG123_LIBRARY=$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib/libmpg123.lib" `
+            "-DLAME_LIBRARY=$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib/libmp3lame.lib" `
             "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
 
       - name: Build

@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+find_package(SQLite3 REQUIRED)
 find_package(Boost REQUIRED COMPONENTS json regex url)
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
@@ -56,6 +57,7 @@ target_include_directories(
         ${PROJECT_NAME}
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${SQLite3_INCLUDE_DIRS}
         PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
@@ -64,6 +66,7 @@ target_link_libraries(
         ${PROJECT_NAME}
         PRIVATE
         shark
+        ${SQLite3_LIBRARIES}
         Boost::json
         Boost::regex
         Boost::url

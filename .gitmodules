@@ -1,6 +1,3 @@
-[submodule "shark"]
-	path = shark
-	url = git@github.com:sleepy-muffin/shark.git
 [submodule "external/shark"]
 	path = external/shark
 	url = git@github.com:sleepy-muffin/shark.git
