@@ -244,17 +244,35 @@ jobs:
             mpg123:x64-windows `
             mp3lame:x64-windows
 
+
       - name: Configure
         run: |
-          # external/shark asks for mpg123/lame without the "lib" prefix that
-          # the vcpkg ports use, so point those variables at the installed
-          # files; a plain find_library() would miss them on MSVC.
+          $vcpkgLib = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib"
+
+          # external/shark uses find_library() names that do not match the
+          # vcpkg import-library filenames on MSVC. The mpg123 1.33 port
+          # installs mpg123.lib; mpg123 1.34 renamed it to libmpg123.lib, so
+          # accept either rather than pinning one name. LAME installs
+          # libmp3lame.lib.
+          $mpg123 = @("$vcpkgLib/mpg123.lib", "$vcpkgLib/libmpg123.lib") |
+            Where-Object { Test-Path $_ } |
+            Select-Object -First 1
+          if (-not $mpg123) {
+            throw "mpg123 import library not found in $vcpkgLib"
+          }
+
+          $lame = "$vcpkgLib/libmp3lame.lib"
+          if (-not (Test-Path $lame)) {
+            throw "LAME import library not found: $lame"
+          }
+
           cmake -S . -B build -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
             "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR" `
-            "-DMPG123_LIBRARY=$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib/libmpg123.lib" `
-            "-DLAME_LIBRARY=$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib/libmp3lame.lib" `
+            "-DMPG123_LIBRARY=$mpg123" `
+            "-DLAME_LIBRARY=$lame" `
             "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+
 
       - name: Build
         run: cmake --build build --parallel
