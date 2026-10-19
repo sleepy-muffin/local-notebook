@@ -235,6 +235,8 @@ jobs:
             boost-json:x64-windows `
             boost-regex:x64-windows `
             boost-url:x64-windows `
+            boost-asio:x64-windows `
+            boost-beast:x64-windows `
             openssl:x64-windows `
             libjpeg-turbo:x64-windows `
             libpng:x64-windows `
