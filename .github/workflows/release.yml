@@ -227,16 +227,17 @@ jobs:
           arch: win64_msvc2022_64
           cache: true
 
-      - name: Cache vcpkg downloads and binary packages
-        uses: actions/cache@v4
+      - name: Restore vcpkg cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             C:\vcpkg\downloads
             ${{ github.workspace }}\vcpkg-cache
-          # A fresh key per run makes actions/cache save the packages built
-          # this run; restore-keys then reuses them on later runs. vcpkg keys
-          # each cached package by its ABI hash, so stale entries are ignored.
-          key: vcpkg-x64-windows-release-${{ github.run_id }}
+          # Bump this suffix whenever the port list or the runner's vcpkg
+          # baseline changes. Cache entries are immutable, so a new suffix is
+          # how a stale entry gets replaced.
+          key: vcpkg-x64-windows-release-v1
           restore-keys: |
             vcpkg-x64-windows-release-
 
@@ -263,6 +264,18 @@ jobs:
             opusfile `
             mpg123 `
             mp3lame
+
+      # Saving from a step that runs with `always()` keeps the packages built
+      # above even when a later step (for example Build) fails.
+      - name: Save vcpkg cache
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            C:\vcpkg\downloads
+            ${{ github.workspace }}\vcpkg-cache
+          key: vcpkg-x64-windows-release-v1
 
 
       - name: Configure
