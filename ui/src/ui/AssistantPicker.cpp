@@ -29,7 +29,7 @@
 
 #include "local-notebook-core/interface.hpp"
 #include "local-notebook-core/model.hpp"
-#include "mmc/log.hpp"
+#include "shark/log.hpp"
 #include "settings/settings.hpp"
 #include "support/i18n.hpp"
 #include "ui/AssistantForm.hpp"
@@ -487,7 +487,7 @@ void AssistantPicker::refresh() {
     item->setToolTip(name);
   }
 
-  mmc::log::debug("assistant picker listed {} assistant(s)", uuids.size());
+  shark::log::debug("assistant picker listed {} assistant(s)", uuids.size());
 
   if (list_->count() > 0) {
     // Prefer the last-opened assistant when it is still present.
@@ -564,7 +564,7 @@ void AssistantPicker::open_selected() {
   }
 
   const std::string id = uuid.toStdString();
-  mmc::log::info("opening assistant {}", id);
+  shark::log::info("opening assistant {}", id);
 
   settings_.auto_login = auto_login_->isChecked();
   settings_.last_assistant = id;
@@ -582,7 +582,7 @@ void AssistantPicker::create_new() {
   const std::string uuid = lnb::api::make_uuid();
 
   lnb::api::save_assistant(uuid, assistant);
-  mmc::log::info("created assistant {}", uuid);
+  shark::log::info("created assistant {}", uuid);
 
   settings_.auto_login = auto_login_->isChecked();
   settings_.last_assistant = uuid;
@@ -606,7 +606,7 @@ void AssistantPicker::edit_selected() {
 
   const lnb::Assistant assistant = form.assistant();
   lnb::api::save_assistant(id, assistant);
-  mmc::log::info("updated assistant {}", id);
+  shark::log::info("updated assistant {}", id);
 
   // Keep the in-memory assistant in step when the edited one is the open one.
   if (api_.has_assistant() && api_.assistant_uuid() == id) {

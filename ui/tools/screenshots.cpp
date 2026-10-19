@@ -216,7 +216,7 @@ int main(int argc, char** argv) {
   }
 
   {
-    lnb::net::SummaryPlan plan;
+    lnb::SummaryPlan plan;
     plan.kind = "session memory";
     plan.automatic = false;
     plan.watermark_text = "Session memory watermark: 12 -> 18";

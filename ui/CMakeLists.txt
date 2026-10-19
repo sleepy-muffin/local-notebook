@@ -45,7 +45,7 @@ target_include_directories(local-notebook PRIVATE src)
 target_link_libraries(local-notebook
   PRIVATE
     local-notebook-core
-    mmc
+    shark
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets

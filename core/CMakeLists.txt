@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.31)
-project(local-notebook)
+project(local-notebook-core)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -13,7 +13,8 @@ find_package(Threads REQUIRED)
 # The application core. Only `include/` is public: the UI talks to the core
 # through `local-notebook-core/interface.hpp` and never sees a store, network or
 # executor type.
-add_library(local-notebook-core STATIC
+add_library(${PROJECT_NAME}
+        STATIC
     include/local-notebook-core/api_protocol.hpp
     include/local-notebook-core/error_code.hpp
     include/local-notebook-core/generation_task.hpp
@@ -23,9 +24,7 @@ add_library(local-notebook-core STATIC
 
     src/interface.cpp
 
-    src/utils/sqlite.hpp
-    src/utils/sqlite.cpp
-    src/utils/util.hpp
+        src/utils/util.hpp
     src/utils/util.cpp
 
     src/store/database.hpp
@@ -55,7 +54,7 @@ add_library(local-notebook-core STATIC
 )
 
 target_include_directories(
-  local-notebook-core
+        ${PROJECT_NAME}
     PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}/src
       ${SQLite3_INCLUDE_DIRS}
@@ -64,9 +63,9 @@ target_include_directories(
 )
 
 target_link_libraries(
-  local-notebook-core
+        ${PROJECT_NAME}
     PRIVATE
-      mmc
+      shark
       ${SQLite3_LIBRARIES}
       Boost::json
       Boost::regex

@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "local-notebook-core/interface.hpp"
-#include "mmc/log.hpp"
+#include "shark/log.hpp"
 #include "settings/settings.hpp"
 #include "support/i18n.hpp"
 #include "ui/AssistantPicker.hpp"
@@ -55,7 +55,7 @@ int main(int argc, char** argv) {
   // Point the whole on-disk tree at the per-user application data directory, or at
   // the --user-data override. This must run before the settings are read.
   lnb::api::set_data_root(resolve_data_root(app.arguments()));
-  mmc::log::info("data root: {}", lnb::api::data_root().string());
+  shark::log::info("data root: {}", lnb::api::data_root().string());
 
   lnb::Settings settings = lnb::load_settings();
 
@@ -99,6 +99,6 @@ int main(int argc, char** argv) {
 
   lnb::save_settings(settings);
   api.wait_for_generation();
-  mmc::log::debug("local-notebook exited with code {}", code);
+  shark::log::debug("local-notebook exited with code {}", code);
   return code;
 }

@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "local-notebook-core/model.hpp"
-#include "utils/sqlite.hpp"
+#include "shark/sqlite3.hpp"
 
 // The reconstructed per-assistant database (design-1.md §9). One file holds all
 // sessions and messages of one assistant. It owns the schema; `connection` does
@@ -82,7 +82,7 @@ public:
     const;
 
 private:
-  mmc::sqlite::connection connection_;
+  shark::sqlite::connection connection_;
 };
 
 } // namespace lnb::store

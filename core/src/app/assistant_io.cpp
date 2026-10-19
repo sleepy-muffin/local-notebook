@@ -1,5 +1,7 @@
 #include "app/assistant_io.hpp"
 
+#include "shark/external.hpp"
+
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <boost/json/value.hpp>
@@ -11,7 +13,7 @@
 #include <string>
 #include <string_view>
 
-#include "mmc/log.hpp"
+#include "shark/log.hpp"
 #include "net/protocol.hpp"
 #include "utils/util.hpp"
 
@@ -144,7 +146,7 @@ Assistant load_assistant(const std::string& uuid) {
   const boost::json::value parsed = boost::json::parse(text, error);
 
   if (error || !parsed.is_object()) {
-    mmc::log::error("{} is not a JSON object", path.string());
+    shark::log::error("{} is not a JSON object", path.string());
     return Assistant{};
   }
 
@@ -161,7 +163,7 @@ void save_assistant(const std::string& uuid, const Assistant& assistant) {
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
 
   if (!out) {
-    mmc::log::error("cannot write {}", path.string());
+    shark::log::error("cannot write {}", path.string());
     return;
   }
 

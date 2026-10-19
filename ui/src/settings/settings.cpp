@@ -9,7 +9,7 @@
 #include <filesystem>
 
 #include "local-notebook-core/interface.hpp"
-#include "mmc/log.hpp"
+#include "shark/log.hpp"
 
 namespace lnb {
 namespace {
@@ -177,7 +177,7 @@ Settings load_settings() {
 
   const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
   if (!document.isObject()) {
-    mmc::log::error("{} is not a JSON object; using defaults", path.string());
+    shark::log::error("{} is not a JSON object; using defaults", path.string());
     return Settings{};
   }
 
@@ -192,7 +192,7 @@ void save_settings(const Settings& settings) {
 
   QFile file(QString::fromStdString(path.string()));
   if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-    mmc::log::error("cannot write {}", path.string());
+    shark::log::error("cannot write {}", path.string());
     return;
   }
 

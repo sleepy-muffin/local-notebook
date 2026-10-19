@@ -1,7 +1,7 @@
 #include "ui/theme.hpp"
 
 #include "settings/settings.hpp"
-#include "mmc/log.hpp"
+#include "shark/log.hpp"
 
 #include <QApplication>
 #include <QDir>
@@ -214,7 +214,7 @@ void load_background(const lnb::Settings& settings) {
   const QPixmap pixmap(path);
 
   if (pixmap.isNull()) {
-    mmc::log::error("background image could not be loaded: {}", path.toStdString());
+    shark::log::error("background image could not be loaded: {}", path.toStdString());
     return;
   }
 
@@ -395,7 +395,7 @@ void apply_theme(QApplication& app, const lnb::Settings& settings) {
   load_background(settings);
   current.tint = resolve_override(settings);
 
-  mmc::log::debug("theme '{}' applied", current.theme.name.toStdString());
+  shark::log::debug("theme '{}' applied", current.theme.name.toStdString());
 }
 
 const Theme& theme() {

@@ -13,7 +13,6 @@ docs/deprecated/
 
 # Runtime state and local database
 /run/
-/external/
 
 # Local backups of parked sources
 /backups/

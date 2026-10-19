@@ -3,6 +3,6 @@ project(local-notebook)
 
 enable_testing()
 
-add_subdirectory(external/mmc)
+add_subdirectory(external/shark)
 add_subdirectory(core)
 add_subdirectory(ui)

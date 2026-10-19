@@ -1,4 +1,4 @@
-#include "mmc/log.hpp"
+#include "shark/log.hpp"
 
 #include "net/client.hpp"
 
@@ -246,7 +246,7 @@ private:
 
     if (parse_error || !document.is_object()) {
       // A malformed keep-alive must not abort the whole stream.
-      mmc::log::debug("SSE JSON parse failed: {}", parse_error.message());
+      shark::log::debug("SSE JSON parse failed: {}", parse_error.message());
       return true;
     }
 
@@ -453,7 +453,7 @@ private:
     const boost::json::value document = boost::json::parse(data, parse_error);
 
     if (parse_error || !document.is_object()) {
-      mmc::log::debug(
+      shark::log::debug(
           "Responses SSE JSON parse failed: {}", parse_error.message()
       );
       return true;
@@ -729,7 +729,7 @@ ChatCompletionResult send_message_once(
   // a surprising reply (or a failed summary) can always be traced back to what
   // the model was actually sent.
   const std::string body = boost::json::serialize(payload);
-  mmc::log::info("request {}: {}", kind, body);
+  shark::log::info("request {}: {}", kind, body);
 
   // The same body goes into the task's own log, so the tasks window can dump the
   // exact bytes that were posted when a turn is inspected. The endpoint is
@@ -875,7 +875,7 @@ ChatCompletionResult send_message_once(
     result.response_items = responses_stream->output_items();
   }
 
-  mmc::log::info(
+  shark::log::info(
       "send_message_once protocol={} tool_calls={}, finish_reason={}",
       protocol_name(remote.protocol), result.tool_calls.size(), result.finish_reason
   );
@@ -905,7 +905,7 @@ ChatCompletionResult generate_reply(
       throw std::runtime_error("Generation cancelled");
     }
 
-    mmc::log::info(
+    shark::log::info(
         "generate_reply round={} protocol={}", round, protocol_name(remote.protocol)
     );
 
@@ -971,7 +971,7 @@ ChatCompletionResult generate_reply(
       // diagnosed: the exact arguments the model sent (and the resolved size of
       // what came back) are otherwise invisible, since tool calls and results
       // are not persisted.
-      mmc::log::debug(
+      shark::log::debug(
           "generate_reply: tool call: name={} id={} args={}", call.name, call.id,
           call.arguments.substr(0, 400)
       );
@@ -986,7 +986,7 @@ ChatCompletionResult generate_reply(
       // without limit across rounds.
       output = context::clamp_tokens(output, session.tool_output_max_tokens_);
 
-      mmc::log::debug(
+      shark::log::debug(
           "generate_reply: tool result: name={} -> {} chars", call.name,
           output.size()
       );
@@ -1011,7 +1011,7 @@ ChatCompletionResult generate_reply(
     }
   }
 
-  mmc::log::info("generate_reply: reached the tool-call round cap ({})", max_rounds);
+  shark::log::info("generate_reply: reached the tool-call round cap ({})", max_rounds);
 
   note_length_warning(result, task);
   return result;
@@ -1526,7 +1526,7 @@ std::string maybe_summarize_session(
   } catch (const std::exception& error) {
     // Best effort: an automatic summarisation must never fail the user's turn,
     // so an unchanged memory is returned instead of propagating.
-    mmc::log::info(
+    shark::log::info(
         "maybe_summarize_session: skipped for session {}: {}", session.id_,
         error.what()
     );
@@ -1562,7 +1562,7 @@ std::string maybe_summarize_assistant(
         db, assistant, remote, task, stop_token, false, approver
     );
   } catch (const std::exception& error) {
-    mmc::log::info("maybe_summarize_assistant: skipped: {}", error.what());
+    shark::log::info("maybe_summarize_assistant: skipped: {}", error.what());
     task.append_log(
         "[assistant-summary] automatic pass skipped: " + std::string(error.what())
     );

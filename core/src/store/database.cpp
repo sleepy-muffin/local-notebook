@@ -55,7 +55,7 @@ constexpr std::string_view SESSION_COLUMNS =
 
 constexpr std::string_view MESSAGE_COLUMNS = "id, session_id, role, content, made_at";
 
-Session read_session(const mmc::sqlite::statement& stmt) {
+Session read_session(const shark::sqlite::statement& stmt) {
   Session session;
   session.id_ = stmt.column_uint32(0);
   session.title_ = stmt.column_text(1);
@@ -77,7 +77,7 @@ Session read_session(const mmc::sqlite::statement& stmt) {
   return session;
 }
 
-Message read_message(const mmc::sqlite::statement& stmt) {
+Message read_message(const shark::sqlite::statement& stmt) {
   Message message;
   message.id_ = stmt.column_uint32(0);
   message.session_id_ = stmt.column_uint32(1);
@@ -90,7 +90,7 @@ Message read_message(const mmc::sqlite::statement& stmt) {
 // True when `table` already has a column named `column`. Used to migrate an
 // older database forward: CREATE TABLE IF NOT EXISTS does not add columns to an
 // existing table, so a version-1 file needs an explicit ALTER TABLE.
-bool has_column(const mmc::sqlite::connection& conn, std::string_view table, std::string_view column) {
+bool has_column(const shark::sqlite::connection& conn, std::string_view table, std::string_view column) {
   auto stmt = conn.prepare("PRAGMA table_info(" + std::string(table) + ")");
 
   while (stmt.step()) {

@@ -9,8 +9,8 @@
 
 #include "app/assistant_io.hpp"
 #include "context/context.hpp"
-#include "mmc/async.hpp"
-#include "mmc/log.hpp"
+#include "shark/async.hpp"
+#include "shark/log.hpp"
 #include "net/client.hpp"
 #include "store/managers.hpp"
 #include "utils/util.hpp"
@@ -54,7 +54,7 @@ net::Remote remote_for(const Assistant& assistant) {
 } // namespace
 
 struct interface::impl {
-  using executor = mmc::async::multi_executor<void()>;
+  using executor = shark::async::multi_executor<void()>;
 
   impl() {
     // Two lanes: one for the turn, one so a summarisation pass can run without
@@ -76,13 +76,13 @@ struct interface::impl {
     const auto path = store::paths::assistant_log(uuid);
 
     try {
-      mmc::log::set_output_file(path);
+      shark::log::set_output_file(path);
     } catch (const std::exception& error) {
       // Logging stays on the previous sink; a bad path is never fatal.
-      mmc::log::error("cannot open log file {}: {}", path.string(), error.what());
+      shark::log::error("cannot open log file {}: {}", path.string(), error.what());
     }
 
-    mmc::log::info("===== local-notebook session started =====");
+    shark::log::info("===== local-notebook session started =====");
   }
 
   // Cancels the in-flight turn (if any) and waits for its executor job. Called
@@ -129,7 +129,7 @@ struct interface::impl {
     return next;
   }
 
-  // std::unique_ptr<mmc::log::backend> logger;
+  // std::unique_ptr<shark::log::backend> logger;
   std::unique_ptr<executor> multi_executor_;
 
   std::string assistant_uuid;
@@ -185,7 +185,7 @@ void interface::open_assistant(std::string uuid, Assistant assistant) {
 
   impl_->pending_session_id.reset();
 
-  mmc::log::info(
+  shark::log::info(
       "opened assistant {} at {}", impl_->assistant_uuid, directory.string()
   );
 }
