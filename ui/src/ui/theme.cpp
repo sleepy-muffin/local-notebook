@@ -334,6 +334,17 @@ void apply_theme(QApplication& app, const lnb::Settings& settings) {
   ThemeState& current = state();
 
   const std::optional<QJsonObject> root = read_theme_root();
+
+  if (!root.has_value()) {
+    // parse_theme() keeps its default-constructed colours when there is no
+    // definition, which render as black; make that failure visible rather than
+    // silently shipping a black window.
+    shark::log::error(
+        "no theme.json found in the working directory, next to the executable, "
+        "or in the compiled resources; the UI will render without themed colours"
+    );
+  }
+
   current.theme = parse_theme(root, settings.theme);
 
   // The user override wins wholesale when present; otherwise the theme's own

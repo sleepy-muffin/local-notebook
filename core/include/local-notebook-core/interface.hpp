@@ -34,8 +34,8 @@ public:
   interface();
   ~interface();
 
-  interface(const interface&) = delete;
-  interface& operator=(const interface&) = delete;
+  interface(const interface &) = delete;
+  interface &operator=(const interface &) = delete;
 
   // Opens the assistant's directory and the database it owns. Any turn still in
   // flight is cancelled and joined before the old database is replaced.
@@ -65,45 +65,38 @@ public:
   [[nodiscard]] std::vector<Message> messages(std::uint32_t session_id) const;
 
   // The newest `count` messages of a session, oldest first.
-  [[nodiscard]] std::vector<Message> recent_messages(
-      std::uint32_t session_id, std::size_t count
-  ) const;
+  [[nodiscard]] std::vector<Message>
+  recent_messages(std::uint32_t session_id, std::size_t count) const;
 
   // Sessions ordered by their newest message, newest first.
   [[nodiscard]] std::vector<Session> recent_sessions(std::size_t count) const;
 
   // The newest message time of every session, keyed by session id. One query
   // for the whole sidebar, so listing rows does not cost one query per row.
-  [[nodiscard]] std::unordered_map<std::uint32_t, std::string>
-  session_last_times() const;
+  [[nodiscard]] std::unordered_map<std::uint32_t, std::string> session_last_times() const;
 
   // The newest message time of one session, when it has any messages.
-  [[nodiscard]] std::optional<std::string> last_message_time(
-      std::uint32_t session_id
-  ) const;
+  [[nodiscard]] std::optional<std::string> last_message_time(std::uint32_t session_id) const;
 
   // The conversation-token readout for the title bar.
   [[nodiscard]] ContextUsage context_usage(std::uint32_t session_id) const;
 
   // Inserts `session` and returns its new id. `session.id_` is ignored.
-  std::uint32_t create_session(const Session& session);
-  void save_session(const Session& session);
+  std::uint32_t create_session(const Session &session);
+  void save_session(const Session &session);
   void delete_session(std::uint32_t session_id);
 
-  void set_session_reasoning_effort(
-      std::uint32_t session_id, std::string level
-  );
+  void set_session_reasoning_effort(std::uint32_t session_id, std::string level);
   void delete_message(std::uint32_t message_id);
   void edit_message(std::uint32_t message_id, std::string content);
 
   // The estimated token cost of one stored message.
-  [[nodiscard]] std::size_t message_tokens(const Message& message) const;
+  [[nodiscard]] std::size_t message_tokens(const Message &message) const;
 
   // Reasoning levels for the open assistant's model.
   [[nodiscard]] std::string default_reasoning_effort() const;
-  [[nodiscard]] std::vector<std::string> reasoning_efforts_with_stored(
-      const std::string& stored
-  ) const;
+  [[nodiscard]] std::vector<std::string>
+  reasoning_efforts_with_stored(const std::string &stored) const;
 
   // --- Turns -------------------------------------------------------------
 
@@ -123,15 +116,11 @@ public:
   void mark_assistant_summary_stale();
 
   // SUCCESS when a prompt may be sent; otherwise the first trigger that is due.
-  [[nodiscard]] error_code has_session_memory_trigger_met(
-      std::uint32_t session_id
-  ) const;
+  [[nodiscard]] error_code has_session_memory_trigger_met(std::uint32_t session_id) const;
 
   // Validates the session and both memory triggers, then persists the user
   // message. The turn itself is started by start_generation().
-  [[nodiscard]] error_code session_prompt(
-      std::uint32_t session_id, const std::string& prompt
-  );
+  [[nodiscard]] error_code session_prompt(std::uint32_t session_id, const std::string &prompt);
 
   // Starts the turn for the prompt session_prompt() just stored. Returns nullptr
   // when no prompt is pending or no assistant is open.
@@ -142,15 +131,13 @@ public:
 
   // Folds a session's overflow into memory. `force` ignores the automatic
   // trigger. The task is polled exactly like a turn.
-  [[nodiscard]] std::shared_ptr<GenerationTask> summarize_session(
-      std::uint32_t session_id, bool force, SummaryApprover approver = {}
-  );
+  [[nodiscard]] std::shared_ptr<GenerationTask>
+  summarize_session(std::uint32_t session_id, bool force, SummaryApprover approver = {});
 
   // Folds every session's contribution into the assistant memory. The interface
   // persists the resulting memory itself.
-  [[nodiscard]] std::shared_ptr<GenerationTask> summarize_assistant(
-      bool force, SummaryApprover approver = {}
-  );
+  [[nodiscard]] std::shared_ptr<GenerationTask>
+  summarize_assistant(bool force, SummaryApprover approver = {});
 
   // Requests the in-flight turn to stop. The partial reply is discarded.
   void cancel_generation();
@@ -175,8 +162,8 @@ void set_data_root(std::filesystem::path root);
 [[nodiscard]] std::filesystem::path global_settings_path();
 
 [[nodiscard]] std::vector<std::string> scan_assistants();
-[[nodiscard]] Assistant load_assistant(const std::string& uuid);
-void save_assistant(const std::string& uuid, const Assistant& assistant);
+[[nodiscard]] Assistant load_assistant(const std::string &uuid);
+void save_assistant(const std::string &uuid, const Assistant &assistant);
 
 [[nodiscard]] std::string make_uuid();
 [[nodiscard]] std::string now_iso8601_utc();
@@ -184,15 +171,14 @@ void save_assistant(const std::string& uuid, const Assistant& assistant);
 // --- Assistant-form helpers ---------------------------------------------
 
 // Completes a scheme-less URL with https:// and normalises a base URL.
-[[nodiscard]] std::string ensure_scheme(const std::string& url);
-[[nodiscard]] std::string normalize_base_url(const std::string& url);
-[[nodiscard]] bool is_valid_base_url(const std::string& url);
+[[nodiscard]] std::string ensure_scheme(const std::string &url);
+[[nodiscard]] std::string normalize_base_url(const std::string &url);
+[[nodiscard]] bool is_valid_base_url(const std::string &url);
 
 // The reasoning level a fresh assistant or session starts on, and the model's
 // levels with a stored value kept visible when the model no longer offers it.
-[[nodiscard]] std::string reasoning_default_for(const std::string& model);
-[[nodiscard]] std::vector<std::string> reasoning_levels_for(
-    const std::string& model, const std::string& stored
-);
+[[nodiscard]] std::string reasoning_default_for(const std::string &model);
+[[nodiscard]] std::vector<std::string>
+reasoning_levels_for(const std::string &model, const std::string &stored);
 
 } // namespace lnb::api

@@ -14,6 +14,7 @@ BackgroundWidget::BackgroundWidget(QWidget* parent, bool use_background_image)
       use_background_image_(use_background_image) {
   // The widget paints itself, so the stylesheet must not fill it first.
   setAttribute(Qt::WA_StyledBackground, false);
+  // setAttribute(Qt::WA_OpaquePaintEvent, true);
   setAutoFillBackground(false);
 }
 

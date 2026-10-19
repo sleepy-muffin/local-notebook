@@ -44,6 +44,14 @@ std::filesystem::path resolve_data_root(const QStringList& arguments) {
 } // namespace
 
 int main(int argc, char** argv) {
+  // The theme and the icons live in assets/local-notebook.qrc, which is compiled
+  // into the local-notebook-ui-core static library. The linker drops a resource
+  // object that nothing references, so without this call ":/themes/theme.json"
+  // does not exist and a launch whose working directory has no themes/theme.json
+  // gets the empty fallback theme (black colours). Q_INIT_RESOURCE pulls the
+  // generated resource object into the executable.
+  Q_INIT_RESOURCE(local_notebook);
+
   QApplication app(argc, argv);
   QApplication::setApplicationName(QStringLiteral("Local Notebook"));
   QApplication::setApplicationVersion(QStringLiteral("0.1.0"));
