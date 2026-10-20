@@ -1,5 +1,40 @@
 cmake_minimum_required(VERSION 3.31)
 
+project(local-notebook-ui
+        LANGUAGES CXX
+)
+
+# ========== ---------- ---------- ---------- ==========
+#                   PLATFORM VARIABLES
+# ========== ---------- ---------- ---------- ==========
+
+
+# Platform string
+if(WIN32)
+    set(PLATFORM "windows")
+elseif(APPLE)
+    set(PLATFORM "macos")
+elseif(UNIX)
+    set(PLATFORM "linux")
+else()
+    set(PLATFORM "unknown")
+endif()
+
+
+# Architecture
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    set(ARCH "x86_64")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64")
+    set(ARCH "arm64")
+else()
+    set(ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+
+# ========== ---------- ---------- ---------- ==========
+#                         SET UP
+# ========== ---------- ---------- ---------- ==========
+
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -32,16 +67,21 @@ set(LOCAL_NOTEBOOK_UI_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/../assets/local-notebook.qrc
 )
 
-add_library(local-notebook-ui-core STATIC
+add_library(${PROJECT_NAME}-core STATIC
         ${LOCAL_NOTEBOOK_UI_SOURCES}
 )
 
-target_include_directories(local-notebook-ui-core
+
+set_target_properties(${PROJECT_NAME}-core PROPERTIES
+        OUTPUT_NAME "${PROJECT_NAME}-core-${PLATFORM}-${ARCH}"
+)
+
+target_include_directories(${PROJECT_NAME}-core
         PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_link_libraries(local-notebook-ui-core
+target_link_libraries(${PROJECT_NAME}-core
         PUBLIC
         local-notebook-core
         shark
@@ -50,13 +90,18 @@ target_link_libraries(local-notebook-ui-core
         Qt6::Widgets
 )
 
-add_executable(local-notebook
+add_executable(${PROJECT_NAME}
         src/main.cpp
 )
 
-target_link_libraries(local-notebook
+target_link_libraries(${PROJECT_NAME}
         PRIVATE
-        local-notebook-ui-core
+        ${PROJECT_NAME}-core
+)
+
+
+set_target_properties(${PROJECT_NAME} PROPERTIES
+        OUTPUT_NAME "local-notebook-${PLATFORM}-${ARCH}"
 )
 
 # ========== ---------- ---------- ---------- ==========

@@ -1,5 +1,41 @@
 cmake_minimum_required(VERSION 3.31)
-project(local-notebook-core)
+
+project(
+        local-notebook-core
+    LANGUAGES CXX
+)
+
+
+# ========== ---------- ---------- ---------- ==========
+#                   PLATFORM VARIABLES
+# ========== ---------- ---------- ---------- ==========
+
+
+# Platform string
+if(WIN32)
+    set(PLATFORM "windows")
+elseif(APPLE)
+    set(PLATFORM "macos")
+elseif(UNIX)
+    set(PLATFORM "linux")
+else()
+    set(PLATFORM "unknown")
+endif()
+
+
+# Architecture
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    set(ARCH "x86_64")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64")
+    set(ARCH "arm64")
+else()
+    set(ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+
+# ========== ---------- ---------- ---------- ==========
+#                         SET UP
+# ========== ---------- ---------- ---------- ==========
+
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -53,6 +89,11 @@ add_library(${PROJECT_NAME}
         src/app/assistant_io.cpp
 )
 
+
+set_target_properties(${PROJECT_NAME} PROPERTIES
+        OUTPUT_NAME "${PROJECT_NAME}-${PLATFORM}-${ARCH}"
+)
+
 target_include_directories(
         ${PROJECT_NAME}
         PRIVATE
@@ -79,6 +120,11 @@ target_link_libraries(
         OpenSSL::Crypto
         Threads::Threads
 )
+
+# ========== ---------- ---------- ---------- ==========
+#                          TEST
+# ========== ---------- ---------- ---------- ==========
+
 
 # Regression tests for the public core API.
 add_subdirectory(tests)
