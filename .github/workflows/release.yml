@@ -99,7 +99,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          executable="build/ui/local-notebook"
+          # The UI target's OUTPUT_NAME is local-notebook-${PLATFORM}-${ARCH}
+          # (see ui/CMakeLists.txt), so it is not plain "local-notebook".
+          executable="build/ui/local-notebook-linux-x86_64"
           appdir="AppDir"
 
           if [ ! -f "$executable" ]; then
@@ -110,16 +112,6 @@ jobs:
           mkdir -p "$appdir/usr/bin"
 
           cp "$executable" "$appdir/usr/bin/local-notebook"
-
-          cat > local-notebook.desktop <<'EOF'
-          [Desktop Entry]
-          Type=Application
-          Name=Local Notebook
-          Exec=local-notebook
-          Icon=local-notebook
-          Categories=Utility;
-          Terminal=false
-          EOF
 
           cat > local-notebook.desktop <<'EOF'
           [Desktop Entry]
@@ -339,7 +331,9 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $exe = "build/ui/local-notebook.exe"
+          # Matches OUTPUT_NAME "local-notebook-${PLATFORM}-${ARCH}" in
+          # ui/CMakeLists.txt.
+          $exe = "build/ui/local-notebook-windows-x86_64.exe"
           $release = "release"
 
           if (-not (Test-Path $exe)) {
