@@ -121,20 +121,17 @@ jobs:
           Terminal=false
           EOF
 
-          cat > local-notebook.svg <<'EOF'
-          <svg xmlns="http://www.w3.org/2000/svg"
-               width="256" height="256" viewBox="0 0 256 256">
-            <rect x="24" y="24" width="208" height="208" rx="36"
-                  fill="#313244"/>
-            <path d="M76 68h104v120H76z" fill="#cba6f7"/>
-            <path d="M96 100h64M96 128h64M96 156h44"
-                  stroke="#313244" stroke-width="9"
-                  stroke-linecap="round"/>
-          </svg>
+          cat > local-notebook.desktop <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Local Notebook
+          Exec=local-notebook
+          Icon=local-notebook
+          Categories=Utility;
+          Terminal=false
           EOF
 
-          rsvg-convert -w 256 -h 256 local-notebook.svg \
-            > local-notebook.png
+          cp assets/appicon/app-256.png local-notebook.png
 
           wget -q \
             https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage \
