@@ -2,12 +2,7 @@
 
 #include <QGuiApplication>
 
-// QNativeInterface::QWaylandApplication arrived in Qt 6.5, and ui/CMakeLists.txt
-// only defines LNB_HAVE_WAYLAND_ICON when it is available. This checks the
-// version directly rather than QT_CONFIG(wayland): older qtgui has no "wayland"
-// feature, and QT_CONFIG() evaluates an undefined feature as a division by
-// zero, which is a hard preprocessor error.
-#if defined(LNB_HAVE_WAYLAND_ICON) && QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+#if defined(LNB_HAVE_WAYLAND_ICON)
 
 #include <QApplication>
 #include <QEvent>

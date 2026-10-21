@@ -54,6 +54,19 @@ jobs:
       - name: Install CMake and Ninja
         uses: lukka/get-cmake@latest
 
+      # Ubuntu 24.04 still ships Qt 6.4.2, which is older than what this project
+      # builds against (see the find_package() call in ui/CMakeLists.txt), so the
+      # Linux job installs the same Qt the Windows job uses. qtwaylandcompositor
+      # is what provides the Wayland platform plugins: qtbase alone would leave
+      # the AppImage with the xcb plugin only, and the app would fall back to
+      # XWayland on Wayland desktops.
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          cache: true
+          modules: 'qtwaylandcompositor'
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -86,6 +99,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_C_COMPILER=clang
           -DCMAKE_CXX_COMPILER=clang++
+          "-DCMAKE_PREFIX_PATH=$QT_ROOT_DIR"
 
       - name: Build
         run: cmake --build build --parallel
@@ -139,8 +153,49 @@ jobs:
           # Make the Qt deployment plugin discoverable.
           sudo mv linuxdeploy-plugin-qt.AppImage /usr/local/bin/linuxdeploy-plugin-qt
 
-          export QMAKE="$(command -v qmake6)"
+          # Deploy the Qt installed by the setup step above, not Ubuntu's 6.4.2:
+          # the executable was linked against that one, and linuxdeploy reads the
+          # plugin and library locations from QMAKE.
+          export PATH="$QT_ROOT_DIR/bin:$PATH"
+          export LD_LIBRARY_PATH="$QT_ROOT_DIR/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+          # The Qt archives install the tool as "qmake"; only the distro
+          # packages add the "qmake6" alias. Point QMAKE inside $QT_ROOT_DIR
+          # directly, because "command -v qmake6" would silently find Ubuntu's
+          # 6.4.2 and linuxdeploy would deploy that next to a binary linked
+          # against 6.8.
+          export QMAKE="$QT_ROOT_DIR/bin/qmake"
+
+          if [ ! -x "$QMAKE" ]; then
+            export QMAKE="$(command -v qmake6)"
+          fi
+
           export APPIMAGE_EXTRACT_AND_RUN=1
+
+          # Guard the resolution above: deploying a different Qt than the one
+          # the executable was linked against produces a broken AppImage, and
+          # Ubuntu's Qt ships a Wayland plugin too, so the plugin check below
+          # would not notice.
+          qt_version="$("$QMAKE" -query QT_VERSION)"
+          qt_major="${qt_version%%.*}"
+          qt_minor="${qt_version#*.}"
+          qt_minor="${qt_minor%%.*}"
+
+          if [ "$qt_major" -lt 6 ] ||
+            { [ "$qt_major" -eq 6 ] && [ "$qt_minor" -lt 8 ]; }; then
+            echo "qmake from $QMAKE reports Qt $qt_version; 6.8 or newer is needed"
+            exit 1
+          fi
+
+          # Fail here rather than shipping an X11-only AppImage if the Wayland
+          # platform plugin is missing from the Qt installation.
+          qt_plugins="$("$QMAKE" -query QT_INSTALL_PLUGINS)"
+
+          if [ ! -f "$qt_plugins/platforms/libqwayland-generic.so" ]; then
+            echo "Wayland platform plugin not found in $qt_plugins/platforms"
+            echo "Install the qtwaylandcompositor module in the Qt setup step."
+            exit 1
+          fi
 
           ./linuxdeploy.AppImage \
             --appdir "$appdir" \

@@ -113,7 +113,7 @@ spec — lives in **[docs/architecture.md](docs/architecture.md)**.
 
 ## Building
 
-Requirements: a C++23 compiler (Clang is configured), CMake ≥ 3.31, Ninja, Qt 6
+Requirements: a C++23 compiler (Clang is configured), CMake ≥ 3.31, Ninja, Qt ≥ 6.8
 (`Core`, `Gui`, `Widgets`, `Network`) and SQLite 3. On Linux, the Wayland client
 headers (`libwayland-client`, found through `pkg-config`) let the application set
 the native Wayland window icon; without them that path is simply compiled out.
