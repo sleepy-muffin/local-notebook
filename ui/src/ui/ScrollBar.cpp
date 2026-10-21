@@ -93,6 +93,7 @@ void ScrollBar::paintEvent(QPaintEvent* event) {
   }
 
   QPainter painter(this);
+  painter.setRenderHint(QPainter::Antialiasing, true);
 
   // The style may have filled the widget before this event ran; the track paint
   // replaces that fill with whatever is actually behind the bar.
@@ -101,14 +102,14 @@ void ScrollBar::paintEvent(QPaintEvent* event) {
   painter.setPen(Qt::NoPen);
   painter.setBrush(handle_color());
 
-  // A flat strip, not a pill: the rest of the chrome is square-cornered, and a
-  // rounded handle reads as a different visual language.
   const bool vertical = orientation() == Qt::Vertical;
   const QRectF handle = QRectF(slider).adjusted(
       vertical ? 1.0 : 0.0, vertical ? 0.0 : 1.0, vertical ? -1.0 : 0.0, vertical ? 0.0 : -1.0
   );
 
-  painter.drawRect(handle);
+  const qreal radius = (vertical ? handle.width() : handle.height()) / 2.0;
+
+  painter.drawRoundedRect(handle, radius, radius);
 }
 
 bool ScrollBar::event(QEvent* event) {
