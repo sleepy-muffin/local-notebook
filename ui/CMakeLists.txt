@@ -109,6 +109,12 @@ target_link_libraries(${PROJECT_NAME}-core
 # provides. The protocol files were generated once with wayland-scanner 1.23.1
 # from the staging xdg-toplevel-icon-v1.xml and are checked in, so no scanner
 # is needed to build.
+#
+# Qt 6.5 is required as well: QNativeInterface::QWaylandApplication, the only
+# public way to reach the compositor's wl_display without QtWayland's private
+# headers, does not exist before it. With an older Qt (Ubuntu 24.04 ships
+# 6.4.2) the block stays off instead of failing to compile, and the icon stays
+# with Qt.
 set(LOCAL_NOTEBOOK_WAYLAND_ICON_SOURCES)
 set(LOCAL_NOTEBOOK_WAYLAND_ICON_LIBRARIES)
 set(LOCAL_NOTEBOOK_WAYLAND_ICON_DEFINITIONS)
@@ -119,7 +125,7 @@ if(UNIX AND NOT APPLE)
     if(PkgConfig_FOUND)
         pkg_check_modules(WAYLAND_CLIENT QUIET IMPORTED_TARGET wayland-client)
 
-        if(WAYLAND_CLIENT_FOUND)
+        if(WAYLAND_CLIENT_FOUND AND Qt6Gui_VERSION VERSION_GREATER_EQUAL 6.5)
             enable_language(C)
             set(LOCAL_NOTEBOOK_WAYLAND_ICON_SOURCES
                     src/wayland/xdg-toplevel-icon-v1-protocol.c
