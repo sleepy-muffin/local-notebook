@@ -87,6 +87,14 @@ public:
   void delete_session(std::uint32_t session_id);
 
   void set_session_reasoning_effort(std::uint32_t session_id, std::string level);
+
+  // Appends a stored message without starting a turn. It exists for headless
+  // tools (the screenshot generator) that need a realistic transcript without a
+  // model; the editor and controller use session_prompt() instead.
+  void append_message(
+      std::uint32_t session_id, Role role, std::string content
+  );
+
   void delete_message(std::uint32_t message_id);
   void edit_message(std::uint32_t message_id, std::string content);
 

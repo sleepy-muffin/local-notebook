@@ -3,56 +3,11 @@
 This file stores the history of TODOs.
 Records should be added once they are completed.
 
-## Bugs
-
-### Windows CI fails on the step named "Test"
-
-Linux has passed the building.
-But Windows build didn't
-
-```text
-Run ctest --test-dir build --output-on-failure
-Test project D:/a/local-notebook/local-notebook/build
-    Start 1: store
-1/2 Test #1: store ............................   Passed    0.59 sec
-    Start 2: ui
-2/2 Test #2: ui ...............................***Failed    1.18 sec
-FAIL line 427: inner->minimumSizeHint().width() <= area->viewport()->width()
-FAIL line 427: inner->minimumSizeHint().width() <= area->viewport()->width()
-FAIL line 427: inner->minimumSizeHint().width() <= area->viewport()->width()
-FAIL line 427: inner->minimumSizeHint().width() <= area->viewport()->width()
-4 check(s) failed
 
 
-50% tests passed, 1 tests failed out of 2
+## Update Catalog
 
-Total Test time (real) =   1.78 sec
-
-The following tests FAILED:
-	  2 - ui (Failed)
-Errors while running CTest
-Error: Process completed with exit code 1.
-```
-
-- (Bug) Sliding while clicking on the session list may change the highlight while the session has not been switched. Please disable sliding/dragging behaviors.
-- (Bug) There should be only one item in session list and pinned list, currently it's possible for both session list and pinned session list have their own highlighted item.
-
-## Experience Improvements
-
-### Custom transcript renderer
-
-- Draw markdown with custom renderer for better performance. Implemented as a
-  Qt-free renderer core (`ui/render/`: document model, layout, hit testing,
-  selection and paint order) plus a Qt-backed canvas (`TranscriptCanvas`) that
-  only supplies shaping (`QTextLayout`) and a `QPainter` backend. The transcript
-  is one custom-painted, virtualised surface: paragraphs are shaped once, only
-  lines inside the viewport are painted, streaming relayouts only the last
-  message, and the per-message widget tree (and the `QTextDocument` → HTML →
-  `QLabel` round trip) is gone. Selection now spans every message and code
-  block. The reserved action strip is drawn by the layout and a single reusable
-  hover bar handles copy/edit/delete. The "Load earlier messages" button was
-  replaced by automatic paging when the reader reaches the top, and scroll
-  anchors by message id keep the reader's place across rebuilds.
+I will try to make this list ordered by time.
 
 - (New Function) Theme selectors and budget presets, assistant-summarization presets are also scrolling adjustable. Please disable it as we did for number/ font choosing controls.
 - (New Function) Please place some screenshots in `docs/screenshots/`, then present them in `README.md`.
@@ -114,35 +69,72 @@ Error: Process completed with exit code 1.
   - Examples:
     - Several directories configured — named top-level entries case. `list_directory {}` returns the "mounts", named from each directory’s basename: `alpha/`, `beta-123/`. The full path is never exposed, but the folder name is.
 
-### Responses API path + reasoning selector
+- (Refinement) Scrollbar track. A stylesheet-only transparent track is
+  not possible under Breeze: the style fills the empty track with
+  `QPalette::Base` even when the QSS asks for `background: transparent`, which is
+  the lighter strip that showed through. The transcript now uses `ui::ScrollBar`,
+  which paints the track with the conversation surface (`conversation_background`)
+  and draws only a rounded handle. For themes that use a background image the
+  surface is transparent, so the bar asks `BackgroundWidget::paint_region()` for
+  the exact slice of the scaled image (and tint) behind it. The settings pages,
+  the assistant picker and the session editor use the same bar with the window
+  colour, and the session list with the sidebar surface colour; the platform
+  style never gets a chance to fill the track.
+- (Refinement) Inline code. The rounded plate now drops its horizontal
+  padding on a side where the neighbouring character is not whitespace, so the
+  background no longer runs into adjacent text (padding is kept next to spaces
+  and at line/paragraph edges). Inline code is also sized as
+  `inline_code_scale` x the surrounding text instead of using the configured
+  monospace size; the ratio is configurable under Appearance as "Inline code
+  size" (default 0.9, range 0.50-1.50) and is persisted in `settings.json` as
+  `inline_code_scale`.
 
-An assistant now talks to one of two wire protocols, chosen in the assistant form.
-`Responses` is the default (and the only endpoint that supports tool calling for the
-GPT-6 family); `Chat Completions` remains for OpenAI-compatible servers that expose
-only that shape. The choice is stored in the assistant JSON and, absent a key, an
-older assistant routes through Responses.
+- (CI) Windows Build CI https://github.com/sleepy-muffin/local-notebook/actions/runs/39581150163/job/119158815237 on the step named "Install SQLite, Boost and OpenSLL". Make it cached.
 
-- The API URL control now takes a base like `xxx.com/v1`; it requires an explicit
-  `http://` or `https://`, and `https://` is prepended on focus-out when it is
-  missing. Saving is refused unless the value is an http(s) base ending in `/v1`.
-  A legacy full-endpoint value normalises to its base on load.
-- The endpoint derived from the base is `/responses` or `/chat/completions`,
-  matching the assistant's protocol. Summarisation follows the same protocol.
-- `reasoning_effort` is now user-visible: a borderless, fully transparent selector
-  with a right-hand chevron sits to the left of the composer's send button (clicking
-  anywhere on it opens the dropdown), and a matching selector appears on the
-  assistant settings page (JSON) and the session settings page (DB column). Each
-  list is inferred from the model id, leading with the cheapest level.
-- A stored level the current model no longer offers is **rejected at send time**,
-  never reset to an available one behind the user's back. The selectors still show
-  such a level so it can be corrected.
-- (Open) The second `GPT-6.1 Luna` entry in the original reasoning-level spec had
-  no distinct model name. Per the docs, `none` is unsupported by GPT-6 Astra and
-  GPT-6.1 Sol, so the no-`none` list is applied to the GPT-6 family except Luna.
-  Revisit if a real model name surfaces.
+- (Refinement) An assistant now talks to one of two wire protocols, chosen in the assistant form. Responses` is the default (and the only endpoint that supports tool calling for the GPT-6 family); `Chat Completions` remains for OpenAI-compatible servers that expose only that shape. The choice is stored in the assistant JSON and, absent a key, an older assistant routes through Responses.
+  - The API URL control now takes a base like `xxx.com/v1`; it requires an explicit
+    `http://` or `https://`, and `https://` is prepended on focus-out when it is
+    missing. Saving is refused unless the value is an http(s) base ending in `/v1`.
+    A legacy full-endpoint value normalises to its base on load.
+  - The endpoint derived from the base is `/responses` or `/chat/completions`,
+    matching the assistant's protocol. Summarisation follows the same protocol.
+  - `reasoning_effort` is now user-visible: a borderless, fully transparent selector
+    with a right-hand chevron sits to the left of the composer's send button (clicking
+    anywhere on it opens the dropdown), and a matching selector appears on the
+    assistant settings page (JSON) and the session settings page (DB column). Each
+    list is inferred from the model id, leading with the cheapest level.
+  - A stored level the current model no longer offers is **rejected at send time**,
+    never reset to an available one behind the user's back. The selectors still show
+    such a level so it can be corrected.
+  - (Open) The second `GPT-6.1 Luna` entry in the original reasoning-level spec had
+    no distinct model name. Per the docs, `none` is unsupported by GPT-6 Astra and
+    GPT-6.1 Sol, so the no-`none` list is applied to the GPT-6 family except Luna.
+    Revisit if a real model name surfaces.
 
-## Architectural Improvements
-
-- Make an abstract layer for tasks? Which prevents the UI from launching a "send" task when either session-level or assistant-level summarisation trigger is met (so, we will have another protection layer). And all tasks (send tasks, summarisation tasks) must go through it, so Tasks Window can show them without problems. To reduce UI sources from directly making decisions from their own.
-
+- (Refinement) Make an abstract layer for tasks? Which prevents the UI from launching a "send" task when either session-level or assistant-level summarisation trigger is met (so, we will have another protection layer). And all tasks (send tasks, summarisation tasks) must go through it, so Tasks Window can show them without problems. To reduce UI sources from directly making decisions from their own.
   Implemented as `lnb::TaskManager` / `lnb::Task` (`src/app/task_manager.*`), owned by `Application`. It is the single owner of every background worker and the single place the primary-action policy lives (`primary_action`: session overflow, then the shared assistant trigger or an in-flight assistant fold, then a plain send). Every turn and fold is started through `submit`, which refuses a `Turn` while the primary action is not a send — the extra protection layer — and keeps at most one task per slot (one per session, one for the shared assistant memory). The Tasks Window, the status-bar count and every composer now read from the manager instead of from the open views.
+
+- (Refinement) Draw markdown with custom renderer for better performance. Implemented as a
+  Qt-free renderer core (`ui/render/`: document model, layout, hit testing,
+  selection and paint order) plus a Qt-backed canvas (`TranscriptCanvas`) that
+  only supplies shaping (`QTextLayout`) and a `QPainter` backend. The transcript
+  is one custom-painted, virtualised surface: paragraphs are shaped once, only
+  lines inside the viewport are painted, streaming relayouts only the last
+  message, and the per-message widget tree (and the `QTextDocument` → HTML →
+  `QLabel` round trip) is gone. Selection now spans every message and code
+  block. The reserved action strip is drawn by the layout and a single reusable
+  hover bar handles copy/edit/delete. The "Load earlier messages" button was
+  replaced by automatic paging when the reader reaches the top, and scroll
+  anchors by message id keep the reader's place across rebuilds.
+
+- (Refinement) Make strip of scrollbar (in conversation view) corner no longer rounded to match the overall styles.
+  `ui::ScrollBar` now paints the handle with `drawRect`, without antialiasing or
+  a corner radius. The change is shared by every custom scrollbar (conversation,
+  sidebar and settings), since the rest of the chrome is square-cornered.
+- (Bug) Currently the screenshots produced by the tool does not provide example conversations. And the names mismatch the ones recorded in `README.md`.
+  The tool now seeds three example conversations (including a featured one with a
+  code block for the review dialog) and writes exactly the two images the README
+  references: `docs/screenshots/main-window.png` and
+  `docs/screenshots/summary-review.png`. The summary-review capture runs a real
+  `lnb::SummaryPlan`; `append_message` was added to the core interface for
+  headless seeding.

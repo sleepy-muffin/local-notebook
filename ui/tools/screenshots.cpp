@@ -1,7 +1,7 @@
 #include <QApplication>
-#include <QDir>
 #include <QSize>
 #include <QString>
+#include <QWidget>
 
 #include <cstdlib>
 #include <filesystem>
@@ -10,12 +10,11 @@
 
 #include "local-notebook-core/interface.hpp"
 #include "local-notebook-core/model.hpp"
+#include "local-notebook-core/summary.hpp"
 #include "settings/settings.hpp"
 #include "support/i18n.hpp"
-#include "ui/AssistantPicker.hpp"
 #include "ui/MainWindow.hpp"
-#include "ui/SessionEditor.hpp"
-#include "ui/SettingsWindow.hpp"
+#include "ui/SummaryReviewDialog.hpp"
 #include "ui/theme.hpp"
 
 namespace {
@@ -43,9 +42,12 @@ lnb::Assistant make_assistant() {
   assistant.model_ = "gpt-5.6-luna";
   assistant.api_url_ = "https://api.example.invalid/v1";
   assistant.custom_instructions_ =
-      "Answer concisely and precisely, and prefer the smallest correct change.";
+      "You are a careful engineering assistant. Answer concisely and precisely, "
+      "and prefer showing the smallest correct change.";
   assistant.memory_ =
-      "The user is building Local Notebook, a C++23 / Qt Widgets application.";
+      "The user is building Local Notebook, a C++23 / Qt Widgets application. "
+      "They prefer British spelling in comments and flat, Zed-like interfaces "
+      "with no rounded chrome.";
   return assistant;
 }
 
@@ -57,6 +59,32 @@ std::uint32_t add_session(
   session.title_ = title;
   session.memory_ = memory;
   return api.create_session(session);
+}
+
+void seed_design_session(lnb::api::interface& api, std::uint32_t session_id) {
+  api.append_message(
+      session_id, lnb::Role::User,
+      "Why can a long conversation truncate the model's reply?"
+  );
+  api.append_message(
+      session_id, lnb::Role::Assistant,
+      "Because the completion budget is shared with hidden reasoning. If the "
+      "reasoning headroom is too small, the visible answer is cut off.\n\n"
+      "```cpp\nconst std::size_t max_tokens =\n"
+      "    session.summary_token_budget_ +\n"
+      "    session.summary_reasoning_headroom_tokens_;\n```\n\n"
+      "The fix is to raise `summary_reasoning_headroom_tokens`, not the answer "
+      "budget."
+  );
+  api.append_message(
+      session_id, lnb::Role::User,
+      "Should the input bound be derived from the model context window?"
+  );
+  api.append_message(
+      session_id, lnb::Role::Assistant,
+      "No. Deriving it creates a second source of truth. The input bound is the "
+      "session's own `summary_trigger_tokens_`; nothing else feeds it."
+  );
 }
 
 } // namespace
@@ -105,10 +133,18 @@ int main(int argc, char** argv) {
       make_assistant()
   );
 
+  // Background sessions, so the sidebar reads like a real notebook.
   const std::uint32_t rust = add_session(
       api,
-      "Rust lifetimes",
-      "The user is learning Rust and already knows C++."
+      "Placeholder",
+      "Placeholder"
+  );
+  api.append_message(
+      rust, lnb::Role::User, "Placeholder"
+  );
+  api.append_message(
+      rust, lnb::Role::Assistant,
+      "Placeholder"
   );
 
   const std::uint32_t performance = add_session(
@@ -116,12 +152,51 @@ int main(int argc, char** argv) {
       "Qt performance",
       "The user cares about keeping long transcripts responsive."
   );
-
-  const std::uint32_t design = add_session(
-      api,
-      "Summarisation design",
-      "The session is designing a two-level memory system."
+  api.append_message(
+      performance, lnb::Role::User,
+      "How do I keep a long chat list smooth?"
   );
+  api.append_message(
+      performance, lnb::Role::Assistant,
+      "Render only what is visible, and reuse the rows as they scroll."
+  );
+
+  // The featured session is created last, so its newest message is what the
+  // main window opens. Its retained window is deliberately small, which gives
+  // the summarisation review below a real overflow to fold.
+  lnb::Session design;
+  design.title_ = "Summarisation design";
+  design.custom_instructions_ =
+      "When discussing design, compare the options and recommend the most mature "
+      "one.";
+  design.memory_ =
+      "The session is designing a two-level memory: a session memory and a "
+      "shared assistant memory. Watermarks are bookkeeping only.";
+  design.summary_keep_tokens_ = 120;
+
+  const std::uint32_t design_id = api.create_session(design);
+  seed_design_session(api, design_id);
+
+  // Capture the request the review dialog normally shows, without sending it:
+  // the approver runs before the first byte leaves the process, and declining
+  // leaves the memory and its watermark untouched.
+  lnb::SummaryPlan plan;
+
+  if (auto task = api.summarize_session(
+          design_id, /*force=*/true,
+          [&plan](const lnb::SummaryPlan& proposed) {
+            plan = proposed;
+            return false;
+          }
+      );
+      task != nullptr) {
+    api.wait_for_generation();
+  }
+
+  if (plan.request.empty()) {
+    std::cerr << "failed to capture a summarisation request\n";
+    return EXIT_FAILURE;
+  }
 
   {
     ui::MainWindow window(api, settings);
@@ -129,19 +204,8 @@ int main(int argc, char** argv) {
   }
 
   {
-    ui::SettingsWindow window(api, settings);
-    window.set_current_session(design);
-    shoot(window, output / "settings.png", QSize(820, 620));
-  }
-
-  {
-    ui::SessionEditor editor(api, design);
-    shoot(editor, output / "session-editor.png", QSize(640, 720));
-  }
-
-  {
-    ui::AssistantPicker picker(api, settings);
-    shoot(picker, output / "assistant-picker.png", QSize(760, 520));
+    ui::SummaryReviewDialog dialog(plan);
+    shoot(dialog, output / "summary-review.png", QSize(760, 640));
   }
 
   api.wait_for_generation();

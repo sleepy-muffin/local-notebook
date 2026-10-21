@@ -352,6 +352,23 @@ void interface::set_session_reasoning_effort(
   impl_->sessions->db().set_session_reasoning_effort(session_id, level);
 }
 
+void interface::append_message(
+    std::uint32_t session_id, Role role, std::string content
+) {
+  if (impl_->sessions == nullptr) {
+    return;
+  }
+
+  auto message_mgr = impl_->sessions->get_messages(session_id);
+
+  if (!message_mgr.has_value()) {
+    return;
+  }
+
+  message_mgr->append(role, std::move(content));
+  mark_assistant_summary_stale();
+}
+
 void interface::delete_message(std::uint32_t message_id) {
   if (impl_->sessions == nullptr) {
     return;
