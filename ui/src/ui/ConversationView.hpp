@@ -1,7 +1,5 @@
 #pragma once
 
-#include <QFrame>
-#include <QStyle>
 #include <QWidget>
 
 #include <cstddef>
@@ -10,18 +8,15 @@
 #include <string>
 #include <vector>
 
+#include "render/document.hpp"
 #include "ui/ConversationController.hpp"
+#include "ui/TranscriptCanvas.hpp"
 
-class QEnterEvent;
 class QEvent;
-class QLabel;
 class QPlainTextEdit;
-class QPushButton;
-class QScrollArea;
 class QShowEvent;
 class QTimer;
 class QToolButton;
-class QVBoxLayout;
 
 namespace lnb {
 struct Settings;
@@ -31,155 +26,31 @@ namespace ui {
 
 class ReasoningSelector;
 class StatusNotice;
-
-// A single rendered chat message body. The user's own messages get a rounded
-// block (the same surface as the composer); assistant replies are bare,
-// Markdown-formatted text; notices and errors get a muted, bordered block. Every
-// body occupies the full width of the conversation flow, so a message's size
-// never depends on how much was written.
-class MessageBubble : public QFrame {
-public:
-  enum class Role {
-    User,
-    Assistant,
-    Notice, // a non-fatal remark (e.g. a truncated reply)
-    Error,  // a failed turn
-  };
-
-  MessageBubble(Role role, QWidget* parent = nullptr);
-
-  void set_text(const QString& text);
-
-  // The raw source text (never the rendered rich text), so assistant replies can
-  // be copied verbatim.
-  [[nodiscard]] QString text() const { return source_; }
-
-  // Re-applies the bubble's colours and re-renders its text, so a theme change
-  // takes effect without rebuilding the transcript.
-  void refresh_style();
-
-private:
-  // A reply is rendered as a stack of blocks: Markdown text blocks (rich-text
-  // labels) and fenced code blocks (rounded frames holding a monospace label).
-  struct Segment {
-    bool code = false;
-    QString text;
-  };
-
-  struct Block {
-    bool code = false;
-    QWidget* container = nullptr;
-    QLabel* label = nullptr;
-    // The rounded frame of a code block, kept so a theme change can restyle it
-    // without rebuilding the block.
-    QFrame* frame = nullptr;
-  };
-
-  void apply_style();
-  [[nodiscard]] std::vector<Segment> parse_segments(const QString& markdown) const;
-  void set_markdown(const QString& markdown);
-  void rebuild_blocks(const std::vector<Segment>& segments);
-
-  // Re-applies the code background to every code block, so a theme change reaches
-  // frames that are otherwise left untouched by an in-place text update.
-  void refresh_code_blocks();
-
-  Role role_;
-  bool markdown_ = false;
-  // Raw source text (assistant Markdown included), so redundant updates can be
-  // skipped and the body can be re-rendered on a theme change.
-  QString source_;
-  QLabel* text_label_ = nullptr;
-  QVBoxLayout* body_layout_ = nullptr;
-  std::vector<Block> blocks_;
-};
-
-// One transcript entry: a message body plus the hover-only action strip
-// ("#id" alongside copy / edit / delete). The strip always occupies the same
-// space, so revealing its buttons never reflows the transcript, and the buttons
-// only appear while the pointer is over the entry.
-class MessageRow : public QWidget {
-public:
-  MessageRow(MessageBubble::Role role, QWidget* parent = nullptr);
-
-  [[nodiscard]] MessageBubble* bubble() const { return bubble_; }
-
-  // Adds an icon-only action button and returns it so the caller can connect to
-  // it. The bundled icon named `icon_name` is preferred; fallback_icon is used
-  // when the artwork is missing.
-  QToolButton* add_action(
-      const QString& icon_name, QStyle::StandardPixmap fallback_icon, const QString& tip
-  );
-
-  void set_actions_visible(bool visible);
-
-  // Re-applies the action icons for the active theme, so a theme change takes
-  // effect without rebuilding the transcript.
-  void refresh_action_icons();
-
-  // Records the stored message id and shows it (as "#<id>") alongside the hover
-  // actions. Ids of 0 (streaming/notice rows) leave the label empty.
-  void set_message_id(std::uint32_t id);
-
-  // Records the message's arrival time and shows it next to the id. An empty
-  // string leaves the label blank.
-  void set_message_time(const QString& time);
-
-  // Records the estimated token cost of the message (its text plus the small
-  // per-message overhead — the same estimate the title bar sums) and shows it
-  // next to the time, so the strip reads "#3  2026-10-16 14:32  1.2k tok".
-  void set_message_tokens(std::size_t tokens);
-
-protected:
-  void enterEvent(QEnterEvent* event) override;
-  void leaveEvent(QEvent* event) override;
-
-private:
-  // One hover action's icon, remembered so the strip can be recoloured when the
-  // theme changes.
-  struct ActionIcon {
-    QToolButton* button = nullptr;
-    QString name;
-    QStyle::StandardPixmap fallback = QStyle::SP_CustomBase;
-  };
-
-  void apply_action_icon(ActionIcon& entry);
-
-  MessageBubble::Role role_;
-  MessageBubble* bubble_ = nullptr;
-  QWidget* actions_ = nullptr;
-  QLabel* message_id_label_ = nullptr;
-  QLabel* message_time_label_ = nullptr;
-  QLabel* message_tokens_label_ = nullptr;
-  std::uint32_t message_id_ = 0;
-  bool actions_visible_ = false;
-  std::vector<ActionIcon> action_icons_;
-};
+class TranscriptCanvas;
 
 // The chat pane for one session: transcript on top, composer at the bottom. The
 // view is passive — it renders the stored transcript and forwards intent to its
 // ConversationController, which owns the background worker for the session's
 // turn. Switching sessions therefore never interrupts a generation.
+//
+// The transcript itself is a single custom-painted canvas (TranscriptCanvas):
+// messages are model data, not widgets, so a long conversation has no widget
+// forest to build and selection can span every message and code block.
 class ConversationView : public QWidget {
 public:
   ConversationView(
-      lnb::api::interface& api, const lnb::Settings& settings,
-      std::uint32_t session_id, QWidget* parent = nullptr
-  );
+      lnb::api::interface& api, const lnb::Settings& settings, std::uint32_t session_id,
+      QWidget* parent = nullptr);
 
   [[nodiscard]] std::uint32_t session_id() const { return session_id_; }
   [[nodiscard]] bool busy() const { return controller_.busy(); }
 
   // Progress of the session's in-flight turn, for the running-task readout.
-  [[nodiscard]] ConversationController::Progress progress() const {
-    return controller_.progress();
-  }
+  [[nodiscard]] ConversationController::Progress progress() const { return controller_.progress(); }
 
   // The task the session's controller is polling, so the window can map it back
   // to this view for the running-task readout.
-  [[nodiscard]] std::shared_ptr<lnb::GenerationTask> task() const {
-    return controller_.task();
-  }
+  [[nodiscard]] std::shared_ptr<lnb::GenerationTask> task() const { return controller_.task(); }
 
   // Requests the session's in-flight task to stop.
   void cancel() { controller_.cancel(); }
@@ -187,14 +58,7 @@ public:
   // Rebuilds the transcript from the database.
   void reload();
 
-  // Unloads the oldest rendered rows so the number of rendered message rows stays
-  // within the configured initial rendering amount, leaving room for `reserved`
-  // extra rows (an in-flight streaming row). Called whenever new content arrives,
-  // so a long conversation never keeps more than the configured amount rendered;
-  // history revealed by paging is temporary until the next arrival.
-  void enforce_render_limit(std::size_t reserved = 0);
-
-  // Re-applies theme colours to the composer and every rendered bubble.
+  // Re-applies theme colours to the composer and the transcript.
   void refresh_style();
 
   // True when the unsummarised transcript has reached the session trigger, so the
@@ -216,9 +80,7 @@ public:
   // The diagnostic log for the current (or last finished) turn, and the last
   // finished turn's snapshot; both feed the tasks window.
   [[nodiscard]] std::string task_log() const { return controller_.task_log(); }
-  [[nodiscard]] bool has_finished_task() const {
-    return controller_.has_finished_task();
-  }
+  [[nodiscard]] bool has_finished_task() const { return controller_.has_finished_task(); }
   [[nodiscard]] lnb::GenerationTask::Snapshot last_snapshot() const {
     return controller_.last_snapshot();
   }
@@ -237,39 +99,32 @@ public:
 
   // Called after every reload, so the window can refresh the session list, the
   // title bar and the context readout.
-  void set_on_changed(std::function<void()> handler) {
-    on_changed_ = std::move(handler);
-  }
+  void set_on_changed(std::function<void()> handler) { on_changed_ = std::move(handler); }
 
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
   void showEvent(QShowEvent* event) override;
 
 private:
-  MessageRow* add_row(MessageBubble::Role role, std::uint32_t message_id, bool editable);
+  // Rebuilds the canvas document from messages_[window_start_..] and hands it to
+  // the transcript, which keeps the reader anchored on `anchor` or follows the
+  // bottom when `follow_bottom` is set.
+  void rebuild_transcript(const TranscriptCanvas::ScrollAnchor& anchor, bool follow_bottom);
 
-  // Builds a row and registers it, without inserting it into the layout, so
-  // callers can place it at an arbitrary index (used when prepending history).
-  MessageRow* make_row(MessageBubble::Role role, std::uint32_t message_id, bool editable);
+  // Builds the renderer document for the messages in the current window.
+  [[nodiscard]] render::Document build_document() const;
 
-  // Creates the row for messages_[index] and inserts it at layout_index.
-  void render_message_at(std::size_t index, int layout_index);
+  // Appends one stored message (its metadata and styled blocks) to `document`.
+  void append_rendered_message(render::Document& document, const lnb::Message& message) const;
 
-  // Reveals one more page of older messages above the current window, keeping
-  // the reader anchored on the message they were looking at.
+  // Reveals one more page of older messages above the current window. The
+  // canvas restores the reader's place, so paging never jumps.
   void load_older();
-  void update_load_older_visibility();
 
   void prompt_edit(std::uint32_t message_id, const QString& current);
-  void clear_transcript();
   void flush_streaming_text();
-  void pin_to_bottom();
   void submit();
   void set_busy(bool busy);
-
-  // Keeps the transcript column centred when the pane is wider than the
-  // configured flow width, so the content pulls away from both edges.
-  void update_content_margins();
 
   // Gives the composer field the same surface as the user's own message block.
   void apply_composer_style();
@@ -295,41 +150,20 @@ private:
   std::uint32_t session_id_;
   ConversationController controller_;
 
-  QScrollArea* scroll_ = nullptr;
-  QWidget* transcript_ = nullptr;
-  QVBoxLayout* transcript_layout_ = nullptr;
+  TranscriptCanvas* transcript_ = nullptr;
 
-  // Full history for the session plus the trailing window currently rendered.
-  // messages_ is authoritative (loaded once per reload); rendered_count_ counts
-  // how many of its most recent entries are actually in the widget tree.
+  // Full history for the session, plus the first message index of the window
+  // currently handed to the canvas. Older pages are revealed on demand; the
+  // number of rendered messages is therefore bounded no matter how long the
+  // conversation grows.
   std::vector<lnb::Message> messages_;
-  std::size_t rendered_count_ = 0;
-
-  // Every row currently in the layout, so a theme change can restyle them.
-  std::vector<MessageRow*> rows_;
-
-  // Reveals the next page of older messages; hidden while the whole history is
-  // already rendered.
-  QPushButton* load_older_ = nullptr;
-
-  // True while the transcript is being rebuilt or paged, so the scrollbar's
-  // valueChanged handler does not mistake a programmatic jump for a request to
-  // load more history.
-  bool updating_ = false;
-
-  // True while the reader is parked at the bottom of the transcript. New content
-  // is followed only while this holds; scrolling up suspends it until the reader
-  // returns to the bottom.
-  bool stick_to_bottom_ = true;
+  std::size_t window_start_ = 0;
 
   bool busy_ = false;
 
   // True when a theme change happened while this view was hidden, so the restyle
   // is deferred until it is shown.
   bool style_stale_ = false;
-
-  // Cached left/right inset of the transcript layout; -1 until first computed.
-  int content_side_margin_ = -1;
 
   QPlainTextEdit* input_ = nullptr;
   QToolButton* send_button_ = nullptr;
@@ -353,7 +187,9 @@ private:
   // reached the trigger), rather than "send".
   bool summarize_mode_ = false;
 
-  MessageRow* streaming_row_ = nullptr;
+  // True once the in-flight reply has been added to the canvas, so only the
+  // first token creates the message and later ones replace its blocks.
+  bool streaming_started_ = false;
   QString streaming_status_;
 
   // Coalesces rapid streaming updates so Markdown is not re-parsed on every poll

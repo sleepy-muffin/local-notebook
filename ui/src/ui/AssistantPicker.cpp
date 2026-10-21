@@ -34,6 +34,7 @@
 #include "support/i18n.hpp"
 #include "ui/AssistantForm.hpp"
 #include "ui/BackgroundWidget.hpp"
+#include "ui/ScrollBar.hpp"
 #include "ui/theme.hpp"
 
 namespace ui {
@@ -268,6 +269,7 @@ public:
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    install_scroll_bars(scroll, ScrollBarTrack::Window);
 
     form_ = new AssistantForm(scroll);
     form_->set_assistant(initial_);
@@ -381,6 +383,7 @@ AssistantPicker::AssistantPicker(
   list_->setUniformItemSizes(true);
   list_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
   list_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  install_scroll_bars(list_, ScrollBarTrack::Window);
   list_->setSelectionRectVisible(false);
   list_->setMouseTracking(true);
   list_->viewport()->setMouseTracking(true);

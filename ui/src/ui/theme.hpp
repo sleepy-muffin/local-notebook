@@ -87,6 +87,11 @@ const QFont& ui_font();
 const QFont& chat_font();
 const QFont& mono_font();
 
+// Inline code size as a fraction of the surrounding text. Inline code is scaled
+// from the paragraph it sits in (so headings keep their proportions) rather
+// than from the configured monospace size.
+float inline_code_scale();
+
 // Convenience readers for the reading rhythm of message text.
 int line_height_other();
 int line_height_self();

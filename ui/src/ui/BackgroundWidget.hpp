@@ -5,6 +5,7 @@
 #include <QWidget>
 
 class QPaintEvent;
+class QPainter;
 
 namespace ui {
 
@@ -23,6 +24,12 @@ namespace ui {
 class BackgroundWidget : public QWidget {
 public:
   explicit BackgroundWidget(QWidget* parent = nullptr, bool use_background_image = false);
+
+  // Paints the backdrop behind `region` (in this widget's logical coordinates)
+  // into `target` (in the caller's painter coordinates). Used by overlay chrome,
+  // such as the custom scrollbar, that must reproduce the surface it sits on —
+  // including the background image and its tint when one is configured.
+  void paint_region(QPainter& painter, const QRect& target, const QRect& region);
 
 protected:
   void paintEvent(QPaintEvent* event) override;

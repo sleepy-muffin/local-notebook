@@ -10,24 +10,13 @@
 #include <QIcon>
 #include <QInputDialog>
 #include <QKeyEvent>
-#include <QLabel>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPlainTextEdit>
-#include <QPushButton>
-#include <QScrollArea>
-#include <QScrollBar>
 #include <QShowEvent>
 #include <QSizePolicy>
-#include <QStringList>
-#include <QTextBlock>
-#include <QTextBlockFormat>
-#include <QTextCharFormat>
-#include <QTextCursor>
-#include <QTextDocument>
-#include <QTextFragment>
-#include <QTextList>
+#include <QStyle>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -40,7 +29,9 @@
 #include "local-notebook-core/interface.hpp"
 #include "settings/settings.hpp"
 #include "support/i18n.hpp"
+#include "ui/MessageDocument.hpp"
 #include "ui/StatusNotice.hpp"
+#include "ui/TranscriptCanvas.hpp"
 #include "ui/theme.hpp"
 
 namespace ui {
@@ -58,6 +49,11 @@ QString css_color(const QColor& color) {
 
 QString from_utf8(const std::string& value) {
   return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
+}
+
+std::u16string to_u16(const QString& value) {
+  return std::u16string(
+      reinterpret_cast<const char16_t*>(value.utf16()), static_cast<std::size_t>(value.size()));
 }
 
 // A stored message's arrival time (ISO-8601 UTC) in the reader's local time. An
@@ -93,159 +89,9 @@ QString format_token_estimate(std::size_t tokens) {
   return trs("%1k tok").arg(thousands, 0, 'f', 1);
 }
 
-// Fixed height of every action strip, so revealing the buttons never reflows the
-// transcript.
-constexpr int kActionsHeight = 20;
-
-// Inner left/right inset shared by every message body, so the assistant's text
-// lines up with the user's block text.
-constexpr int kBodySidePadding = 14;
-
-// Minimum left/right inset of the conversation flow. The page margin alone is
-// too tight, so blocks never crowd the pane edges even when the flow width is
-// unlimited or the pane is narrow.
-constexpr int kConversationSidePadding = 28;
-
 // Streaming Markdown is re-rendered at most this often (ms), so a long reply is
 // not re-parsed on every poll tick.
 constexpr int kStreamRenderMs = 50;
-
-// How close (in pixels) the scrollbar must be to the maximum for the reader to
-// count as "at the bottom". Absorbs sub-pixel layout rounding so the transcript
-// keeps following content while parked at the bottom.
-constexpr int kStickToBottomSlack = 4;
-
-// The generic family Qt's Markdown importer assigns to code spans and blocks.
-const QString kMonospaceFamily = QStringLiteral("monospace");
-
-// Builds a selectable, wrapping label that grows in height when its text wraps.
-QLabel* make_label(QWidget* parent, Qt::TextFormat format) {
-  auto* label = new QLabel(parent);
-  label->setWordWrap(true);
-  label->setTextFormat(format);
-  label->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::LinksAccessibleByMouse);
-  label->setOpenExternalLinks(true);
-
-  QSizePolicy policy(QSizePolicy::Ignored, QSizePolicy::Minimum);
-  policy.setHeightForWidth(true);
-  label->setSizePolicy(policy);
-  label->setMinimumWidth(0);
-
-  return label;
-}
-
-// A proportional line height is drawn with the extra leading *below* the text,
-// so a solid block (a code block) looks cramped against the paragraph that
-// follows it. Padding the block by that same extra leading restores balance.
-int code_block_bottom_gap() {
-  const int line_spacing = QFontMetrics(chat_font()).lineSpacing();
-  return line_spacing * std::max(0, line_height_other() - 100) / 100;
-}
-
-// The stylesheet of a fenced code block. It is rebuilt (rather than cached) so a
-// theme change always re-derives the background from the current colours.
-QString code_block_stylesheet() {
-  return QStringLiteral("QFrame#CodeBlock { background: %1; border-radius: 6px; }")
-      .arg(css_color(theme().colors.bubble_assistant_code));
-}
-
-// Renders Markdown into rich text for the assistant label. Code blocks get a
-// darker background and every code span uses the configured monospace font.
-QString render_markdown(const QString& markdown) {
-  const QColor code_background = theme().colors.bubble_assistant_code;
-  const QFont mono = mono_font();
-
-  QTextDocument document;
-  document.setDefaultFont(chat_font());
-  document.setMarkdown(markdown);
-
-  const QTextBlock last = document.lastBlock();
-
-  for (QTextBlock block = document.begin(); block.isValid(); block = block.next()) {
-    // A fenced code block is imported as one block per line with unbreakable
-    // lines; give each of them the code background.
-    const bool code_block = block.blockFormat().nonBreakableLines();
-    const bool last_block = block == last;
-    // List items belong to a QTextList; they get their own, usually tighter,
-    // paragraph gap so a list does not read as widely spaced as prose.
-    const bool list_block = block.textList() != nullptr;
-
-    QTextBlockFormat format = block.blockFormat();
-    format.setLineHeight(line_height_other(), QTextBlockFormat::ProportionalHeight);
-    // Space only *between* paragraphs: keeping the first and last edges flush
-    // balances the gaps at the top and bottom of the message.
-    format.setTopMargin(0);
-    format.setBottomMargin(
-        (code_block || last_block)
-            ? 0
-            : (list_block ? list_paragraph_spacing() : paragraph_spacing())
-    );
-
-    if (code_block) {
-      format.setBackground(code_background);
-    }
-
-    QTextCursor block_cursor(block);
-    block_cursor.setBlockFormat(format);
-
-    for (auto it = block.begin(); !it.atEnd(); ++it) {
-      const QTextFragment fragment = it.fragment();
-
-      if (!fragment.isValid() ||
-          fragment.charFormat().font().family() != kMonospaceFamily) {
-        continue;
-      }
-
-      QTextCharFormat char_format = fragment.charFormat();
-      char_format.setFontFamilies(mono.families());
-      char_format.setFontFixedPitch(true);
-
-      if (mono.pointSize() > 0) {
-        char_format.setFontPointSize(mono.pointSize());
-      }
-
-      // Inline code needs its own background; inside a code block the block
-      // background already covers it.
-      if (!code_block) {
-        char_format.setBackground(code_background);
-      }
-
-      QTextCursor cursor(block);
-      cursor.setPosition(fragment.position());
-      cursor.setPosition(fragment.position() + fragment.length(), QTextCursor::KeepAnchor);
-      cursor.setCharFormat(char_format);
-    }
-  }
-
-  return document.toHtml();
-}
-
-// Renders plain text (user and notice messages) with the same reading rhythm as
-// replies. Each source line stays its own block, so the line height applies but
-// no paragraph gap is inserted between lines.
-QString render_plain(const QString& text) {
-  QTextDocument document;
-  document.setDefaultFont(chat_font());
-
-  QTextCursor cursor(&document);
-  const QStringList lines = text.split(QLatin1Char('\n'));
-
-  for (qsizetype i = 0; i < lines.size(); ++i) {
-    if (i > 0) {
-      cursor.insertBlock();
-    }
-    cursor.insertText(lines.at(i));
-  }
-
-  for (QTextBlock block = document.begin(); block.isValid(); block = block.next()) {
-    QTextBlockFormat format = block.blockFormat();
-    format.setLineHeight(line_height_self(), QTextBlockFormat::ProportionalHeight);
-    QTextCursor block_cursor(block);
-    block_cursor.setBlockFormat(format);
-  }
-
-  return document.toHtml();
-}
 
 } // namespace
 
@@ -312,9 +158,7 @@ protected:
     const QRect text_rect = rect().adjusted(text_pad, 0, -(arrow + text_pad), 0);
 
     painter.setPen(ink);
-    painter.drawText(
-        text_rect, Qt::AlignLeft | Qt::AlignVCenter, from_utf8(current_)
-    );
+    painter.drawText(text_rect, Qt::AlignLeft | Qt::AlignVCenter, from_utf8(current_));
 
     // A small chevron on the right, the only chrome the control carries.
     const qreal cx = static_cast<qreal>(width()) - text_pad - arrow / 2.0;
@@ -354,7 +198,7 @@ private:
     const QFontMetrics metrics(font());
     int text_width = 0;
 
-    for (const std::string& level : levels_) {
+    for (const std::string& level: levels_) {
       text_width = std::max(text_width, metrics.horizontalAdvance(from_utf8(level)));
     }
 
@@ -365,7 +209,7 @@ private:
   void open_menu() {
     QMenu menu(this);
 
-    for (const std::string& level : levels_) {
+    for (const std::string& level: levels_) {
       QAction* action = menu.addAction(from_utf8(level));
       action->setCheckable(true);
       action->setChecked(level == current_);
@@ -376,9 +220,7 @@ private:
     update();
 
     // Drop above the control: it sits at the very bottom of the window.
-    QAction* chosen = menu.exec(
-        mapToGlobal(QPoint(0, -menu.sizeHint().height() - 2))
-    );
+    QAction* chosen = menu.exec(mapToGlobal(QPoint(0, -menu.sizeHint().height() - 2)));
 
     menu_open_ = false;
     update();
@@ -396,502 +238,13 @@ private:
 };
 
 // -----------------------------------------------------------------------------
-// MessageBubble
-// -----------------------------------------------------------------------------
-
-MessageBubble::MessageBubble(Role role, QWidget* parent)
-    : QFrame(parent),
-      role_(role),
-      markdown_(role == Role::Assistant) {
-  // Give the bubble its own object name: apply_style() uses a type-selector
-  // stylesheet, which would otherwise leak into descendant frames (the code
-  // blocks) and clobber their styling.
-  setObjectName(QStringLiteral("MessageBubble"));
-
-  const bool wrapped = role_ != Role::Assistant;
-
-  body_layout_ = new QVBoxLayout(this);
-  body_layout_->setContentsMargins(
-      wrapped ? kBodySidePadding : kBodySidePadding,
-      wrapped ? 8 : 8,
-      kBodySidePadding,
-      // A proportional line height already leaves trailing space under the last
-      // line, so the bottom inset stays small to keep the block balanced.
-      wrapped ? 2 : 2
-  );
-  body_layout_->setSpacing(6);
-
-  setMinimumWidth(0);
-  setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
-
-  // An assistant reply is split into text and code blocks by set_markdown(), so
-  // its body starts empty. Every other role is a single text label holding
-  // rendered (escaped) plain text, so the reading rhythm applies to it too.
-  if (!markdown_) {
-    text_label_ = make_label(this, Qt::RichText);
-    text_label_->setMinimumSize(0, 0);
-    text_label_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
-    text_label_->setFont(chat_font());
-    body_layout_->addWidget(text_label_);
-  }
-
-  apply_style();
-}
-
-void MessageBubble::apply_style() {
-  const ThemeColors& colors = theme().colors;
-  const int radius = metrics().bubble_radius;
-
-  QColor background;
-  QColor foreground;
-  int effective_radius = radius;
-  QString border_rule;
-
-  switch (role_) {
-    case Role::User:
-      background = colors.bubble_user;
-      foreground = colors.bubble_user_text;
-      // The same hairline outline as the composer field, so the two read as the
-      // same surface.
-      border_rule = QStringLiteral("border:1px solid %1;").arg(css_color(colors.border));
-      break;
-    case Role::Assistant:
-      background = QColor(Qt::transparent);
-      foreground = colors.bubble_assistant_text;
-      effective_radius = 0;
-      break;
-    case Role::Notice:
-      background = colors.base;
-      foreground = colors.text_muted;
-      border_rule = QStringLiteral("border:1px solid %1;").arg(css_color(colors.border));
-      break;
-    case Role::Error:
-      background = colors.danger;
-      foreground = colors.danger_text;
-      break;
-  }
-
-  // The selectors are scoped to this bubble so the styling does not leak into
-  // descendant code blocks (which are QFrames with their own look).
-  setStyleSheet(
-      QString(
-          "QFrame#MessageBubble{background-color:%1;%2border-radius:%3px;}"
-          "QFrame#MessageBubble QLabel{color:%4;background:transparent;}"
-      )
-          .arg(css_color(background))
-          .arg(border_rule)
-          .arg(effective_radius)
-          .arg(css_color(foreground))
-  );
-}
-
-void MessageBubble::set_text(const QString& text) {
-  // Skip redundant updates: the streaming bubble is refreshed on every poll
-  // tick, but its text only changes when a new token arrives.
-  if (source_ == text) {
-    return;
-  }
-
-  if (markdown_) {
-    set_markdown(text);
-    return;
-  }
-
-  source_ = text;
-
-  if (text_label_ != nullptr) {
-    text_label_->setText(render_plain(text));
-  }
-}
-
-void MessageBubble::refresh_style() {
-  apply_style();
-
-  // Re-render so the code background (embedded in the rendered HTML) follows the
-  // new theme.
-  const QString current = source_;
-  source_.clear();
-  set_text(current);
-
-  // A fenced code block keeps its stylesheet outside the rendered HTML, so it
-  // must be restyled explicitly; an in-place text update never rebuilds it.
-  refresh_code_blocks();
-}
-
-void MessageBubble::refresh_code_blocks() {
-  for (const Block& block : blocks_) {
-    if (block.code && block.frame != nullptr) {
-      block.frame->setStyleSheet(code_block_stylesheet());
-    }
-  }
-}
-
-// Splits raw Markdown into alternating prose and fenced-code segments. A fence
-// is a line starting with ``` or ~~~; everything between two fences becomes a
-// single code segment and the language tag of the opening fence is dropped.
-std::vector<MessageBubble::Segment> MessageBubble::parse_segments(
-    const QString& markdown
-) const {
-  std::vector<Segment> segments;
-
-  QString text_buffer;
-  QString code_buffer;
-  bool in_code = false;
-
-  // Flushes the accumulated prose, dropping it when it is only whitespace.
-  const auto flush_text = [&segments, &text_buffer]() {
-    const QString trimmed = text_buffer.trimmed();
-    text_buffer.clear();
-
-    if (!trimmed.isEmpty()) {
-      segments.push_back(Segment{false, trimmed});
-    }
-  };
-
-  const QStringList lines = markdown.split(QLatin1Char('\n'));
-
-  for (const QString& line : lines) {
-    const QString trimmed = line.trimmed();
-    const bool fence = trimmed.startsWith(QStringLiteral("```")) ||
-        trimmed.startsWith(QStringLiteral("~~~"));
-
-    if (fence) {
-      if (!in_code) {
-        flush_text();
-        in_code = true;
-      } else {
-        segments.push_back(Segment{true, code_buffer.trimmed()});
-        code_buffer.clear();
-        in_code = false;
-      }
-      continue;
-    }
-
-    if (in_code) {
-      if (!code_buffer.isEmpty()) {
-        code_buffer += QLatin1Char('\n');
-      }
-      code_buffer += line;
-      continue;
-    }
-
-    if (!text_buffer.isEmpty()) {
-      text_buffer += QLatin1Char('\n');
-    }
-    text_buffer += line;
-  }
-
-  if (in_code) {
-    // Unterminated fence: still show the collected lines as code.
-    segments.push_back(Segment{true, code_buffer.trimmed()});
-  } else {
-    flush_text();
-  }
-
-  return segments;
-}
-
-void MessageBubble::set_markdown(const QString& markdown) {
-  if (source_ == markdown) {
-    return;
-  }
-  source_ = markdown;
-
-  const std::vector<Segment> segments = parse_segments(markdown);
-
-  // While the segment shape is unchanged (the common streaming case) update the
-  // existing labels in place so the widgets do not flicker. Rebuild only when a
-  // fence opens or closes and the block layout actually changes.
-  if (segments.size() == blocks_.size()) {
-    bool same_shape = true;
-
-    for (std::size_t i = 0; i < segments.size(); ++i) {
-      if (segments[i].code != blocks_[i].code) {
-        same_shape = false;
-        break;
-      }
-    }
-
-    if (same_shape) {
-      for (std::size_t i = 0; i < segments.size(); ++i) {
-        if (segments[i].code) {
-          blocks_[i].label->setText(segments[i].text);
-        } else {
-          blocks_[i].label->setText(render_markdown(segments[i].text));
-        }
-      }
-      return;
-    }
-  }
-
-  rebuild_blocks(segments);
-}
-
-void MessageBubble::rebuild_blocks(const std::vector<Segment>& segments) {
-  for (const Block& block : blocks_) {
-    body_layout_->removeWidget(block.container);
-    block.container->deleteLater();
-  }
-  blocks_.clear();
-
-  for (std::size_t i = 0; i < segments.size(); ++i) {
-    const Segment& segment = segments[i];
-
-    if (!segment.code) {
-      QLabel* label = make_label(this, Qt::RichText);
-      label->setMinimumSize(0, 0);
-      label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
-      label->setFont(chat_font());
-      label->setText(render_markdown(segment.text));
-
-      body_layout_->addWidget(label);
-      blocks_.push_back(Block{false, label, label});
-      continue;
-    }
-
-    // A fenced code block becomes a rounded frame wrapping a monospace label,
-    // because rich text cannot round the corners of a block background.
-    auto* frame = new QFrame(this);
-    frame->setObjectName(QStringLiteral("CodeBlock"));
-    frame->setAttribute(Qt::WA_StyledBackground, true);
-    frame->setMinimumSize(0, 0);
-    frame->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
-    frame->setStyleSheet(code_block_stylesheet());
-    auto* frame_layout = new QVBoxLayout(frame);
-    frame_layout->setContentsMargins(10, 8, 10, 8);
-    QLabel* label = make_label(frame, Qt::PlainText);
-    label->setMinimumSize(0, 0);
-    label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
-    label->setFont(mono_font());
-    label->setText(segment.text);
-    frame_layout->addWidget(label);
-
-    // The frame lives inside a container so the extra gap below can be removed
-    // and rebuilt together with the block. No gap is added after the last block,
-    // where it would only pad the bottom of the message.
-    const int bottom_gap = i + 1 < segments.size() ? code_block_bottom_gap() : 0;
-    auto* container = new QWidget(this);
-    container->setMinimumSize(0, 0);
-    container->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
-    auto* container_layout = new QVBoxLayout(container);
-    container_layout->setContentsMargins(0, 0, 0, bottom_gap);
-    container_layout->setSpacing(0);
-    container_layout->addWidget(frame);
-
-    body_layout_->addWidget(container);
-    blocks_.push_back(Block{true, container, label, frame});
-  }
-}
-
-// -----------------------------------------------------------------------------
-// MessageRow
-// -----------------------------------------------------------------------------
-
-MessageRow::MessageRow(MessageBubble::Role role, QWidget* parent)
-    : QWidget(parent),
-      role_(role) {
-  auto* row_layout = new QHBoxLayout(this);
-  row_layout->setContentsMargins(0, 0, 0, 0);
-  row_layout->setSpacing(0);
-
-  auto* column = new QWidget(this);
-  column->setMinimumWidth(0);
-  column->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Minimum);
-  auto* column_layout = new QVBoxLayout(column);
-  column_layout->setContentsMargins(0, 0, 0, 0);
-  column_layout->setSpacing(2);
-
-  bubble_ = new MessageBubble(role, column);
-  column_layout->addWidget(bubble_);
-
-  actions_ = new QWidget(column);
-  actions_->setObjectName(QStringLiteral("MessageActions"));
-  // A constant height keeps the transcript stable while the buttons appear.
-  actions_->setFixedHeight(kActionsHeight);
-
-  auto* action_layout = new QHBoxLayout(actions_);
-  action_layout->setContentsMargins(kBodySidePadding, 0, kBodySidePadding, 0);
-  action_layout->setSpacing(4);
-
-  // A single stretch keeps the id + buttons group on the block's side: it leads
-  // for user messages (group right-aligned) and trails for the others
-  // (left-aligned). The id label is created here so add_action can insert the
-  // buttons next to it in either arrangement.
-  message_id_label_ = new QLabel(actions_);
-  message_id_label_->setObjectName(QStringLiteral("MessageId"));
-  message_id_label_->setStyleSheet(
-      QStringLiteral("QLabel#MessageId { color: %1; }")
-          .arg(css_color(theme().colors.text_muted))
-  );
-  message_id_label_->setVisible(false);
-
-  // The arrival time sits right next to the id, in the same muted colour, so the
-  // hover strip reads "#3  2026-10-16 14:32  [copy] [delete]" like Zed's message
-  // meta line. It shares the strip's constant height, so revealing it never
-  // reflows the transcript.
-  message_time_label_ = new QLabel(actions_);
-  message_time_label_->setObjectName(QStringLiteral("MessageTime"));
-  message_time_label_->setStyleSheet(
-      QStringLiteral("QLabel#MessageTime { color: %1; }")
-          .arg(css_color(theme().colors.text_muted))
-  );
-  message_time_label_->setVisible(false);
-
-  // The estimated token cost of the message sits after the time, so the strip
-  // reads "#3  2026-10-16 14:32  1.2k tok  [copy] [delete]".
-  message_tokens_label_ = new QLabel(actions_);
-  message_tokens_label_->setObjectName(QStringLiteral("MessageTokens"));
-  message_tokens_label_->setStyleSheet(
-      QStringLiteral("QLabel#MessageTokens { color: %1; }")
-          .arg(css_color(theme().colors.text_muted))
-  );
-  message_tokens_label_->setVisible(false);
-
-  if (role_ == MessageBubble::Role::User) {
-    action_layout->addStretch(1);
-    action_layout->addWidget(message_id_label_);
-    action_layout->addWidget(message_time_label_);
-    action_layout->addWidget(message_tokens_label_);
-  } else {
-    action_layout->addWidget(message_id_label_);
-    action_layout->addWidget(message_time_label_);
-    action_layout->addWidget(message_tokens_label_);
-    action_layout->addStretch(1);
-  }
-
-  column_layout->addWidget(actions_);
-
-  row_layout->addWidget(column, 1);
-}
-
-QToolButton* MessageRow::add_action(
-    const QString& icon_name, QStyle::StandardPixmap fallback_icon, const QString& tip
-) {
-  auto* button = new QToolButton(actions_);
-  button->setObjectName(QStringLiteral("MessageAction"));
-  button->setToolButtonStyle(Qt::ToolButtonIconOnly);
-  button->setIconSize(QSize(15, 15));
-  button->setFixedSize(20, 20);
-  button->setAutoRaise(true);
-  button->setCursor(Qt::PointingHandCursor);
-  button->setFocusPolicy(Qt::NoFocus);
-  button->setToolTip(tip);
-
-  action_icons_.push_back(ActionIcon{button, icon_name, fallback_icon});
-  apply_action_icon(action_icons_.back());
-
-  auto* layout = static_cast<QHBoxLayout*>(actions_->layout());
-
-  if (role_ == MessageBubble::Role::User) {
-    layout->addWidget(button);
-  } else {
-    // Insert before the trailing stretch so the buttons stay left-aligned.
-    layout->insertWidget(layout->count() - 1, button);
-  }
-
-  button->setVisible(actions_visible_);
-
-  return button;
-}
-
-void MessageRow::apply_action_icon(ActionIcon& entry) {
-  const QColor colour = theme().colors.text_muted;
-
-  // The bundled artwork is recoloured to the theme; a missing resource falls back
-  // to a built-in standard icon.
-  QIcon icon = resource_icon(entry.name, colour, colour);
-
-  if (icon.isNull()) {
-    icon = style()->standardIcon(entry.fallback);
-  }
-
-  entry.button->setIcon(icon);
-}
-
-void MessageRow::refresh_action_icons() {
-  for (ActionIcon& entry : action_icons_) {
-    apply_action_icon(entry);
-  }
-}
-
-void MessageRow::set_actions_visible(bool visible) {
-  if (actions_visible_ == visible) {
-    return;
-  }
-
-  actions_visible_ = visible;
-
-  for (QToolButton* button : actions_->findChildren<QToolButton*>(Qt::FindDirectChildrenOnly)) {
-    button->setVisible(visible);
-  }
-
-  if (message_id_label_ != nullptr) {
-    message_id_label_->setVisible(visible);
-  }
-
-  if (message_time_label_ != nullptr) {
-    message_time_label_->setVisible(visible);
-  }
-
-  if (message_tokens_label_ != nullptr) {
-    message_tokens_label_->setVisible(visible);
-  }
-}
-
-void MessageRow::set_message_id(std::uint32_t id) {
-  message_id_ = id;
-
-  if (message_id_label_ == nullptr) {
-    return;
-  }
-
-  message_id_label_->setText(id == 0 ? QString{} : QStringLiteral("#%1").arg(id));
-}
-
-void MessageRow::set_message_time(const QString& time) {
-  if (message_time_label_ == nullptr) {
-    return;
-  }
-
-  message_time_label_->setText(time);
-}
-
-void MessageRow::set_message_tokens(std::size_t tokens) {
-  if (message_tokens_label_ == nullptr || tokens == 0) {
-    return;
-  }
-
-  message_tokens_label_->setText(format_token_estimate(tokens));
-}
-
-void MessageRow::enterEvent(QEnterEvent* event) {
-  QWidget::enterEvent(event);
-  set_actions_visible(true);
-}
-
-void MessageRow::leaveEvent(QEvent* event) {
-  QWidget::leaveEvent(event);
-
-  // The row also receives a Leave when the pointer moves onto one of its
-  // children (the bubble or the action strip), so only hide the buttons once the
-  // pointer has really left the entry.
-  if (actions_visible_ && !rect().contains(mapFromGlobal(QCursor::pos()))) {
-    set_actions_visible(false);
-  }
-}
-
-// -----------------------------------------------------------------------------
 // ConversationView
 // -----------------------------------------------------------------------------
 
 ConversationView::ConversationView(
-    lnb::api::interface& api, const lnb::Settings& settings,
-    std::uint32_t session_id, QWidget* parent
-)
-    : QWidget(parent),
-      api_(api),
-      settings_(settings),
-      session_id_(session_id),
+    lnb::api::interface& api, const lnb::Settings& settings, std::uint32_t session_id,
+    QWidget* parent)
+    : QWidget(parent), api_(api), settings_(settings), session_id_(session_id),
       controller_(api, session_id) {
   const lnb::ThemeMetrics& m = metrics();
 
@@ -907,90 +260,34 @@ ConversationView::ConversationView(
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(0);
 
-  scroll_ = new QScrollArea(this);
-  scroll_->setObjectName(QStringLiteral("Transcript"));
-  scroll_->setWidgetResizable(true);
-  scroll_->setFrameShape(QFrame::NoFrame);
-  scroll_->setMinimumWidth(0);
-  scroll_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
-  scroll_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-  scroll_->setStyleSheet(
-      QStringLiteral("QScrollArea#Transcript { background: transparent; border: none; }")
-  );
-  scroll_->viewport()->setAutoFillBackground(false);
+  // One custom-painted canvas holds every message. Reaching the top pages in
+  // older history automatically; there is no "Load earlier" button and no
+  // widget tree whose insertion could race the scroll position.
+  transcript_ = new TranscriptCanvas(this);
+  transcript_->set_on_reach_top([this]() { load_older(); });
 
-  transcript_ = new QWidget(scroll_);
-  transcript_->setObjectName(QStringLiteral("TranscriptInner"));
-  transcript_->setMinimumWidth(0);
-  transcript_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-
-  transcript_layout_ = new QVBoxLayout(transcript_);
-  transcript_layout_->setContentsMargins(
-      m.page_margin, m.page_margin, m.page_margin, m.page_margin
-  );
-  transcript_->setMinimumSize(0, 0);
-  transcript_layout_->setSpacing(m.message_spacing);
-
-  // A leading stretch pins the transcript to the bottom of the viewport. With
-  // the default top alignment the (viewport-filling) transcript widget leaves a
-  // large empty gap below the last message whenever a conversation is short.
-  transcript_layout_->addStretch(1);
-
-  // Reveals older messages on demand. It is inserted directly after the leading
-  // stretch, so it stays pinned above every rendered row; it is hidden while the
-  // whole history is already on screen.
-  load_older_ = new QPushButton(trs("Load earlier messages"), transcript_);
-  load_older_->setObjectName(QStringLiteral("Secondary"));
-  load_older_->setVisible(false);
-  transcript_layout_->insertWidget(1, load_older_, 0, Qt::AlignHCenter);
-
-  connect(load_older_, &QPushButton::clicked, this, [this]() { load_older(); });
-
-  // Paging in older history is deliberate: the "Load earlier messages" button is
-  // the only way to reveal it, so reaching the top never triggers a load on its
-  // own. This handler only tracks whether the reader is parked at the bottom:
-  // auto-scroll follows new content while they are, and resumes once they scroll
-  // back down.
-  auto* scrollbar = scroll_->verticalScrollBar();
-
-  connect(
-      scrollbar, &QScrollBar::valueChanged, this,
-      [this, scrollbar](int value) {
-        // A programmatic jump during a rebuild or a paged-in history load is not a
-        // reader decision, so it must not change whether content is followed.
-        if (updating_) {
-          return;
-        }
-
-        stick_to_bottom_ = value >= scrollbar->maximum() - kStickToBottomSlack;
+  transcript_->set_on_copy([this](std::uint32_t message_id) {
+    for (const lnb::Message& message: messages_) {
+      if (message.id_ == message_id) {
+        QApplication::clipboard()->setText(from_utf8(message.content_));
+        return;
       }
-  );
+    }
+  });
 
-  // Following the range instead of a timer is what keeps the follow smooth: the
-  // range only changes once the layout has settled, so the view tracks the true
-  // bottom instead of jumping to a stale maximum while Markdown reflows.
-  connect(
-      scrollbar, &QScrollBar::rangeChanged, this,
-      [this](int, int) {
-        if (stick_to_bottom_ && !updating_) {
-          pin_to_bottom();
-        }
+  transcript_->set_on_edit([this](std::uint32_t message_id) {
+    for (const lnb::Message& message: messages_) {
+      if (message.id_ == message_id) {
+        prompt_edit(message_id, from_utf8(message.content_));
+        return;
       }
-  );
+    }
+  });
 
-  scroll_->setWidget(transcript_);
+  transcript_->set_on_delete(
+      [this](std::uint32_t message_id) { controller_.delete_message(message_id); });
 
-  // QScrollArea::setWidget() force-enables the scrolled widget's auto-fill with
-  // QPalette::Window, which would paint an opaque band over the pane's own
-  // conversation surface. Undo it so the surface shows through -- most visibly on
-  // a translucent theme, where the tinted background image must reach the
-  // transcript.
-  transcript_->setAutoFillBackground(false);
-
-  // The transcript column is re-inset whenever the viewport is resized so it
-  // stays centred once the pane is wider than the configured flow width.
-  scroll_->viewport()->installEventFilter(this);
-  update_content_margins();
+  layout->addWidget(transcript_, 1);
 
   auto* composer = new QWidget(this);
   composer->setObjectName(QStringLiteral("ComposerBar"));
@@ -1000,8 +297,7 @@ ConversationView::ConversationView(
 
   auto* composer_layout = new QHBoxLayout(composer);
   composer_layout->setContentsMargins(
-      m.page_margin, m.page_margin / 2, m.page_margin, m.page_margin
-  );
+      m.page_margin, m.page_margin / 2, m.page_margin, m.page_margin);
   composer_layout->setSpacing(8);
 
   input_ = new QPlainTextEdit(composer);
@@ -1009,8 +305,7 @@ ConversationView::ConversationView(
   input_->setPlaceholderText(
       settings_.enter_with_modifier
           ? trs("Type a message...  (Ctrl+Enter to send, Enter for a new line)")
-          : trs("Type a message...  (Enter to send, Shift+Enter for a new line)")
-  );
+          : trs("Type a message...  (Enter to send, Shift+Enter for a new line)"));
   input_->setTabChangesFocus(true);
   input_->setFont(chat_font());
   input_->installEventFilter(this);
@@ -1075,8 +370,6 @@ ConversationView::ConversationView(
   composer_layout->addWidget(input_, 1);
   composer_layout->addLayout(buttons);
 
-  layout->addWidget(scroll_, 1);
-
   // The small failure notice lives just above the composer, so it reads as a
   // remark on the turn rather than part of the transcript. It is hidden until a
   // turn fails.
@@ -1111,12 +404,11 @@ ConversationView::ConversationView(
   });
 
   controller_.set_on_stream([this](const std::string& text) {
-    // Create the reply row on the first token so the reply has a place to land.
-    // Make room first: the transcript must never keep more than the configured
-    // amount of rendered history once new content starts arriving.
-    if (streaming_row_ == nullptr) {
-      enforce_render_limit(1);
-      streaming_row_ = add_row(MessageBubble::Role::Assistant, 0, false);
+    // The first token creates the reply on the canvas; later ones only replace
+    // its blocks, leaving the rest of the transcript shaped as-is.
+    if (!streaming_started_) {
+      streaming_started_ = true;
+      transcript_->begin_streaming();
     }
 
     pending_stream_text_ = text.empty() ? streaming_status_ : from_utf8(text);
@@ -1130,12 +422,12 @@ ConversationView::ConversationView(
   controller_.set_on_status([this](const std::string& status) {
     streaming_status_ = from_utf8(status);
 
-    if (streaming_row_ == nullptr) {
-      enforce_render_limit(1);
-      streaming_row_ = add_row(MessageBubble::Role::Assistant, 0, false);
+    if (!streaming_started_) {
+      streaming_started_ = true;
+      transcript_->begin_streaming();
     }
 
-    if (pending_stream_text_.isEmpty() && streaming_row_->bubble()->text().isEmpty()) {
+    if (pending_stream_text_.isEmpty()) {
       pending_stream_text_ = streaming_status_;
       has_pending_stream_ = true;
 
@@ -1152,261 +444,142 @@ ConversationView::ConversationView(
     if (notice_ != nullptr) {
       notice_->set_content(
           QStringLiteral("tasks"),
-          trs(
-              "A generation task failed. Open the tasks window from the status bar "
-              "to see why."
-          )
-      );
+          trs("A generation task failed. Open the tasks window from the status bar "
+              "to see why."));
     }
   });
 
-  controller_.set_on_warning([this](const std::string& text) {
-    pending_warning_ = from_utf8(text);
-  });
+  controller_.set_on_warning(
+      [this](const std::string& text) { pending_warning_ = from_utf8(text); });
 
   reload();
 }
 
 void ConversationView::reload() {
-  // Remember the reader's place before the rebuild wipes the rows: following
+  // Remember the reader's place before the document is replaced: following
   // content is only ever a consequence of having been parked at the bottom, and a
   // rebuild must not yank someone who had scrolled away back to the end.
-  const bool follow = stick_to_bottom_;
-  const int previous_value = scroll_->verticalScrollBar()->value();
+  const TranscriptCanvas::ScrollAnchor anchor = transcript_->anchor();
+  const bool follow = transcript_->at_bottom();
 
-  updating_ = true;
-  clear_transcript();
+  // A finished turn has been stored as a message, so the streamed preview is
+  // superseded; the next turn starts a fresh one.
+  if (stream_timer_ != nullptr) {
+    stream_timer_->stop();
+  }
+
+  has_pending_stream_ = false;
+  pending_stream_text_.clear();
+  streaming_status_.clear();
+  streaming_started_ = false;
 
   messages_ = api_.messages(session_id_);
 
-  // Render only the tail window. The rest stays in memory but out of the widget
-  // tree, so the per-reload cost (widget creation plus Markdown rendering) is
-  // bounded no matter how long the conversation grows.
-  const std::size_t limit = static_cast<std::size_t>(
-      std::max(1, settings_.rendered_message_limit)
-  );
-  rendered_count_ = std::min(limit, messages_.size());
+  // Render only the tail window. The rest stays in memory but out of the
+  // renderer, so the per-reload cost is bounded no matter how long the
+  // conversation grows. Older pages are paged in on demand.
+  const std::size_t limit = static_cast<std::size_t>(std::max(1, settings_.rendered_message_limit));
+  window_start_ = messages_.size() > limit ? messages_.size() - limit : 0;
 
-  const std::size_t start = messages_.size() - rendered_count_;
+  rebuild_transcript(anchor, follow);
 
-  // Layout index 0 is the leading stretch and index 1 is the load-older button,
-  // so the rendered rows start at index 2.
-  for (std::size_t k = 0; k < rendered_count_; ++k) {
-    render_message_at(start + k, 2 + static_cast<int>(k));
-  }
+  // The warning has been folded into the document; a later reload must not show
+  // it again.
+  pending_warning_.clear();
 
-  // A warning from the last finished turn is rendered after the transcript, then
-  // cleared so a later reload does not show it again. A failure is not shown here:
-  // its reason lives in the tasks window, and the composer notice points there.
-  if (!pending_warning_.isEmpty()) {
-    auto* row = add_row(MessageBubble::Role::Notice, 0, false);
-    row->bubble()->set_text(pending_warning_);
-    pending_warning_.clear();
-  }
-
-  update_load_older_visibility();
   set_busy(controller_.busy());
   update_send_mode();
   refresh_reasoning_selector();
-  updating_ = false;
-
-  // Reposition once the rebuilt layout has settled. Following pins to the true
-  // bottom (the range only settles after Markdown reflows, so this stays smooth);
-  // otherwise the reader stays on the message they were reading. The restore goes
-  // through the scrollbar, so the valueChanged handler recomputes the follow flag
-  // from the final position -- landing back at the bottom re-arms it.
-  QTimer::singleShot(0, this, [this, follow, previous_value]() {
-    auto* bar = scroll_->verticalScrollBar();
-
-    if (follow) {
-      stick_to_bottom_ = true;
-      pin_to_bottom();
-      return;
-    }
-
-    bar->setValue(std::min(previous_value, bar->maximum()));
-  });
 }
 
-void ConversationView::enforce_render_limit(std::size_t reserved) {
-  const std::size_t limit = static_cast<std::size_t>(
-      std::max(1, settings_.rendered_message_limit)
-  );
+render::Document ConversationView::build_document() const {
+  render::Document document;
 
-  bool changed = false;
-
-  // The rendered rows are a suffix of messages_ laid out in chronological order
-  // after the leading stretch (index 0) and the load-older button (index 1), so
-  // the oldest rendered row is always the first widget at index 2. Dropping it is
-  // exactly reducing the suffix, so rendered_count_ stays authoritative.
-  while (rendered_count_ + reserved > limit && rendered_count_ > 0) {
-    QLayoutItem* item = transcript_layout_->itemAt(2);
-    QWidget* widget = item != nullptr ? item->widget() : nullptr;
-    auto* row = dynamic_cast<MessageRow*>(widget);
-
-    if (row == nullptr || row == streaming_row_) {
-      break;
-    }
-
-    const auto it = std::find(rows_.begin(), rows_.end(), row);
-
-    if (it != rows_.end()) {
-      rows_.erase(it);
-    }
-
-    transcript_layout_->takeAt(2);
-    row->deleteLater();
-    --rendered_count_;
-    changed = true;
+  for (std::size_t i = window_start_; i < messages_.size(); ++i) {
+    append_rendered_message(document, messages_[i]);
   }
 
-  if (changed) {
-    update_load_older_visibility();
+  // A warning from the last finished turn is rendered after the transcript, then
+  // cleared by rebuild_transcript so a later reload does not show it again. A
+  // failure is not shown here: its reason lives in the tasks window, and the
+  // composer notice points there.
+  if (!pending_warning_.isEmpty()) {
+    render::MessageMeta meta;
+    meta.role = render::Role::Notice;
+    append_message(document, std::move(meta), make_plain_blocks(pending_warning_.toStdString()));
   }
+
+  return document;
+}
+
+void ConversationView::append_rendered_message(
+    render::Document& document, const lnb::Message& message) const {
+  const bool from_self = message.role_ == lnb::Role::User;
+  const render::Role role = from_self ? render::Role::User : render::Role::Assistant;
+
+  const QString raw = from_utf8(message.content_);
+
+  render::MessageMeta meta = make_message_meta(
+      role, message.id_, to_u16(format_message_time(message.made_at_)),
+      to_u16(format_token_estimate(api_.message_tokens(message))), from_self, to_u16(raw));
+
+  auto blocks =
+      from_self ? make_plain_blocks(message.content_) : make_markdown_blocks(message.content_);
+
+  append_message(document, std::move(meta), std::move(blocks));
+}
+
+void ConversationView::rebuild_transcript(
+    const TranscriptCanvas::ScrollAnchor& anchor, bool follow_bottom) {
+  transcript_->set_document(build_document(), anchor, follow_bottom);
+}
+
+void ConversationView::load_older() {
+  if (window_start_ == 0) {
+    return;
+  }
+
+  // The canvas keeps the reader anchored on the message they were looking at, so
+  // prepending a page never jumps the transcript.
+  const TranscriptCanvas::ScrollAnchor anchor = transcript_->anchor();
+
+  const std::size_t page = static_cast<std::size_t>(std::max(1, settings_.history_page_size));
+
+  window_start_ = window_start_ > page ? window_start_ - page : 0;
+
+  rebuild_transcript(anchor, false);
 }
 
 void ConversationView::refresh_style() {
   apply_composer_style();
-  content_side_margin_ = -1;
-  update_content_margins();
+  apply_composer_height();
 
-  if (reasoning_selector_ != nullptr) {
-    reasoning_selector_->refresh_style();
+  if (transcript_ != nullptr) {
+    transcript_->refresh_style();
   }
 
-  if (notice_ != nullptr) {
-    notice_->refresh_style();
-  }
-
-  for (MessageRow* row : rows_) {
-    if (row != nullptr) {
-      row->bubble()->refresh_style();
-      row->refresh_action_icons();
-    }
-  }
+  refresh_reasoning_selector();
 }
 
 void ConversationView::refresh_reasoning_selector() {
-  if (reasoning_selector_ == nullptr) {
-    return;
-  }
-
+  // The stored value may name a level the current model no longer offers; the
+  // manager resolves it to the supported set and reports what is actually shown.
   const auto stored = api_.session(session_id_);
-  const std::string current =
-      stored.has_value() ? stored->reasoning_effort_ : std::string{};
+  const std::string current = stored.has_value() ? stored->reasoning_effort_ : std::string{};
+  // An empty value means "use the model's default", which the selector shows as
+  // the default level rather than as a blank control.
+  const std::string shown = current.empty() ? api_.default_reasoning_effort() : current;
 
-  // An unset level shows the model's first available one. A stored level the
-  // model no longer offers is still shown, so it can be corrected rather than
-  // silently dropped.
-  const std::string shown =
-      current.empty() ? api_.default_reasoning_effort() : current;
-
-  reasoning_selector_->set_levels(
-      api_.reasoning_efforts_with_stored(shown), shown
-  );
-}
-
-void ConversationView::render_message_at(std::size_t index, int layout_index) {
-  const lnb::Message& message = messages_[index];
-  const bool from_self = message.role_ == lnb::Role::User;
-
-  auto* row = make_row(
-      from_self ? MessageBubble::Role::User : MessageBubble::Role::Assistant, message.id_,
-      from_self
-  );
-
-  // The arrival time is shown in the hover strip next to the id, and the
-  // estimated token cost of the message sits next to the time.
-  row->set_message_time(format_message_time(message.made_at_));
-  row->set_message_tokens(api_.message_tokens(message));
-
-  row->bubble()->set_text(from_utf8(message.content_));
-
-  transcript_layout_->insertWidget(layout_index, row);
-}
-
-void ConversationView::load_older() {
-  if (rendered_count_ >= messages_.size()) {
-    return;
-  }
-
-  updating_ = true;
-
-  // Paging through history means the reader has left the live bottom, so stop
-  // following new content. The deferred scroll restore recomputes the flag from
-  // the final position, so landing back at the bottom re-arms it.
-  stick_to_bottom_ = false;
-
-  const std::size_t remaining = messages_.size() - rendered_count_;
-  const std::size_t page = static_cast<std::size_t>(
-      std::max(1, settings_.history_page_size)
-  );
-  const std::size_t additional = std::min(page, remaining);
-
-  // The newly revealed rows are the block immediately above the current window.
-  // Inserting them (oldest first) at the top of the rendered rows keeps the
-  // transcript chronological.
-  const std::size_t start = remaining - additional;
-
-  auto* bar = scroll_->verticalScrollBar();
-  const int old_value = bar->value();
-
-  // Anchor on the current first row: after prepending, its position shifts down
-  // by exactly the height that was added, so offsetting the scrollbar by the
-  // same amount keeps the reader on the same message.
-  QWidget* anchor = nullptr;
-
-  if (auto* item = transcript_layout_->itemAt(2)) {
-    anchor = item->widget();
-  }
-
-  const int anchor_before = anchor != nullptr ? anchor->y() : 0;
-
-  for (std::size_t k = 0; k < additional; ++k) {
-    render_message_at(start + k, 2 + static_cast<int>(k));
-  }
-
-  rendered_count_ += additional;
-  update_load_older_visibility();
-
-  if (anchor == nullptr) {
-    updating_ = false;
-    return;
-  }
-
-  // Defer until the layout has processed the new rows so anchor->y() reflects
-  // the final position.
-  QTimer::singleShot(0, this, [this, anchor, anchor_before, old_value]() {
-    auto* deferred_bar = scroll_->verticalScrollBar();
-    deferred_bar->setValue(old_value + (anchor->y() - anchor_before));
-  });
-
-  updating_ = false;
-}
-
-void ConversationView::update_load_older_visibility() {
-  if (load_older_ == nullptr) {
-    return;
-  }
-
-  const std::size_t hidden = messages_.size() - rendered_count_;
-  load_older_->setVisible(hidden > 0);
-
-  if (hidden > 0) {
-    load_older_->setText(trs("Load earlier messages (%1)").arg(hidden));
-  }
+  reasoning_selector_->set_levels(api_.reasoning_efforts_with_stored(shown), shown);
 }
 
 void ConversationView::flush_streaming_text() {
-  if (!has_pending_stream_ || streaming_row_ == nullptr) {
+  if (!has_pending_stream_ || !streaming_started_) {
     return;
   }
 
   has_pending_stream_ = false;
-  streaming_row_->bubble()->set_text(pending_stream_text_);
-  // No explicit scroll here: growing the bubble changes the scrollbar range,
-  // which the rangeChanged handler turns into a smooth follow when the reader is
-  // at the bottom. Scrolling here too would fight that and cause the jitter.
+  transcript_->set_streaming_blocks(make_markdown_blocks(pending_stream_text_.toStdString()));
 }
 
 void ConversationView::poll() {
@@ -1452,16 +625,10 @@ void ConversationView::showEvent(QShowEvent* event) {
 }
 
 bool ConversationView::eventFilter(QObject* watched, QEvent* event) {
-  if (scroll_ != nullptr && watched == scroll_->viewport() &&
-      event->type() == QEvent::Resize) {
-    update_content_margins();
-  }
-
   if (watched == input_ && event->type() == QEvent::KeyPress) {
     auto* key_event = static_cast<QKeyEvent*>(event);
 
-    const bool is_enter =
-        key_event->key() == Qt::Key_Return || key_event->key() == Qt::Key_Enter;
+    const bool is_enter = key_event->key() == Qt::Key_Return || key_event->key() == Qt::Key_Enter;
 
     if (settings_.enter_with_modifier) {
       if (is_enter && (key_event->modifiers() & Qt::ControlModifier)) {
@@ -1479,140 +646,15 @@ bool ConversationView::eventFilter(QObject* watched, QEvent* event) {
   return QWidget::eventFilter(watched, event);
 }
 
-MessageRow* ConversationView::make_row(
-    MessageBubble::Role role, std::uint32_t message_id, bool editable
-) {
-  auto* row = new MessageRow(role, transcript_);
-  row->set_message_id(message_id);
-  rows_.push_back(row);
-
-  // Only stored messages (id != 0) get actions; the streaming and notice rows
-  // stay passive.
-  if (message_id != 0) {
-    // Assistant replies can be copied verbatim: bubble()->text() returns the raw
-    // Markdown source, not the rendered rich text.
-    if (role == MessageBubble::Role::Assistant) {
-      auto* copy = row->add_action(
-          QStringLiteral("copy"), QStyle::SP_DialogSaveButton,
-          trs("Copy message")
-      );
-
-      connect(
-          copy, &QToolButton::clicked, this,
-          [row]() { QApplication::clipboard()->setText(row->bubble()->text()); }
-      );
-    }
-
-    if (editable) {
-      auto* edit = row->add_action(
-          QStringLiteral("edit"), QStyle::SP_FileIcon,
-          trs("Edit message")
-      );
-
-      connect(
-          edit, &QToolButton::clicked, this,
-          [this, message_id, row]() { prompt_edit(message_id, row->bubble()->text()); }
-      );
-    }
-
-    auto* remove = row->add_action(
-        QStringLiteral("delete"), QStyle::SP_TrashIcon,
-        trs("Delete message")
-    );
-
-    connect(
-        remove, &QToolButton::clicked, this,
-        [this, message_id]() { controller_.delete_message(message_id); }
-    );
-  }
-
-  return row;
-}
-
-MessageRow* ConversationView::add_row(
-    MessageBubble::Role role, std::uint32_t message_id, bool editable
-) {
-  auto* row = make_row(role, message_id, editable);
-  transcript_layout_->addWidget(row);
-
-  return row;
-}
-
 void ConversationView::prompt_edit(std::uint32_t message_id, const QString& current) {
   bool accepted = false;
 
   const QString edited = QInputDialog::getMultiLineText(
-      this, trs("Edit message"), trs("Message:"), current, &accepted
-  );
+      this, trs("Edit message"), trs("Message:"), current, &accepted);
 
   if (accepted && edited != current) {
     controller_.edit_message(message_id, edited.toStdString());
   }
-}
-
-void ConversationView::clear_transcript() {
-  if (stream_timer_ != nullptr) {
-    stream_timer_->stop();
-  }
-
-  has_pending_stream_ = false;
-  pending_stream_text_.clear();
-  streaming_row_ = nullptr;
-  streaming_status_.clear();
-  rows_.clear();
-
-  for (int i = transcript_layout_->count() - 1; i >= 0; --i) {
-    auto* item = transcript_layout_->itemAt(i);
-
-    // The leading stretch (a spacer item, not a widget) must be kept so the
-    // transcript stays bottom-aligned after a reload, and the load-older button
-    // is a permanent fixture that is only shown or hidden.
-    if (auto* widget = item->widget()) {
-      if (widget == load_older_) {
-        continue;
-      }
-
-      transcript_layout_->takeAt(i);
-      widget->deleteLater();
-    }
-  }
-}
-
-void ConversationView::pin_to_bottom() {
-  auto* bar = scroll_->verticalScrollBar();
-  bar->setValue(bar->maximum());
-}
-
-void ConversationView::update_content_margins() {
-  const lnb::ThemeMetrics& m = metrics();
-  const int max_width = message_max_width();
-
-  // Keep a comfortable minimum inset so the flow never touches the pane edges.
-  int side = m.page_margin;
-
-  if (kConversationSidePadding > side) {
-    side = kConversationSidePadding;
-  }
-
-  // When a flow width cap is configured and the viewport is wider than it, grow
-  // both side insets equally so the content column is centred and the blocks
-  // pull away from the left and right edges.
-  if (max_width > 0 && scroll_ != nullptr && scroll_->viewport() != nullptr) {
-    const int extra = (scroll_->viewport()->width() - max_width) / 2;
-
-    if (extra > side) {
-      side = extra;
-    }
-  }
-
-  if (side == content_side_margin_) {
-    return;
-  }
-
-  content_side_margin_ = side;
-  transcript_layout_->setContentsMargins(
-      side, m.page_margin, side, m.page_margin
-  );
 }
 
 void ConversationView::apply_composer_style() {
@@ -1621,38 +663,29 @@ void ConversationView::apply_composer_style() {
   // The conversation surface. A theme with a background image keeps it fully
   // transparent, so the tinted image shows through; a plain theme uses its
   // window colour.
-  setStyleSheet(
-      QStringLiteral("QWidget#ConversationView { background: %1; }")
-          .arg(css_color(colors.conversation_background))
-  );
+  setStyleSheet(QStringLiteral("QWidget#ConversationView { background: %1; }")
+                    .arg(css_color(colors.conversation_background)));
 
   // Zed-like composer: the field is bare text on the conversation surface, and
   // the whole block is set off from the transcript by a single hairline. No field
   // chrome and no rounded corners. The field's own background is themeable.
-  input_->setStyleSheet(
-      QStringLiteral(
-          "QPlainTextEdit#Composer { background: %1; border: none;"
-          " padding: 4px 2px; color: %2; }"
-      )
-          .arg(css_color(colors.input_background), css_color(colors.text))
-  );
+  input_->setStyleSheet(QStringLiteral("QPlainTextEdit#Composer { background: %1; border: none;"
+                                       " padding: 4px 2px; color: %2; }")
+                            .arg(css_color(colors.input_background), css_color(colors.text)));
 
   if (composer_bar_ != nullptr) {
     // The action buttons are flat and borderless; a hover fill is the only chrome
     // they carry, the way Zed's composer actions behave.
     composer_bar_->setStyleSheet(
-        QStringLiteral(
-            "QWidget#ComposerBar { background: transparent;"
-            " border-top: 1px solid %1; }"
-            "QToolButton#SendButton, QToolButton#ComposerExpand,"
-            "QToolButton#CancelButton {"
-            "  background: transparent; border: none; border-radius: 4px; padding: 0; }"
-            "QToolButton#SendButton:hover, QToolButton#ComposerExpand:hover,"
-            "QToolButton#CancelButton:hover {"
-            "  background: %2; }"
-        )
-            .arg(css_color(colors.border), css_color(row_hover_background()))
-    );
+        QStringLiteral("QWidget#ComposerBar { background: transparent;"
+                       " border-top: 1px solid %1; }"
+                       "QToolButton#SendButton, QToolButton#ComposerExpand,"
+                       "QToolButton#CancelButton {"
+                       "  background: transparent; border: none; border-radius: 4px; padding: 0; }"
+                       "QToolButton#SendButton:hover, QToolButton#ComposerExpand:hover,"
+                       "QToolButton#CancelButton:hover {"
+                       "  background: %2; }")
+            .arg(css_color(colors.border), css_color(row_hover_background())));
   }
 
   apply_composer_icons();
@@ -1665,18 +698,14 @@ void ConversationView::apply_composer_icons() {
     if (summarize_mode_) {
       // The action becomes a collapse-into-memory: fold the overflow now rather
       // than send a message into an over-long request.
-      QIcon icon = resource_icon(
-          QStringLiteral("summarize"), colors.accent, colors.text_muted
-      );
+      QIcon icon = resource_icon(QStringLiteral("summarize"), colors.accent, colors.text_muted);
 
       if (icon.isNull()) {
         icon = style()->standardIcon(QStyle::SP_DialogSaveButton);
       }
 
       send_button_->setIcon(icon);
-      send_button_->setToolTip(
-          trs("Summarize the conversation into memory")
-      );
+      send_button_->setToolTip(trs("Summarize the conversation into memory"));
     } else {
       // The send arrow takes the accent colour; a busy composer mutes it through
       // the icon's disabled pixmap.
@@ -1695,24 +724,19 @@ void ConversationView::apply_composer_icons() {
     const bool expanded = composer_expanded_;
     QIcon icon = resource_icon(
         expanded ? QStringLiteral("collapse") : QStringLiteral("expand"), colors.text_muted,
-        colors.text_muted
-    );
+        colors.text_muted);
 
     if (icon.isNull()) {
       icon = style()->standardIcon(expanded ? QStyle::SP_ArrowDown : QStyle::SP_ArrowUp);
     }
 
     expand_button_->setIcon(icon);
-    expand_button_->setToolTip(
-        expanded ? trs("Shrink the composer")
-                 : trs("Expand the composer")
-    );
+    expand_button_->setToolTip(expanded ? trs("Shrink the composer") : trs("Expand the composer"));
   }
 
   if (cancel_button_ != nullptr) {
     // The stop square shares the muted colour of the other chrome actions.
-    QIcon icon =
-        resource_icon(QStringLiteral("stop"), colors.text_muted, colors.text_muted);
+    QIcon icon = resource_icon(QStringLiteral("stop"), colors.text_muted, colors.text_muted);
 
     if (icon.isNull()) {
       icon = style()->standardIcon(QStyle::SP_MediaStop);
@@ -1726,9 +750,7 @@ void ConversationView::apply_composer_icons() {
 void ConversationView::apply_composer_height() {
   if (input_ != nullptr) {
     const lnb::ThemeMetrics& m = metrics();
-    input_->setFixedHeight(
-        composer_expanded_ ? m.composer_height_expanded : m.composer_height
-    );
+    input_->setFixedHeight(composer_expanded_ ? m.composer_height_expanded : m.composer_height);
   }
 
   apply_composer_icons();
@@ -1750,13 +772,10 @@ bool ConversationView::summarize_due() const {
   // overflow first, then the shared assistant trigger (or an assistant fold
   // already in flight). Every composer therefore reports the same action, and the
   // send button is banned the moment either trigger is met.
-  return api_.has_session_memory_trigger_met(session_id_) !=
-      lnb::api::error_code::SUCCESS;
+  return api_.has_session_memory_trigger_met(session_id_) != lnb::api::error_code::SUCCESS;
 }
 
-void ConversationView::refresh_send_mode() {
-  update_send_mode();
-}
+void ConversationView::refresh_send_mode() { update_send_mode(); }
 
 void ConversationView::update_send_mode() {
   const bool due = summarize_due();
@@ -1778,7 +797,7 @@ void ConversationView::summarize_session_now(lnb::SummaryApprover approver) {
   // summarize action. The manager bans the composer's send/summarize button (and
   // the stop action replaces it) for the whole pass, so the fold cannot be
   // re-triggered while it runs.
-  stick_to_bottom_ = true;
+  transcript_->scroll_to_bottom();
   controller_.summarize_session_now(std::move(approver));
   set_busy(controller_.busy());
 }
@@ -1796,7 +815,7 @@ void ConversationView::submit() {
   if (summarize_mode_) {
     // The send button has become a summarize button: fold the overflow into
     // memory, sending nothing. A fresh pass lands at the bottom.
-    stick_to_bottom_ = true;
+    transcript_->scroll_to_bottom();
     controller_.summarize();
     set_busy(controller_.busy());
     return;
@@ -1813,7 +832,7 @@ void ConversationView::submit() {
   // then follows the reply. The field is only cleared once the manager accepted
   // the turn, so a refused send never loses the text. set_busy reflects whether a
   // task actually started, so a refused one never wedges the composer.
-  stick_to_bottom_ = true;
+  transcript_->scroll_to_bottom();
 
   if (controller_.send(text.toStdString())) {
     input_->clear();

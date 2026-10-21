@@ -23,8 +23,8 @@ namespace ui {
 
 class ConversationView;
 
-// Edits one session: its title, custom instructions, shared directory, memory and
-// every session-bound budget (design-1.md §8). The window is scrollable and the
+// Edits one session: its title, custom instructions, shared directories, memory
+// and every session-bound budget (design-1.md §8). The window is scrollable and the
 // memory box is directly editable, with a "Summarize now" action that folds the
 // transcript into memory on demand.
 //
@@ -68,7 +68,10 @@ private:
 
   QLineEdit* title_ = nullptr;
   QPlainTextEdit* instructions_ = nullptr;
-  QLineEdit* shared_directory_ = nullptr;
+
+  // One directory per line; the order sets the mount name when directories
+  // share a basename (the second becomes e.g. "project-2").
+  QPlainTextEdit* shared_directories_ = nullptr;
 
   // The reasoning level this session asks for. The list is model-specific; a
   // stale level stays selectable so it can be corrected rather than dropped.

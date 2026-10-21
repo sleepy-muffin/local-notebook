@@ -42,6 +42,10 @@ struct Settings {
   std::string mono_font;
   int mono_font_size = 11;
 
+  // Inline code size as a fraction of the surrounding text. Inline code is
+  // scaled from the chat font so it never feels oversized next to the prose.
+  float inline_code_scale = 0.9f;
+
   // When true, Enter inserts a newline and Ctrl+Enter sends; when false the
   // reverse.
   bool enter_with_modifier = true;

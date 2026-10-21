@@ -23,6 +23,13 @@ if(MSVC)
     add_compile_options(/bigobj)
 endif()
 
+# Only the standard-library core, the Boost.JSON helpers and the SQLite wrapper
+# are used. Turning the image and audio modules off also stops CMake from
+# probing for OpenGL, JPEG, PNG and the audio codecs. The options are forced so
+# a cache left over from an earlier configure cannot resurrect those probes.
+set(SHARK_BUILD_IMAGE OFF CACHE BOOL "Build shark's image module" FORCE)
+set(SHARK_BUILD_AUDIO OFF CACHE BOOL "Build shark's audio module" FORCE)
+
 add_subdirectory(external/shark)
 add_subdirectory(core)
 add_subdirectory(ui)

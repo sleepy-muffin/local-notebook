@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace lnb::net {
 
@@ -21,9 +22,9 @@ struct ToolCall {
   std::string arguments;
 };
 
-// Resolves `relative` against `root_str` and rejects anything that would escape
-// the repository root (including via symlinks). An absolute path is accepted as
-// long as it resolves inside the root.
+// Resolves a model-supplied `relative` path against `root_str` and rejects
+// anything that would escape the root (including via symlinks). Absolute paths
+// are rejected: the model only ever works with relative paths.
 fs::path checked_repo_path(
     const std::string& root_str, const std::string& relative
 );
@@ -39,11 +40,6 @@ int json_int_or(
 // True when the file looks binary (a NUL byte in its first block), so
 // search_code can cover every text language without an extension whitelist.
 bool is_binary_file(const fs::path& path);
-
-std::string search_code(
-    const std::string& query, const std::string& root_path,
-    const std::string& relative_path
-);
 
 std::string list_directory(
     const std::string& root_path, const std::string& relative_path
@@ -74,12 +70,14 @@ std::string web_search(
 // only when `filesystem` is true (the session has a shared directory).
 boost::json::array tool_definitions(bool filesystem);
 
-// Executes one tool call. Filesystem tools require `root_path` (the session's
-// shared directory) and report a clear error when it is missing; network tools
-// use `proxy` and work without a shared directory. Tool failures are returned
-// to the model as text (rather than thrown), so it can correct its arguments.
+// Executes one tool call. Filesystem tools require at least one configured
+// shared directory and report a clear error when there is none; network tools
+// use `proxy` and work without one. The configured directories are presented to
+// the model as a synthetic, relative tree; their actual paths are never exposed
+// in tool results. Tool failures are returned to the model as text (rather than
+// thrown), so it can correct its arguments.
 std::string execute_local_tool(
-    const ToolCall& call, const std::optional<std::string>& root_path,
+    const ToolCall& call, const std::vector<std::string>& shared_directories,
     const std::optional<std::string>& proxy
 );
 

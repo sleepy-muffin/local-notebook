@@ -14,6 +14,7 @@
 #include <array>
 #include <cctype>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -119,7 +120,14 @@ std::string read_file_range(const fs::path& file, int start_line, int end_line) 
     throw std::runtime_error("Invalid line range; maximum range is 301 lines");
   }
 
-  if (fs::file_size(file) > 2 * 1024 * 1024) {
+  std::error_code error;
+  const std::uintmax_t size = fs::file_size(file, error);
+
+  if (error) {
+    throw std::runtime_error("Cannot read file");
+  }
+
+  if (size > 2 * 1024 * 1024) {
     throw std::runtime_error("File is too large");
   }
 
@@ -148,19 +156,31 @@ std::string read_file_range(const fs::path& file, int start_line, int end_line) 
 fs::path checked_repo_path(
     const std::string& root_str, const std::string& relative
 ) {
-  const fs::path root = fs::canonical(root_str);
+  std::error_code error;
+  const fs::path root = fs::canonical(root_str, error);
 
-  // Models routinely pass the shared directory verbatim, so accept absolute
-  // paths too and let the containment check below decide whether they are
-  // allowed. A relative path is resolved against the root as before.
+  if (error) {
+    throw std::runtime_error("The shared directory is unavailable");
+  }
+
   const fs::path input(relative);
-  const fs::path candidate = fs::canonical(input.is_absolute() ? input : root / input);
+
+  if (input.is_absolute()) {
+    throw std::runtime_error("Paths must be relative to the shared directories");
+  }
+
+  const fs::path candidate = fs::canonical(root / input, error);
+
+  if (error) {
+    throw std::runtime_error("Path does not exist");
+  }
 
   // fs::canonical() resolves symlinks, so verify the final path still lives
-  // inside the root before handing it back.
+  // inside the root before handing it back. The error never names the actual
+  // path: the model only works with the relative view.
   const fs::path rel = candidate.lexically_relative(root);
   if (rel.empty() || rel.is_absolute() || *rel.begin() == "..") {
-    throw std::runtime_error("Path is outside the shared directory");
+    throw std::runtime_error("Path is outside the shared directories");
   }
 
   return candidate;
@@ -218,22 +238,40 @@ std::string list_directory(
 ) {
   const fs::path directory = checked_repo_path(root_path, relative_path);
 
-  if (!fs::is_directory(directory)) {
+  std::error_code error;
+  if (!fs::is_directory(directory, error) || error) {
     throw std::runtime_error("Path is not a directory");
   }
 
   std::vector<std::string> entries;
   constexpr std::size_t MAX_ENTRIES = 500;
 
-  for (const fs::directory_entry& entry: fs::directory_iterator(
-           directory, fs::directory_options::skip_permission_denied
-       )) {
-    const std::string name = entry.path().filename().generic_string();
-    entries.push_back(entry.is_directory() ? name + "/" : name);
+  fs::directory_iterator iterator(
+      directory, fs::directory_options::skip_permission_denied, error
+  );
+
+  if (error) {
+    throw std::runtime_error("Cannot read directory");
+  }
+
+  for (fs::directory_iterator end; iterator != end; iterator.increment(error)) {
+    if (error) break;
+
+    std::error_code type_error;
+    const bool is_directory = iterator->is_directory(type_error);
+
+    if (type_error) continue;
+
+    const std::string name = iterator->path().filename().generic_string();
+    entries.push_back(is_directory ? name + "/" : name);
 
     if (entries.size() >= MAX_ENTRIES) {
       break;
     }
+  }
+
+  if (error) {
+    throw std::runtime_error("Cannot read directory");
   }
 
   std::sort(entries.begin(), entries.end());
@@ -254,9 +292,16 @@ std::string list_directory(
   return out.str();
 }
 
-std::string search_code(
+struct TextSearchResult {
+  std::string text;
+  int matches = 0;
+  int files_scanned = 0;
+  bool truncated = false;
+};
+
+TextSearchResult search_code(
     const std::string& query, const std::string& root_path,
-    const std::string& relative_path
+    const std::string& relative_path, const std::string& display_prefix
 ) {
   if (query.empty() || query.size() > 256) {
     throw std::runtime_error("Invalid search query");
@@ -264,7 +309,10 @@ std::string search_code(
 
   const fs::path directory = checked_repo_path(root_path, relative_path);
 
-  if (!fs::is_directory(directory)) {
+  std::error_code root_error;
+  const fs::path root = fs::canonical(root_path, root_error);
+
+  if (root_error || !fs::is_directory(directory)) {
     throw std::runtime_error("Search path is not a directory");
   }
 
@@ -325,10 +373,12 @@ std::string search_code(
           continue;
         }
 
-        const fs::path root = fs::canonical(root_path);
         const auto relative = fs::relative(it->path(), root).generic_string();
+        const std::string shown = display_prefix.empty()
+            ? relative
+            : display_prefix + "/" + relative;
 
-        out << "\n--- " << relative << ":" << (i + 1) << " ---\n";
+        out << "\n--- " << shown << ":" << (i + 1) << " ---\n";
 
         const std::size_t begin = i > CONTEXT_LINES ? i - CONTEXT_LINES : 0;
         const std::size_t finish = std::min(lines.size() - 1, i + CONTEXT_LINES);
@@ -345,23 +395,12 @@ std::string search_code(
     }
   }
 
-  if (matches == 0) {
-    // Report the resolved directory and how much was scanned so the model can
-    // discover the real search root and retry instead of assuming the tool is
-    // broken. Binary files are skipped by design.
-    std::ostringstream message;
-    message << "No matches for \"" << query << "\" in \""
-            << directory.generic_string() << "\" (" << files_scanned
-            << " text files scanned). Binary files are skipped; try a "
-               "different term or a broader path.";
-    return message.str();
-  }
-
-  if (matches == MAX_MATCHES) {
-    out << "\n[Result limit reached; narrow the search path or query.]\n";
-  }
-
-  return out.str();
+  TextSearchResult result;
+  result.text = out.str();
+  result.matches = matches;
+  result.files_scanned = files_scanned;
+  result.truncated = matches == MAX_MATCHES;
+  return result;
 }
 
 // ------------------------------ network tools ------------------------------
@@ -961,18 +1000,27 @@ boost::json::object chat_tool(boost::json::object function) {
 
 boost::json::array tool_definitions(bool filesystem) {
   // Filesystem tools: only offered when the session has a shared directory.
+  //
+  // The model sees a synthetic tree of relative paths, never the configured
+  // directories themselves. A single directory is mounted at the root; when
+  // several are configured each gets a visible top-level name.
+  const std::string path_help =
+      "A path relative to the configured shared directories. When several "
+      "directories are configured, the first segment names one of them; call "
+      "list_directory with no path to see the names. Absolute paths are not "
+      "accepted.";
+
   boost::json::object list_function;
   list_function["name"] = "list_directory";
   list_function["description"] =
-      "List files and subdirectories immediately inside a directory in the "
-      "configured shared directory. Directories end with /. Call it with no "
-      "arguments to list the shared directory itself.";
+      "List files and subdirectories immediately inside a directory of the "
+      "configured shared directories. Directories end with /. Call it with no "
+      "arguments to list the top level: the configured directories when there "
+      "are several, or the contents of the single one.";
   {
     boost::json::object properties;
     properties["path"] = property(
-        "string",
-        "Directory to list: either a path relative to the shared directory or an "
-        "absolute path inside it. Omit to list the shared directory."
+        "string", "Directory to list. " + path_help + " Omit to list the top level."
     );
 
     boost::json::object parameters;
@@ -987,7 +1035,7 @@ boost::json::array tool_definitions(bool filesystem) {
   boost::json::object search_function;
   search_function["name"] = "search_code";
   search_function["description"] =
-      "Search text files in the configured shared directory. Returns matching "
+      "Search text files in the configured shared directories. Returns matching "
       "file paths, line numbers, and surrounding context. Matching is "
       "case-insensitive unless the query contains an uppercase letter; binary "
       "files are skipped.";
@@ -996,8 +1044,7 @@ boost::json::array tool_definitions(bool filesystem) {
     properties["query"] = property("string", "Symbol name or text to search for");
     properties["path"] = property(
         "string",
-        "Directory to search: a path relative to the shared directory or an "
-        "absolute path inside it. Defaults to the shared directory."
+        "Directory to search. " + path_help + " Omit to search every configured directory."
     );
 
     boost::json::object parameters;
@@ -1012,7 +1059,7 @@ boost::json::array tool_definitions(bool filesystem) {
   boost::json::object search_regex_function;
   search_regex_function["name"] = "search_code_regex";
   search_regex_function["description"] =
-      "Search text files in the configured shared directory with a regular "
+      "Search text files in the configured shared directories with a regular "
       "expression (PCRE syntax), honouring .gitignore/.ignore files and "
       "skipping hidden entries. Returns matching file paths, line numbers and "
       "surrounding context. Matching is case-sensitive; add an inline flag "
@@ -1024,8 +1071,7 @@ boost::json::array tool_definitions(bool filesystem) {
         property("string", "Regular expression to search for");
     properties["path"] = property(
         "string",
-        "Directory to search: a path relative to the shared directory or an "
-        "absolute path inside it. Defaults to the shared directory."
+        "Directory to search. " + path_help + " Omit to search every configured directory."
     );
     properties["glob"] = property(
         "string",
@@ -1045,7 +1091,7 @@ boost::json::array tool_definitions(bool filesystem) {
   boost::json::object find_files_function;
   find_files_function["name"] = "find_files";
   find_files_function["description"] =
-      "List files in the configured shared directory whose path matches a "
+      "List files in the configured shared directories whose path matches a "
       "glob, honouring .gitignore/.ignore files and skipping hidden entries. "
       "Use it to discover files by name or extension without reading their "
       "contents.";
@@ -1056,8 +1102,7 @@ boost::json::array tool_definitions(bool filesystem) {
     );
     properties["path"] = property(
         "string",
-        "Directory to search: a path relative to the shared directory or an "
-        "absolute path inside it. Defaults to the shared directory."
+        "Directory to search. " + path_help + " Omit to search every configured directory."
     );
 
     boost::json::object parameters;
@@ -1072,14 +1117,12 @@ boost::json::array tool_definitions(bool filesystem) {
   boost::json::object read_function;
   read_function["name"] = "read_file";
   read_function["description"] =
-      "Read a limited range of lines from a file in the configured local "
+      "Read a limited range of lines from a file in the configured shared "
       "directories.";
   {
     boost::json::object properties;
     properties["path"] = property(
-        "string",
-        "File to read: a path relative to the shared directory or an absolute "
-        "path inside it"
+        "string", "File to read. " + path_help
     );
     properties["start_line"] = property("integer", "");
     properties["end_line"] = property("integer", "");
@@ -1149,8 +1192,375 @@ boost::json::array tool_definitions(bool filesystem) {
   return tools;
 }
 
+namespace {
+
+// One configured directory. `name` is the only identifier the model sees; the
+// actual path is never included in tool output.
+struct SharedRoot {
+  std::string name;
+  fs::path path;
+  bool available = false;
+};
+
+// Builds the synthetic tree's top level. A single directory is exposed at the
+// root, so its visible name is unused; several are exposed as named children.
+std::vector<SharedRoot> build_shared_roots(
+    const std::vector<std::string>& directories
+) {
+  std::vector<SharedRoot> roots;
+
+  for (const std::string& directory: directories) {
+    if (directory.empty()) continue;
+
+    const fs::path configured(directory);
+    std::error_code error;
+    const fs::path canonical = fs::canonical(configured, error);
+    std::error_code type_error;
+    const bool available = !error &&
+        fs::is_directory(canonical, type_error) && !type_error;
+
+    SharedRoot root;
+    root.path = available ? canonical : configured;
+    root.available = available;
+
+    // The visible name is the directory's own name, never the path leading to
+    // it. Duplicates get a stable suffix so each mount is addressable.
+    std::string name =
+        (available ? canonical : configured).filename().generic_string();
+
+    if (name.empty() || name == "." || name == "..") {
+      name = "root";
+    }
+
+    std::string unique = name;
+
+    for (int suffix = 2;; ++suffix) {
+      const bool taken = std::any_of(
+          roots.begin(), roots.end(),
+          [&unique](const SharedRoot& root) { return root.name == unique; }
+      );
+
+      if (!taken) break;
+
+      unique = name + "-" + std::to_string(suffix);
+    }
+
+    root.name = std::move(unique);
+    roots.push_back(std::move(root));
+  }
+
+  return roots;
+}
+
+// A resolved model path. `relative` is internal to the selected root and
+// `display` is the equivalent path in the model-visible tree.
+struct PathTarget {
+  bool all_roots = false;
+  const SharedRoot* root = nullptr;
+  std::string relative;
+  std::string display;
+};
+
+PathTarget resolve_target(
+    const std::vector<SharedRoot>& roots, const std::string& requested,
+    bool allow_all_roots
+) {
+  const fs::path input(requested.empty() ? "." : requested);
+
+  if (input.is_absolute()) {
+    throw std::runtime_error("Paths must be relative to the shared directories");
+  }
+
+  std::string relative = input.lexically_normal().generic_string();
+
+  if (relative == ".") {
+    relative.clear();
+  }
+
+  if (relative == ".." || relative.rfind("../", 0) == 0) {
+    throw std::runtime_error("Path is outside the shared directories");
+  }
+
+  PathTarget target;
+
+  if (roots.size() == 1) {
+    target.root = &roots.front();
+    target.relative = relative;
+    target.display = relative;
+  } else if (relative.empty()) {
+    if (!allow_all_roots) {
+      throw std::runtime_error(
+          "A specific path is required when several shared directories are "
+          "configured"
+      );
+    }
+
+    target.all_roots = true;
+    target.display = ".";
+  } else {
+    const std::size_t slash = relative.find('/');
+    const std::string mounted = relative.substr(0, slash);
+
+    const auto found = std::find_if(
+        roots.begin(), roots.end(),
+        [&mounted](const SharedRoot& root) { return root.name == mounted; }
+    );
+
+    if (found == roots.end()) {
+      throw std::runtime_error(
+          "Unknown shared directory \"" + mounted +
+          "\". Call list_directory with no path to see the available "
+          "directories."
+      );
+    }
+
+    target.root = &*found;
+    target.relative = slash == std::string::npos
+        ? std::string{}
+        : relative.substr(slash + 1);
+    target.display = relative;
+  }
+
+  if (target.root != nullptr && !target.root->available) {
+    if (roots.size() == 1) {
+      throw std::runtime_error("The shared directory is unavailable");
+    }
+
+    throw std::runtime_error(
+        "The shared directory \"" + target.root->name + "\" is unavailable"
+    );
+  }
+
+  return target;
+}
+
+struct SearchSegment {
+  const SharedRoot* root;
+  std::string relative;
+  std::string prefix;
+};
+
+struct SearchPlan {
+  std::vector<SearchSegment> segments;
+  std::string scope; // model-visible description, never an actual path
+};
+
+SearchPlan plan_search(
+    const std::vector<SharedRoot>& roots, const std::string& requested
+) {
+  const PathTarget target = resolve_target(roots, requested, true);
+
+  SearchPlan plan;
+
+  if (target.all_roots) {
+    plan.scope = "the configured shared directories";
+
+    for (const SharedRoot& root: roots) {
+      if (root.available) {
+        plan.segments.push_back({&root, {}, root.name});
+      }
+    }
+
+    if (plan.segments.empty()) {
+      throw std::runtime_error("No shared directories are currently accessible");
+    }
+  } else {
+    plan.scope = target.display.empty()
+        ? "the shared directory"
+        : "\"" + target.display + "\"";
+    plan.segments.push_back(
+        {target.root, target.relative,
+         roots.size() > 1 ? target.root->name : std::string{}}
+    );
+  }
+
+  return plan;
+}
+
+std::string run_search_code(
+    const std::vector<SharedRoot>& roots, const std::string& query,
+    const std::string& requested
+) {
+  const SearchPlan plan = plan_search(roots, requested);
+  constexpr int kMaxMatches = 30;
+
+  std::string text;
+  int matches = 0;
+  int files_scanned = 0;
+  bool truncated = false;
+
+  for (const SearchSegment& segment: plan.segments) {
+    const TextSearchResult result = search_code(
+        query, segment.root->path.string(), segment.relative, segment.prefix
+    );
+
+    text += result.text;
+    matches += result.matches;
+    files_scanned += result.files_scanned;
+    truncated = truncated || result.truncated;
+
+    if (matches >= kMaxMatches) {
+      truncated = true;
+      break;
+    }
+  }
+
+  if (matches == 0) {
+    return "No matches for \"" + query + "\" in " + plan.scope + " (" +
+        std::to_string(files_scanned) +
+        " text files scanned). Binary files are skipped; try a different term "
+        "or a broader path.";
+  }
+
+  if (truncated) {
+    text += "\n[Result limit reached; narrow the search path or query.]\n";
+  }
+
+  return text;
+}
+
+std::string run_search_regex(
+    const std::vector<SharedRoot>& roots, const std::string& pattern,
+    const std::string& requested, const std::string& glob
+) {
+  const SearchPlan plan = plan_search(roots, requested);
+  constexpr int kMaxMatches = 30;
+
+  std::string text;
+  int matches = 0;
+  int files_scanned = 0;
+  bool truncated = false;
+
+  for (const SearchSegment& segment: plan.segments) {
+    const CodeSearchResult result = search_regex(
+        pattern, segment.root->path.string(), segment.relative, glob,
+        segment.prefix
+    );
+
+    text += result.text;
+    matches += result.matches;
+    files_scanned += result.files_scanned;
+    truncated = truncated || result.truncated;
+
+    if (matches >= kMaxMatches) {
+      truncated = true;
+      break;
+    }
+  }
+
+  if (matches == 0) {
+    return "No matches for \"" + pattern + "\" in " + plan.scope + " (" +
+        std::to_string(files_scanned) +
+        " text files scanned). Binary files and ignored paths are skipped.";
+  }
+
+  if (truncated) {
+    text +=
+        "\n[Result limit reached; narrow the search path, glob or pattern.]\n";
+  }
+
+  return text;
+}
+
+std::string run_find_files(
+    const std::vector<SharedRoot>& roots, const std::string& glob,
+    const std::string& requested
+) {
+  const SearchPlan plan = plan_search(roots, requested);
+  constexpr std::size_t kMaxListedFiles = 1000;
+
+  std::vector<std::string> paths;
+  std::size_t files_scanned = 0;
+  bool truncated = false;
+
+  for (const SearchSegment& segment: plan.segments) {
+    FileListResult result = find_files(
+        glob, segment.root->path.string(), segment.relative, segment.prefix
+    );
+
+    files_scanned += result.scanned;
+    truncated = truncated || result.truncated;
+    paths.insert(
+        paths.end(), std::make_move_iterator(result.paths.begin()),
+        std::make_move_iterator(result.paths.end())
+    );
+  }
+
+  std::sort(paths.begin(), paths.end());
+
+  if (paths.size() > kMaxListedFiles) {
+    paths.resize(kMaxListedFiles);
+    truncated = true;
+  }
+
+  if (paths.empty()) {
+    return "No files match \"" + glob + "\" in " + plan.scope + " (" +
+        std::to_string(files_scanned) +
+        " files scanned). Hidden and ignored paths are skipped.";
+  }
+
+  std::ostringstream out;
+
+  for (const std::string& path: paths) {
+    out << path << '\n';
+  }
+
+  if (truncated) {
+    out << "[File limit reached; narrow the path or glob.]\n";
+  }
+
+  return out.str();
+}
+
+bool is_top_level_request(const std::string& requested) {
+  if (requested.empty()) return true;
+
+  const fs::path input(requested);
+
+  if (input.is_absolute()) return false;
+
+  const std::string normalized = input.lexically_normal().generic_string();
+  return normalized.empty() || normalized == ".";
+}
+
+std::string run_list_directory(
+    const std::vector<SharedRoot>& roots, const std::string& requested
+) {
+  // With several directories, the top level is the list of mounts. The model
+  // picks one by name; a single directory is transparent and its contents are
+  // listed directly.
+  if (roots.size() > 1 && is_top_level_request(requested)) {
+    std::vector<std::string> entries;
+
+    for (const SharedRoot& root: roots) {
+      if (root.available) {
+        entries.push_back(root.name + "/");
+      }
+    }
+
+    if (entries.empty()) {
+      return "No shared directories are currently accessible.";
+    }
+
+    std::sort(entries.begin(), entries.end());
+
+    std::ostringstream out;
+
+    for (const std::string& entry: entries) {
+      out << entry << '\n';
+    }
+
+    return out.str();
+  }
+
+  const PathTarget target = resolve_target(roots, requested, false);
+  return list_directory(target.root->path.string(), target.relative);
+}
+
+} // namespace
+
 std::string execute_local_tool(
-    const ToolCall& call, const std::optional<std::string>& root_path,
+    const ToolCall& call, const std::vector<std::string>& shared_directories,
     const std::optional<std::string>& proxy
 ) {
   try {
@@ -1164,37 +1574,40 @@ std::string execute_local_tool(
 
     const boost::json::object& args = parsed.as_object();
 
-    // Filesystem tools need a shared directory; network tools do not.
+    // Filesystem tools need at least one shared directory; network tools do
+    // not, so the gate lives here instead of around the whole call.
     const bool needs_root = call.name == "list_directory" ||
         call.name == "search_code" || call.name == "search_code_regex" ||
         call.name == "find_files" || call.name == "read_file";
 
-    if (needs_root && (!root_path.has_value() || root_path->empty())) {
-      return "Tool error: this session has no shared directory configured";
+    const std::vector<SharedRoot> roots = needs_root
+        ? build_shared_roots(shared_directories)
+        : std::vector<SharedRoot>{};
+
+    if (needs_root && roots.empty()) {
+      return "Tool error: this session has no shared directories configured";
     }
 
     if (call.name == "list_directory") {
-      const std::string path = json_string_or(args, "path", ".");
-      return list_directory(*root_path, path);
+      return run_list_directory(roots, json_string_or(args, "path", "."));
     }
 
     if (call.name == "search_code") {
       const std::string query = json_string_or(args, "query");
-      const std::string path = json_string_or(args, "path", ".");
-      return search_code(query, *root_path, path);
+      return run_search_code(roots, query, json_string_or(args, "path", "."));
     }
 
     if (call.name == "search_code_regex") {
       const std::string pattern = json_string_or(args, "pattern");
-      const std::string path = json_string_or(args, "path", ".");
       const std::string glob = json_string_or(args, "glob");
-      return search_regex(pattern, *root_path, path, glob);
+      return run_search_regex(
+          roots, pattern, json_string_or(args, "path", "."), glob
+      );
     }
 
     if (call.name == "find_files") {
       const std::string glob = json_string_or(args, "glob");
-      const std::string path = json_string_or(args, "path", ".");
-      return find_files(glob, *root_path, path);
+      return run_find_files(roots, glob, json_string_or(args, "path", "."));
     }
 
     if (call.name == "read_file") {
@@ -1202,7 +1615,11 @@ std::string execute_local_tool(
       const int start = json_int_or(args, "start_line", 1);
       const int end = json_int_or(args, "end_line", start + 100);
 
-      return read_file_range(checked_repo_path(*root_path, path), start, end);
+      const PathTarget target = resolve_target(roots, path, false);
+      return read_file_range(
+          checked_repo_path(target.root->path.string(), target.relative), start,
+          end
+      );
     }
 
     if (call.name == "fetch_url") {
@@ -1216,6 +1633,10 @@ std::string execute_local_tool(
     }
 
     throw std::runtime_error("Unknown tool: " + call.name);
+  } catch (const fs::filesystem_error&) {
+    // A filesystem exception carries an actual path in its message, so it is
+    // deliberately replaced with a path-free message before reaching the model.
+    return "Tool error: The path could not be accessed";
   } catch (const std::exception& e) {
     // Tool errors are returned to the model so it can retry with better
     // arguments instead of aborting the whole generation.

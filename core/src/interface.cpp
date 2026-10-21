@@ -526,8 +526,8 @@ std::shared_ptr<GenerationTask> interface::start_generation() {
         );
 
         const net::ChatCompletionResult result = net::generate_reply(
-            std::move(request), remote, task, stop, session->shared_directory_,
-            *session
+            std::move(request), remote, task, stop,
+            session->shared_directories_, *session
         );
 
         // A cancelled turn keeps nothing; a completed one stores the reply.

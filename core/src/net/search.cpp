@@ -498,9 +498,10 @@ WalkResult collect_files(
   return result;
 }
 
-std::string search_regex(
+CodeSearchResult search_regex(
     const std::string& pattern, const std::string& root_path,
-    const std::string& relative_path, const std::string& glob
+    const std::string& relative_path, const std::string& glob,
+    const std::string& display_prefix
 ) {
   if (pattern.empty() || pattern.size() > kMaxPatternLength) {
     throw std::runtime_error("Invalid search pattern");
@@ -598,7 +599,11 @@ std::string search_regex(
           }
           last_line = line;
 
-          out << "\n--- " << relative << ':' << (line + 1) << " ---\n";
+          const std::string shown = display_prefix.empty()
+              ? relative
+              : display_prefix + "/" + relative;
+
+          out << "\n--- " << shown << ':' << (line + 1) << " ---\n";
 
           const std::size_t begin =
               line > static_cast<std::size_t>(kContextLines)
@@ -628,25 +633,17 @@ std::string search_regex(
       nullptr
   );
 
-  if (matches == 0) {
-    std::ostringstream message;
-    message << "No matches for \"" << pattern << "\" in \""
-            << setup.start.generic_string() << "\" (" << files_scanned
-            << " text files scanned). Binary files and ignored paths are "
-               "skipped.";
-    return message.str();
-  }
-
-  if (matches >= kMaxMatches) {
-    out << "\n[Result limit reached; narrow the search path, glob or pattern.]\n";
-  }
-
-  return out.str();
+  CodeSearchResult result;
+  result.text = out.str();
+  result.matches = matches;
+  result.files_scanned = files_scanned;
+  result.truncated = matches >= kMaxMatches;
+  return result;
 }
 
-std::string find_files(
+FileListResult find_files(
     const std::string& glob, const std::string& root_path,
-    const std::string& relative_path
+    const std::string& relative_path, const std::string& display_prefix
 ) {
   if (glob.empty()) {
     throw std::runtime_error("A glob pattern is required");
@@ -659,30 +656,19 @@ std::string find_files(
   paths.reserve(walked.files.size());
 
   for (const FoundFile& file: walked.files) {
-    paths.push_back(file.relative);
+    paths.push_back(
+        display_prefix.empty() ? file.relative
+                               : display_prefix + "/" + file.relative
+    );
   }
 
   std::sort(paths.begin(), paths.end());
 
-  if (paths.empty()) {
-    std::ostringstream message;
-    message << "No files match \"" << glob << "\" in \""
-            << walked.directory.generic_string() << "\" (" << walked.scanned
-            << " files scanned). Hidden and ignored paths are skipped.";
-    return message.str();
-  }
-
-  std::ostringstream out;
-
-  for (const std::string& path: paths) {
-    out << path << '\n';
-  }
-
-  if (walked.truncated) {
-    out << "[File limit reached; narrow the path or glob.]\n";
-  }
-
-  return out.str();
+  FileListResult result;
+  result.paths = std::move(paths);
+  result.scanned = walked.scanned;
+  result.truncated = walked.truncated;
+  return result;
 }
 
 } // namespace lnb::net

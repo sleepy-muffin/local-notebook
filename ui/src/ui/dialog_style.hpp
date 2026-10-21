@@ -76,12 +76,13 @@ inline QString dialog_stylesheet(const QString& object_name) {
                "QScrollArea > QWidget > QWidget { background: transparent; }");
 
   sheet += QStringLiteral(
-               "QLineEdit, QPlainTextEdit, QSpinBox, QComboBox {"
+               "QLineEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {"
                "  background: %1; border: 1px solid %2; border-radius: 6px;"
                "  padding: 5px 8px; selection-background-color: %3; selection-color: %4; }")
                .arg(base, border, accent, accent_text);
   sheet += QStringLiteral(
-               "QLineEdit:focus, QPlainTextEdit:focus, QSpinBox:focus, QComboBox:focus {"
+               "QLineEdit:focus, QPlainTextEdit:focus, QSpinBox:focus, "
+               "QDoubleSpinBox:focus, QComboBox:focus {"
                "  border: 1px solid %1; }")
                .arg(accent);
 

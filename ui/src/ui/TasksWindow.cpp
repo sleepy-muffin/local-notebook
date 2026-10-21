@@ -16,6 +16,7 @@
 
 #include "support/i18n.hpp"
 #include "ui/dialog_style.hpp"
+#include "ui/ScrollBar.hpp"
 #include "ui/theme.hpp"
 
 namespace ui {
@@ -116,6 +117,7 @@ TasksWindow::TasksWindow(QWidget* parent) : QDialog(parent) {
   scroll->setWidgetResizable(true);
   scroll->setFrameShape(QFrame::NoFrame);
   scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  install_scroll_bars(scroll, ScrollBarTrack::Window);
 
   list_ = new QWidget(scroll);
   list_layout_ = new QVBoxLayout(list_);

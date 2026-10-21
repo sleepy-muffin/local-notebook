@@ -39,6 +39,9 @@ struct ThemeState {
   QFont chat_font;
   QFont mono_font;
 
+  // Inline code size as a fraction of the surrounding text.
+  float inline_code_scale = 0.9f;
+
   std::optional<QColor> tint;
 };
 
@@ -261,14 +264,15 @@ QString build_stylesheet() {
   sheet += QStringLiteral("QWidget { color: %1; }").arg(rgba(c.text));
 
   sheet += QStringLiteral(
-               "QLineEdit, QPlainTextEdit, QSpinBox, QComboBox {"
+               "QLineEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {"
                "  background: %1; border: 1px solid %2; border-radius: 6px;"
                "  padding: 4px 6px; selection-background-color: %3;"
                "  selection-color: %4; }")
                .arg(rgba(c.base), rgba(c.border), rgba(c.accent), rgba(c.accent_text));
 
   sheet += QStringLiteral(
-               "QLineEdit:focus, QPlainTextEdit:focus, QSpinBox:focus, QComboBox:focus {"
+               "QLineEdit:focus, QPlainTextEdit:focus, QSpinBox:focus, "
+               "QDoubleSpinBox:focus, QComboBox:focus {"
                "  border: 1px solid %1; }")
                .arg(rgba(c.accent));
 
@@ -288,20 +292,25 @@ QString build_stylesheet() {
                "QToolButton:hover { background: %1; }")
                .arg(rgba(c.surface));
 
+  // The scrollbar must never paint a background of its own: the widget behind
+  // it is drawn by hand and Breeze would otherwise fill the groove and the page
+  // areas opaque black. Every subcontrol that can be painted is therefore made
+  // transparent, and only the handle carries a colour.
   sheet += QStringLiteral(
-               "QScrollBar { background: transparent; }"
+               "QScrollBar { background: transparent; border: none; }"
                "QScrollBar:vertical { background: transparent; width: 10px; margin: 0; }"
+               "QScrollBar:horizontal { background: transparent; height: 10px; margin: 0; }"
+               "QScrollBar::groove:vertical, QScrollBar::groove:horizontal {"
+               "  background: transparent; border: none; }"
                "QScrollBar::handle:vertical { background: %1; border-radius: 5px;"
                "  min-height: 24px; }"
-               "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
-               "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {"
-               "  background: transparent; }"
-               "QScrollBar:horizontal { background: transparent; height: 10px; margin: 0; }"
                "QScrollBar::handle:horizontal { background: %1; border-radius: 5px;"
                "  min-width: 24px; }"
+               "QScrollBar::add-line, QScrollBar::sub-line {"
+               "  background: transparent; border: none; }"
+               "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
                "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }"
-               "QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {"
-               "  background: transparent; }")
+               "QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }")
                .arg(rgba(c.border));
 
   sheet += QStringLiteral(
@@ -321,7 +330,10 @@ QString build_stylesheet() {
   // behind it, so an alpha fill would only darken it against the desktop.
   sheet += QStringLiteral(
                "QDialog { background: %1; }"
-               "QSpinBox::up-button, QSpinBox::down-button { width: 14px; }")
+               "QSpinBox::up-button, QSpinBox::down-button {"
+               "  width: 14px; }"
+               "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {"
+               "  width: 14px; }")
                .arg(c.window.name());
 
   Q_UNUSED(m);
@@ -381,6 +393,11 @@ void apply_theme(QApplication& app, const lnb::Settings& settings) {
   mono.setFixedPitch(true);
   current.mono_font = mono;
 
+  // A non-positive or missing value would collapse inline code to nothing, so
+  // fall back to the default ratio.
+  current.inline_code_scale =
+      settings.inline_code_scale > 0.0f ? settings.inline_code_scale : 0.9f;
+
   const ThemeColors& c = current.theme.colors;
 
   QPalette palette = app.palette();
@@ -431,6 +448,10 @@ const QFont& chat_font() {
 
 const QFont& mono_font() {
   return state().mono_font;
+}
+
+float inline_code_scale() {
+  return state().inline_code_scale;
 }
 
 int line_height_other() {

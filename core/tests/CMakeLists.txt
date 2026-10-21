@@ -79,6 +79,45 @@ target_link_libraries(
 add_test(NAME search-parse COMMAND search-parse-test)
 
 add_executable(
+  tools-paths-test
+  tools_paths_test.cpp
+)
+
+target_include_directories(
+  tools-paths-test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+target_link_libraries(
+  tools-paths-test
+  PRIVATE
+    local-notebook-core
+)
+
+add_test(NAME tools-paths COMMAND tools-paths-test)
+
+add_executable(
+  session-directories-test
+  session_directories_test.cpp
+)
+
+target_include_directories(
+  session-directories-test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+target_link_libraries(
+  session-directories-test
+  PRIVATE
+    local-notebook-core
+    shark::sqlite3
+)
+
+add_test(NAME session-directories COMMAND session-directories-test)
+
+add_executable(
   assistant-settings-test
   assistant_settings_test.cpp
 )

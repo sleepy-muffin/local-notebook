@@ -39,6 +39,21 @@ Error: Process completed with exit code 1.
 
 ## Experience Improvements
 
+### Custom transcript renderer
+
+- Draw markdown with custom renderer for better performance. Implemented as a
+  Qt-free renderer core (`ui/render/`: document model, layout, hit testing,
+  selection and paint order) plus a Qt-backed canvas (`TranscriptCanvas`) that
+  only supplies shaping (`QTextLayout`) and a `QPainter` backend. The transcript
+  is one custom-painted, virtualised surface: paragraphs are shaped once, only
+  lines inside the viewport are painted, streaming relayouts only the last
+  message, and the per-message widget tree (and the `QTextDocument` → HTML →
+  `QLabel` round trip) is gone. Selection now spans every message and code
+  block. The reserved action strip is drawn by the layout and a single reusable
+  hover bar handles copy/edit/delete. The "Load earlier messages" button was
+  replaced by automatic paging when the reader reaches the top, and scroll
+  anchors by message id keep the reader's place across rebuilds.
+
 - (New Function) Theme selectors and budget presets, assistant-summarization presets are also scrolling adjustable. Please disable it as we did for number/ font choosing controls.
 - (New Function) Please place some screenshots in `docs/screenshots/`, then present them in `README.md`.
 - (New Function) Add summarization review window before the program sends the summarization request, both munually and automatically. It only needs to display what's going to be sent in plain text, and how watermarks will be updated. It asks the user whether it should run, if user decline, cancel it (If the user cancel an automatically triggered summarization, inform them some messages may fail to be converged if they don't manually summarize before sending new messages).
@@ -80,7 +95,7 @@ Error: Process completed with exit code 1.
 - (Refinement) The background of scrollbars should be transparent. Currently they still have black background in settings window. While the scrollbar in Main Window appears to have transparent background (What looks better).
 - (Refinement) Generation Task triggered by summarization (both assistant-level and session-level) should be also queued into task list. Button should be substituted to summarize button when assistant-level summarization trigger has met (currently we already have it). Also, for the case where assistant-level trigger has been met. So, in the case when both triggers have been met in the same time, user have to summarize twice before moving on. (session-specific memory is inspected first. )
 
-- Manual assistant-level summarisation should be appended into Tasks Window as well.
+- (Refinement) Manual assistant-level summarisation should be appended into Tasks Window as well.
   In the case assistant-level summarisation is not completed, for both manually initiated or automatically triggered on sending message and the user affirms it, as we have already implemented.
   - The send button is banned for all sessions.
   - The user can not cancel this task in session conversation view.
@@ -88,6 +103,16 @@ Error: Process completed with exit code 1.
   - Currently, when the assistant-level summarisation is issued through the button on the right of session, the task will show up, but no details are provided there. No error messages even though the assistant-level summarisation is failed.
 
   Implemented with the task abstraction below: the manual fold (Settings) runs as the shared assistant task, so it appears in the Tasks Window; every row for a running task carries a Cancel button; and a manual fold now surfaces both its request/response log (the summarizer runs on a silent task whose log is copied onto the visible one) and its failure (the manual paths fold strictly instead of swallowing the error).
+
+- (Refinement) Icon on Wayland should be installed dynamically, so that in case that the `.desktop` cannot be installed, the icon still shows up.
+- (Refinement) It now accepts multiple shared directories. It does not rely on Linux mount. It makes fake addresses for tools. Real absolute path no longer exposes to the model. Details:
+  - There is no `mount(2)`, no bind mount, no mount namespace, no bwrap. The word “mount” in the code comments is a metaphor for a lookup table. The whole thing is an in-process virtual path tree inside the tool dispatcher.
+    - `build_shared_roots` canonicalizes each configured directory and assigns it a visible name (its basename, with -2, -3 for duplicates).
+    - `resolve_target` interprets the model’s string: in single-root mode it is a path inside the one root; in multi-root mode the first segment selects a named root.
+    - `checked_repo_path` joins that onto the real directory, calls `fs::canonical`, and verifies `lexically_relative(root)` doesn’t start with ...
+    - The result is formatted back into relative paths before it ever reaches the model.
+  - Examples:
+    - Several directories configured — named top-level entries case. `list_directory {}` returns the "mounts", named from each directory’s basename: `alpha/`, `beta-123/`. The full path is never exposed, but the folder name is.
 
 ### Responses API path + reasoning selector
 

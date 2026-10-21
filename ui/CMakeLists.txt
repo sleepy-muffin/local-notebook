@@ -45,6 +45,10 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 set(CMAKE_AUTOMOC OFF)
 set(CMAKE_AUTORCC ON)
 
+# The transcript renderer is UI-specific: its backend and canvas are Qt types,
+# while the layout core stays Qt-free so its geometry tests can link it alone.
+add_subdirectory(render)
+
 set(LOCAL_NOTEBOOK_UI_SOURCES
         src/settings/settings.cpp
         src/support/i18n.cpp
@@ -55,6 +59,8 @@ set(LOCAL_NOTEBOOK_UI_SOURCES
         src/ui/ConversationController.cpp
         src/ui/ConversationView.cpp
         src/ui/MainWindow.cpp
+        src/ui/MessageDocument.cpp
+        src/ui/ScrollBar.cpp
         src/ui/SessionEditor.cpp
         src/ui/SessionItemDelegate.cpp
         src/ui/SessionListModel.cpp
@@ -62,6 +68,7 @@ set(LOCAL_NOTEBOOK_UI_SOURCES
         src/ui/StatusNotice.cpp
         src/ui/SummaryReviewDialog.cpp
         src/ui/TasksWindow.cpp
+        src/ui/TranscriptCanvas.cpp
         src/ui/theme.cpp
 
         ${CMAKE_CURRENT_SOURCE_DIR}/../assets/local-notebook.qrc
@@ -84,7 +91,8 @@ target_include_directories(${PROJECT_NAME}-core
 target_link_libraries(${PROJECT_NAME}-core
         PUBLIC
         local-notebook-core
-        shark
+        local-notebook-render
+        shark::common
         Qt6::Core
         Qt6::Gui
         Qt6::Widgets

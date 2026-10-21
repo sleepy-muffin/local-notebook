@@ -39,6 +39,7 @@
 #include "support/i18n.hpp"
 #include "ui/AssistantForm.hpp"
 #include "ui/BackgroundWidget.hpp"
+#include "ui/ScrollBar.hpp"
 #include "ui/SpinBox.hpp"
 #include "ui/SummaryReviewDialog.hpp"
 #include "ui/dialog_style.hpp"
@@ -142,6 +143,7 @@ bool theme_inputs_equal(const lnb::Settings& a, const lnb::Settings& b) {
          a.ui_font_size == b.ui_font_size && a.font == b.font &&
          a.font_size == b.font_size && a.mono_font == b.mono_font &&
          a.mono_font_size == b.mono_font_size &&
+         a.inline_code_scale == b.inline_code_scale &&
          a.background_url == b.background_url &&
          a.background_override == b.background_override && a.metrics == b.metrics;
 }
@@ -183,6 +185,7 @@ SettingsWindow::SettingsWindow(
   // The rail shows the dialog behind it; the rule lives on the list so a style
   // that paints from the palette cannot fill the scrollbar column black.
   show_parent_background(nav_);
+  install_scroll_bars(nav_, ScrollBarTrack::Window);
   nav_->setFrameShape(QFrame::NoFrame);
   nav_->setSelectionMode(QAbstractItemView::SingleSelection);
   nav_->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -306,6 +309,7 @@ QWidget* SettingsWindow::make_page(
   scroll->setWidgetResizable(true);
   scroll->setFrameShape(QFrame::NoFrame);
   scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  install_scroll_bars(scroll, ScrollBarTrack::Window);
   scroll->setWidget(content);
 
   layout->addWidget(scroll, 1);
@@ -423,6 +427,22 @@ QWidget* SettingsWindow::build_config_page() {
     config_reloaders_.push_back([this, mono_box]() { set_font_box(mono_box, pending_.mono_font); });
     config_reloaders_.push_back([this, mono_size]() {
       mono_size->setValue(pending_.mono_font_size);
+    });
+
+    auto* inline_scale = new DoubleSpinBox(content);
+    inline_scale->setRange(0.50, 1.50);
+    inline_scale->setSingleStep(0.05);
+    inline_scale->setDecimals(2);
+    inline_scale->setValue(static_cast<double>(pending_.inline_code_scale));
+    inline_scale->setToolTip(
+        trs("Inline code size as a fraction of the surrounding text.")
+    );
+    form->addRow(field_label(content, trs("Inline code size")), inline_scale);
+    config_writers_.push_back([this, inline_scale]() {
+      pending_.inline_code_scale = static_cast<float>(inline_scale->value());
+    });
+    config_reloaders_.push_back([this, inline_scale]() {
+      inline_scale->setValue(static_cast<double>(pending_.inline_code_scale));
     });
 
     layout->addLayout(form);
@@ -1007,6 +1027,7 @@ void SettingsWindow::restore_config_defaults() {
   pending_.font_size = defaults.font_size;
   pending_.mono_font = defaults.mono_font;
   pending_.mono_font_size = defaults.mono_font_size;
+  pending_.inline_code_scale = defaults.inline_code_scale;
   pending_.enter_with_modifier = defaults.enter_with_modifier;
   pending_.rendered_message_limit = defaults.rendered_message_limit;
   pending_.history_page_size = defaults.history_page_size;

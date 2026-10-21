@@ -14,6 +14,7 @@
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QSpinBox>
+#include <QStringList>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -28,6 +29,7 @@
 #include "support/i18n.hpp"
 #include "ui/BackgroundWidget.hpp"
 #include "ui/ConversationView.hpp"
+#include "ui/ScrollBar.hpp"
 #include "ui/SpinBox.hpp"
 #include "ui/SummaryReviewDialog.hpp"
 #include "ui/dialog_style.hpp"
@@ -121,6 +123,7 @@ SessionEditor::SessionEditor(
   scroll->setWidgetResizable(true);
   scroll->setFrameShape(QFrame::NoFrame);
   scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  install_scroll_bars(scroll, ScrollBarTrack::Window);
 
   auto* inner = build_content();
   scroll->setWidget(inner);
@@ -170,9 +173,12 @@ QWidget* SessionEditor::build_content() {
     title_ = new QLineEdit(content);
     title_->setPlaceholderText(trs("Session title"));
 
-    shared_directory_ = new QLineEdit(content);
-    shared_directory_->setPlaceholderText(
-        trs("Directory the assistant may read and list (optional)")
+    shared_directories_ = new QPlainTextEdit(content);
+    shared_directories_->setTabChangesFocus(true);
+    shared_directories_->setMinimumHeight(64);
+    shared_directories_->setMaximumHeight(96);
+    shared_directories_->setPlaceholderText(
+        trs("Directories the assistant may read and list, one per line (optional)")
     );
 
     // The reasoning level this session asks for. It is stored per session, so
@@ -185,7 +191,9 @@ QWidget* SessionEditor::build_content() {
     );
 
     form->addRow(field_label(content, trs("Title")), title_);
-    form->addRow(field_label(content, trs("Shared directory")), shared_directory_);
+    form->addRow(
+        field_label(content, trs("Shared directories")), shared_directories_
+    );
     form->addRow(field_label(content, trs("Reasoning")), reasoning_);
     layout->addLayout(form);
   }
@@ -424,9 +432,13 @@ void SessionEditor::load_session() {
       : session_.reasoning_effort_;
   populate_reasoning(preferred);
 
-  if (session_.shared_directory_.has_value()) {
-    shared_directory_->setText(to_qstring(*session_.shared_directory_));
+  QStringList directories;
+
+  for (const std::string& directory: session_.shared_directories_) {
+    directories << to_qstring(directory);
   }
+
+  shared_directories_->setPlainText(directories.join(u'\n'));
 
   watermark_->setValue(static_cast<int>(session_.memory_watermark_));
   assistant_watermark_->setValue(static_cast<int>(session_.assistant_memory_watermark_));
@@ -511,9 +523,19 @@ void SessionEditor::save_session() {
   session.custom_instructions_ = instructions_->toPlainText().toStdString();
   session.memory_ = memory_->toPlainText().toStdString();
 
-  const QString directory = shared_directory_->text().trimmed();
-  session.shared_directory_ =
-      directory.isEmpty() ? std::nullopt : std::optional<std::string>(directory.toStdString());
+  session.shared_directories_.clear();
+
+  const QStringList directories = shared_directories_->toPlainText().split(
+      u'\n', Qt::SkipEmptyParts
+  );
+
+  for (const QString& entry: directories) {
+    const QString directory = entry.trimmed();
+
+    if (!directory.isEmpty()) {
+      session.shared_directories_.push_back(directory.toStdString());
+    }
+  }
 
   // Clearing the memory re-admits the whole transcript.
   session.memory_watermark_ = session.memory_.empty()

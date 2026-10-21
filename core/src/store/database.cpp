@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include <boost/json.hpp>
+
 namespace lnb::store {
 
 namespace {
@@ -9,10 +11,12 @@ namespace {
 // design-1.md §9. The schema is versioned via PRAGMA user_version so future
 // migrations have a starting point; this is a fresh start, so there is no
 // migration from the legacy database. Version 2 added `session.pinned`, version
-// 3 `session.summary_keep_tokens` and version 4 `session.reasoning_effort`; an
-// older file gains each column in the constructor.
+// 3 `session.summary_keep_tokens`, version 4 `session.reasoning_effort` and
+// version 5 turned the single `shared_directory` into a JSON array of
+// directories (`shared_directories`); an older file gains each column in the
+// constructor.
 constexpr std::string_view SCHEMA = R"sql(
-PRAGMA user_version = 4;
+PRAGMA user_version = 5;
 
 CREATE TABLE IF NOT EXISTS session (
   id                                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -21,7 +25,7 @@ CREATE TABLE IF NOT EXISTS session (
   memory                            TEXT    NOT NULL DEFAULT '',
   memory_watermark                  INTEGER NOT NULL DEFAULT 0,
   assistant_memory_watermark        INTEGER NOT NULL DEFAULT 0,
-  shared_directory                  TEXT,
+  shared_directories                TEXT    NOT NULL DEFAULT '[]',
   pinned                            INTEGER NOT NULL DEFAULT 0,
   summary_keep_tokens               INTEGER NOT NULL DEFAULT 4000,
   summary_trigger_tokens            INTEGER NOT NULL DEFAULT 16000,
@@ -48,12 +52,50 @@ CREATE INDEX IF NOT EXISTS idx_message_made_at ON message(made_at);
 
 constexpr std::string_view SESSION_COLUMNS =
   "id, title, custom_instructions, memory, memory_watermark, "
-  "assistant_memory_watermark, shared_directory, pinned, summary_keep_tokens, "
+  "assistant_memory_watermark, shared_directories, pinned, summary_keep_tokens, "
   "summary_trigger_tokens, summary_token_budget, summary_reasoning_headroom_tokens, "
   "max_tool_rounds, max_tool_calls, tool_output_max_tokens, response_token_budget, "
   "reasoning_effort";
 
 constexpr std::string_view MESSAGE_COLUMNS = "id, session_id, role, content, made_at";
+
+// Shared directories are stored as a JSON array in one column. A row written
+// before the list existed holds a single plain path, which is still accepted.
+std::string encode_shared_directories(const std::vector<std::string>& directories) {
+  boost::json::array array;
+
+  for (const std::string& directory: directories) {
+    array.emplace_back(directory);
+  }
+
+  return boost::json::serialize(array);
+}
+
+std::vector<std::string> decode_shared_directories(
+    const std::optional<std::string>& stored
+) {
+  std::vector<std::string> directories;
+
+  if (!stored.has_value() || stored->empty()) {
+    return directories;
+  }
+
+  boost::system::error_code error;
+  const boost::json::value parsed = boost::json::parse(*stored, error);
+
+  if (!error && parsed.is_array()) {
+    for (const boost::json::value& entry: parsed.as_array()) {
+      if (entry.is_string() && !entry.as_string().empty()) {
+        directories.emplace_back(entry.as_string());
+      }
+    }
+
+    return directories;
+  }
+
+  directories.push_back(*stored);
+  return directories;
+}
 
 Session read_session(const shark::sqlite::statement& stmt) {
   Session session;
@@ -63,7 +105,7 @@ Session read_session(const shark::sqlite::statement& stmt) {
   session.memory_ = stmt.column_text(3);
   session.memory_watermark_ = stmt.column_uint32(4);
   session.assistant_memory_watermark_ = stmt.column_uint32(5);
-  session.shared_directory_ = stmt.column_text_opt(6);
+  session.shared_directories_ = decode_shared_directories(stmt.column_text_opt(6));
   session.pinned_ = stmt.column_int(7) != 0;
   session.summary_keep_tokens_ = static_cast<std::size_t>(stmt.column_int(8));
   session.memory_trigger_tokens_ = static_cast<std::size_t>(stmt.column_int(9));
@@ -126,12 +168,20 @@ database::database(std::string_view path) : connection_(path) {
       "ALTER TABLE session ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT ''"
     );
   }
+
+  // Version 5 renamed the single-path column. The stored values are read
+  // through decode_shared_directories(), which still understands a plain path.
+  if (!has_column(connection_, "session", "shared_directories")) {
+    connection_.exec(
+      "ALTER TABLE session RENAME COLUMN shared_directory TO shared_directories"
+    );
+  }
 }
 
 std::uint32_t database::insert_session(const Session& session) {
   auto stmt = connection_.prepare(
     "INSERT INTO session (title, custom_instructions, memory, memory_watermark, "
-    "assistant_memory_watermark, shared_directory, pinned, summary_keep_tokens, "
+    "assistant_memory_watermark, shared_directories, pinned, summary_keep_tokens, "
     "summary_trigger_tokens, summary_token_budget, summary_reasoning_headroom_tokens, "
     "max_tool_rounds, max_tool_calls, tool_output_max_tokens, response_token_budget, "
     "reasoning_effort) "
@@ -140,7 +190,7 @@ std::uint32_t database::insert_session(const Session& session) {
   stmt.bind(
     session.title_, session.custom_instructions_, session.memory_,
     session.memory_watermark_, session.assistant_memory_watermark_,
-    session.shared_directory_, session.pinned_ ? 1 : 0,
+    encode_shared_directories(session.shared_directories_), session.pinned_ ? 1 : 0,
     static_cast<int>(session.summary_keep_tokens_),
     static_cast<int>(session.memory_trigger_tokens_),
     static_cast<int>(session.summary_token_budget_),
@@ -157,7 +207,7 @@ std::uint32_t database::insert_session(const Session& session) {
 void database::update_session(const Session& session) {
   auto stmt = connection_.prepare(
     "UPDATE session SET title = ?, custom_instructions = ?, memory = ?, "
-    "memory_watermark = ?, assistant_memory_watermark = ?, shared_directory = ?, "
+    "memory_watermark = ?, assistant_memory_watermark = ?, shared_directories = ?, "
     "pinned = ?, summary_keep_tokens = ?, summary_trigger_tokens = ?, "
     "summary_token_budget = ?, summary_reasoning_headroom_tokens = ?, "
     "max_tool_rounds = ?, max_tool_calls = ?, tool_output_max_tokens = ?, "
@@ -167,7 +217,7 @@ void database::update_session(const Session& session) {
   stmt.bind(
     session.title_, session.custom_instructions_, session.memory_,
     session.memory_watermark_, session.assistant_memory_watermark_,
-    session.shared_directory_, session.pinned_ ? 1 : 0,
+    encode_shared_directories(session.shared_directories_), session.pinned_ ? 1 : 0,
     static_cast<int>(session.summary_keep_tokens_),
     static_cast<int>(session.memory_trigger_tokens_),
     static_cast<int>(session.summary_token_budget_),

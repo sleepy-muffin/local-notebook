@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "local-notebook-core/api_protocol.hpp"
 
@@ -47,7 +48,11 @@ public:
   std::uint32_t memory_watermark_ = 0;
   std::uint32_t assistant_memory_watermark_ = 0;
 
-  std::optional<std::string> shared_directory_;
+  // Directories the filesystem tools may access. The model never sees these
+  // paths: it is given a synthetic tree of relative paths, with a single
+  // directory presented at the root and several presented under visible names.
+  // Empty disables the filesystem tools.
+  std::vector<std::string> shared_directories_;
 
   // Pinned sessions are listed in their own sidebar category above the rest.
   // Stored in the session row (design-1.md §9).

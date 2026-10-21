@@ -114,7 +114,9 @@ target_link_libraries(
         Boost::regex
         Boost::url
         PRIVATE
-        shark
+        shark::common
+        shark::external
+        shark::sqlite3
         ${SQLite3_LIBRARIES}
         OpenSSL::SSL
         OpenSSL::Crypto

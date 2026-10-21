@@ -98,7 +98,7 @@ ChatCompletionResult send_message_once(
 ChatCompletionResult generate_reply(
     Request request, const Remote& remote, GenerationTask& task,
     std::stop_token stop_token,
-    const std::optional<std::string>& shared_directory, const Session& session
+    const std::vector<std::string>& shared_directories, const Session& session
 );
 
 // Session summarisation (design-1.md §5). `maybe_*` is a no-op (returns the

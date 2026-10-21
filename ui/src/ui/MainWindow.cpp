@@ -30,6 +30,7 @@
 #include "settings/settings.hpp"
 #include "support/i18n.hpp"
 #include "ui/ConversationView.hpp"
+#include "ui/ScrollBar.hpp"
 #include "ui/SessionItemDelegate.hpp"
 #include "ui/SessionListModel.hpp"
 #include "ui/SettingsWindow.hpp"
@@ -432,6 +433,7 @@ QListView* MainWindow::build_session_list(
   view->setUniformItemSizes(true);
   view->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
   view->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  install_scroll_bars(view, ScrollBarTrack::Surface);
   view->setSelectionRectVisible(false);
   view->setMouseTracking(true);
   view->viewport()->setMouseTracking(true);

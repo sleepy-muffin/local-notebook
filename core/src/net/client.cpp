@@ -677,7 +677,7 @@ Request build_session_request(
   Request request;
   request.model = assistant.model_;
   request.instructions = system_prompt;
-  request.filesystem_tools = session.shared_directory_.has_value();
+  request.filesystem_tools = !session.shared_directories_.empty();
   request.include_tools = true;
   request.max_output_tokens = static_cast<int>(session.response_token_budget_);
   // The level is resolved here so an unsupported one fails the turn with a
@@ -892,7 +892,7 @@ ChatCompletionResult send_message_once(
 ChatCompletionResult generate_reply(
     Request request, const Remote& remote, GenerationTask& task,
     std::stop_token stop_token,
-    const std::optional<std::string>& shared_directory, const Session& session
+    const std::vector<std::string>& shared_directories, const Session& session
 ) {
   const std::size_t max_rounds = session.max_tool_rounds_;
   const std::size_t max_calls = session.max_tool_calls_;
@@ -980,7 +980,8 @@ ChatCompletionResult generate_reply(
           "tool call: " + call.name + "(" + call.arguments.substr(0, 2000) + ")"
       );
 
-      std::string output = execute_local_tool(call, shared_directory, remote.proxy);
+      std::string output =
+          execute_local_tool(call, shared_directories, remote.proxy);
 
       // Bound each tool result so the in-turn loop cannot grow the context
       // without limit across rounds.

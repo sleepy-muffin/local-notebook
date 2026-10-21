@@ -59,6 +59,39 @@ void BackgroundWidget::ensure_scaled_background() {
   scaled_background_.setDevicePixelRatio(dpr);
 }
 
+void BackgroundWidget::paint_region(
+    QPainter& painter, const QRect& target, const QRect& region
+) {
+  if (!use_background_image_ || !background_enabled() || background_image().isNull()) {
+    painter.fillRect(target, theme().colors.window);
+    return;
+  }
+
+  ensure_scaled_background();
+
+  if (scaled_background_.isNull()) {
+    painter.fillRect(target, theme().colors.window);
+    return;
+  }
+
+  // The cached pixmap carries a device-pixel ratio; copy the source pixels of
+  // the requested region first, then draw the slice scaled to the target so the
+  // result matches the background painted behind the rest of the window.
+  const qreal dpr = scaled_background_.devicePixelRatio();
+  const QRect source(
+      qRound(region.x() * dpr), qRound(region.y() * dpr),
+      qRound(region.width() * dpr), qRound(region.height() * dpr)
+  );
+
+  QPixmap slice = scaled_background_.copy(source);
+  slice.setDevicePixelRatio(1.0);
+  painter.drawPixmap(target, slice);
+
+  if (background_tint().has_value()) {
+    painter.fillRect(target, *background_tint());
+  }
+}
+
 void BackgroundWidget::paintEvent(QPaintEvent* event) {
   Q_UNUSED(event);
 

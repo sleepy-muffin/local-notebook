@@ -12,7 +12,7 @@
 namespace lnb::net {
 
 // One file found by the ignore-aware walk. `relative` is the path from the
-// session's shared directory, with '/' separators, for display to the model.
+// walked root, with '/' separators, for display to the model.
 struct FoundFile {
   std::filesystem::path absolute;
   std::string relative;
@@ -36,18 +36,35 @@ WalkResult collect_files(
     const std::string& glob, std::size_t max_files
 );
 
-// Regular-expression search over the text files collect_files yields. Returns
-// matching paths, line numbers and surrounding context, or a clear message when
-// nothing matched. Matching is case-sensitive; inline flags such as (?i) opt in.
-std::string search_regex(
+// The result of a regular-expression search. `text` holds the formatted match
+// blocks and is empty when nothing matched; the counts let the caller combine
+// several roots without parsing the text. `display_prefix` is prepended to
+// every model-visible path, and may be empty for a single shared directory.
+struct CodeSearchResult {
+  std::string text;
+  int matches = 0;
+  int files_scanned = 0;
+  bool truncated = false;
+};
+
+// Regular-expression search over the text files collect_files yields. Matching
+// is case-sensitive; inline flags such as (?i) opt in.
+CodeSearchResult search_regex(
     const std::string& pattern, const std::string& root_path,
-    const std::string& relative_path, const std::string& glob
+    const std::string& relative_path, const std::string& glob,
+    const std::string& display_prefix
 );
 
+struct FileListResult {
+  std::vector<std::string> paths; // model-visible, prefix already applied
+  std::size_t scanned = 0;
+  bool truncated = false;
+};
+
 // Lists files under `relative_path` whose path matches the `glob` filter.
-std::string find_files(
+FileListResult find_files(
     const std::string& glob, const std::string& root_path,
-    const std::string& relative_path
+    const std::string& relative_path, const std::string& display_prefix
 );
 
 } // namespace lnb::net
