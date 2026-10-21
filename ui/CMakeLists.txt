@@ -91,16 +91,64 @@ target_link_libraries(${PROJECT_NAME}-core
 )
 
 # ========== ---------- ---------- ---------- ==========
+#             WAYLAND TOPLEVEL ICONS (LINUX)
+# ========== ---------- ---------- ---------- ==========
+
+# Qt 6.8's Wayland platform plugin does not implement xdg-toplevel-icon-v1, so
+# QApplication::setWindowIcon never reaches the compositor there (see
+# src/wayland_icon.cpp). The application talks to the compositor directly when
+# libwayland-client is available; builds without it simply keep the icon Qt
+# provides. The protocol files were generated once with wayland-scanner 1.23.1
+# from the staging xdg-toplevel-icon-v1.xml and are checked in, so no scanner
+# is needed to build.
+set(LOCAL_NOTEBOOK_WAYLAND_ICON_SOURCES)
+set(LOCAL_NOTEBOOK_WAYLAND_ICON_LIBRARIES)
+set(LOCAL_NOTEBOOK_WAYLAND_ICON_DEFINITIONS)
+
+if(UNIX AND NOT APPLE)
+    find_package(PkgConfig QUIET)
+
+    if(PkgConfig_FOUND)
+        pkg_check_modules(WAYLAND_CLIENT QUIET IMPORTED_TARGET wayland-client)
+
+        if(WAYLAND_CLIENT_FOUND)
+            enable_language(C)
+            set(LOCAL_NOTEBOOK_WAYLAND_ICON_SOURCES
+                    src/wayland/xdg-toplevel-icon-v1-protocol.c
+            )
+            set(LOCAL_NOTEBOOK_WAYLAND_ICON_LIBRARIES PkgConfig::WAYLAND_CLIENT)
+            set(LOCAL_NOTEBOOK_WAYLAND_ICON_DEFINITIONS LNB_HAVE_WAYLAND_ICON)
+
+            # glibc before 2.34 keeps shm_open in librt; the shared memory
+            # fallback in src/wayland_icon.cpp needs it there.
+            find_library(LOCAL_NOTEBOOK_RT_LIBRARY rt)
+            if(LOCAL_NOTEBOOK_RT_LIBRARY)
+                list(APPEND LOCAL_NOTEBOOK_WAYLAND_ICON_LIBRARIES
+                        ${LOCAL_NOTEBOOK_RT_LIBRARY})
+            endif()
+        endif()
+    endif()
+endif()
+
+# ========== ---------- ---------- ---------- ==========
 #                           UI
 # ========== ---------- ---------- ---------- ==========
 
 add_executable(${PROJECT_NAME}
         src/main.cpp
+        src/wayland_icon.cpp
+        ${LOCAL_NOTEBOOK_WAYLAND_ICON_SOURCES}
 )
 
 target_link_libraries(${PROJECT_NAME}
         PRIVATE
         ${PROJECT_NAME}-core
+        ${LOCAL_NOTEBOOK_WAYLAND_ICON_LIBRARIES}
+)
+
+target_compile_definitions(${PROJECT_NAME}
+        PRIVATE
+        ${LOCAL_NOTEBOOK_WAYLAND_ICON_DEFINITIONS}
 )
 
 

@@ -15,6 +15,7 @@
 #include "ui/AssistantPicker.hpp"
 #include "ui/MainWindow.hpp"
 #include "ui/theme.hpp"
+#include "wayland_icon.hpp"
 
 namespace {
 
@@ -57,8 +58,14 @@ int main(int argc, char** argv) {
   QApplication::setApplicationVersion(QStringLiteral("0.1.0"));
 
   // The bundled artwork becomes the icon of every window (the picker, the main
-  // window and any dialog), so the taskbar and the dock show it too.
+  // window and any dialog) for the platforms where that is enough. On Wayland it
+  // is only the client-side decoration's icon: see install_wayland_toplevel_icon.
   QApplication::setWindowIcon(ui::application_icon());
+
+  // A native Wayland client has no desktop entry to point the compositor at and
+  // Qt 6.8 does not speak xdg-toplevel-icon-v1, so hand the icon to the
+  // compositor directly. No-op off Wayland or if the protocol is unavailable.
+  ui::install_wayland_toplevel_icon(app);
 
   // Point the whole on-disk tree at the per-user application data directory, or at
   // the --user-data override. This must run before the settings are read.

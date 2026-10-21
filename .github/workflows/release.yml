@@ -61,6 +61,7 @@ jobs:
             clang \
             libsqlite3-dev \
             libssl-dev \
+            libwayland-dev \
             libboost-dev \
             libboost-json-dev \
             libboost-regex-dev \
