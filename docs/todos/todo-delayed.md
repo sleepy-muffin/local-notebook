@@ -16,6 +16,6 @@ We do not start with them now.
 - (Refinement) There should be no divider on the status bar.
 - (Refinement) Add a toggle to disable the contribution from this session to be used for assistant-level summarization. Also, a button to disable its own session-level summarization.
 
-- (Refinement) We can make our own application chrome, though it's not demanded now.
+- (Refinement) Make customized chrome, though it's not demanded now.
 
 - (Refinement) Assistant-level summarisation should produce task log on clicking it in Tasks window.

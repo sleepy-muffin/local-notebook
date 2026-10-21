@@ -272,21 +272,33 @@ jobs:
           arch: win64_msvc2022_64
           cache: true
 
-      - name: Restore vcpkg cache
-        id: vcpkg-cache
+      # Downloaded sources and vcpkg's built binary packages stay useful even
+      # when the build fails, so this cache is kept separately from the
+      # installed tree below and saved unconditionally. The workflow hash
+      # covers port-list edits; bump the v1 prefix when the runner's vcpkg
+      # baseline changes.
+      - name: Restore vcpkg downloads cache
+        id: vcpkg-downloads
         uses: actions/cache/restore@v4
         with:
           path: |
             C:\vcpkg\downloads
             ${{ github.workspace }}\vcpkg-cache
-          # Bump this suffix whenever the port list or the runner's vcpkg
-          # baseline changes. Cache entries are immutable, so a new suffix is
-          # how a stale entry gets replaced.
-          key: vcpkg-x64-windows-release-v1
+          key: vcpkg-x64-windows-release-v1-downloads-${{ hashFiles('.github/workflows/release.yml') }}
           restore-keys: |
-            vcpkg-x64-windows-release-
+            vcpkg-x64-windows-release-v1-downloads-
+
+      # Exact match only: a stale tree restored through a prefix would be
+      # reused without `vcpkg install` re-validating the packages in it.
+      - name: Restore vcpkg installed packages
+        id: vcpkg-installed
+        uses: actions/cache/restore@v4
+        with:
+          path: C:\vcpkg\installed
+          key: vcpkg-x64-windows-release-v1-installed-${{ hashFiles('.github/workflows/release.yml') }}
 
       - name: Install SQLite, Boost and OpenSSL
+        if: steps.vcpkg-installed.outputs.cache-hit != 'true'
         shell: pwsh
         env:
           VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}\vcpkg-cache,readwrite'
@@ -310,17 +322,27 @@ jobs:
             mpg123 `
             mp3lame
 
-      # Saving from a step that runs with `always()` keeps the packages built
-      # above even when a later step (for example Build) fails.
-      - name: Save vcpkg cache
-        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+      # Unconditional (within the runner's cancellation grace period) so a
+      # failed install or a later failing step does not throw away downloads.
+      - name: Save vcpkg downloads cache
+        if: always() && steps.vcpkg-downloads.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: |
             C:\vcpkg\downloads
             ${{ github.workspace }}\vcpkg-cache
-          key: vcpkg-x64-windows-release-v1
+          key: vcpkg-x64-windows-release-v1-downloads-${{ hashFiles('.github/workflows/release.yml') }}
+
+      # Only save a complete tree: the installed cache is reused without
+      # running `vcpkg install`, so a partial install must never be stored.
+      - name: Save vcpkg installed packages
+        if: success() && steps.vcpkg-installed.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: C:\vcpkg\installed
+          key: vcpkg-x64-windows-release-v1-installed-${{ hashFiles('.github/workflows/release.yml') }}
 
 
       - name: Configure

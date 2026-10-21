@@ -5,9 +5,10 @@ If the TODO has been completed, please move the record to `todo-archived.md`.
 
 ## Small Improvement
 
-- Make lock files to prevent the same assistant (so it's stored in the assistant directory, which is under `UUID/`) to be opened by more than one instances. Automatically remove it if it's stale (The program should check it, the lock file might do this by saving a PID for later programs to check if it's stale, on the case it's stale, the program can remove it). Afterall, it's the first time I make draft for such specific demand, you can always propose a "better" design.
-- Make it support Android platforms as an Android application.
-- Make the shared directories write-able by the models. In session-settings, it should provide switches to turn on or turn off certain permissions for the current session. (Store them persistantly with DB column)
+- (New Function) Make lock files to prevent the same assistant (so it's stored in the assistant directory, which is under `UUID/`) to be opened by more than one instances. Automatically remove it if it's stale (The program should check it, the lock file might do this by saving a PID for later programs to check if it's stale, on the case it's stale, the program can remove it). Afterall, it's the first time I make draft for such specific demand, you can always propose a "better" design.
+- (New Function) Make it support Android platforms as an Android application.
+- (New Function) Make the shared directories write-able by the models. In session-settings, it should provide switches to turn on or turn off certain permissions for the current session. (Store them persistantly with DB column)
+- (CI) Windows Build CI https://github.com/sleepy-muffin/local-notebook/actions/runs/39581150163/job/119158815237 on the step named "Install SQLite, Boost and OpenSLL". Make it cached.
 
 ## Conversation View / Renderer
 
