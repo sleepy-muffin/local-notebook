@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstddef>
 #include <fstream>
 #include <iterator>
 #include <sstream>
@@ -149,6 +150,117 @@ std::string read_file_range(const fs::path& file, int start_line, int end_line) 
   }
 
   return out.str();
+}
+
+// The largest file the write tools accept, so one tool call cannot fill the disk.
+constexpr std::size_t kMaxWriteBytes = 4 * 1024 * 1024;
+
+// Resolves a model path that may not exist yet. The final component may name a
+// new file, but the parent must exist. fs::weakly_canonical() resolves symlinks
+// in every existing prefix, so a link that escapes the root is still rejected.
+fs::path checked_repo_path_for_write(
+    const std::string& root_str, const std::string& relative
+) {
+  std::error_code error;
+  const fs::path root = fs::canonical(root_str, error);
+
+  if (error) {
+    throw std::runtime_error("The shared directory is unavailable");
+  }
+
+  const fs::path input(relative);
+
+  if (input.is_absolute()) {
+    throw std::runtime_error("Paths must be relative to the shared directories");
+  }
+
+  const fs::path normalized = input.lexically_normal();
+  const std::string normalized_text = normalized.generic_string();
+
+  if (normalized_text.empty() || normalized_text == "." ||
+      normalized_text == ".." || normalized_text.rfind("../", 0) == 0) {
+    throw std::runtime_error("Path is outside the shared directories");
+  }
+
+  const fs::path candidate = fs::weakly_canonical(root / normalized, error);
+
+  if (error) {
+    throw std::runtime_error("The path could not be resolved");
+  }
+
+  const fs::path rel = candidate.lexically_relative(root);
+  if (rel.empty() || rel.is_absolute() || *rel.begin() == "..") {
+    throw std::runtime_error("Path is outside the shared directories");
+  }
+
+  std::error_code type_error;
+
+  if (fs::is_directory(candidate, type_error) && !type_error) {
+    throw std::runtime_error("Path is a directory");
+  }
+
+  if (!fs::is_directory(candidate.parent_path(), type_error) || type_error) {
+    throw std::runtime_error("Parent directory does not exist");
+  }
+
+  return candidate;
+}
+
+void write_file_contents(const fs::path& file, const std::string& content) {
+  if (content.size() > kMaxWriteBytes) {
+    throw std::runtime_error("File content is too large (maximum 4 MiB)");
+  }
+
+  std::ofstream out(file, std::ios::binary | std::ios::trunc);
+
+  if (!out) {
+    throw std::runtime_error("Cannot write file");
+  }
+
+  out.write(content.data(), static_cast<std::streamsize>(content.size()));
+
+  if (!out) {
+    throw std::runtime_error("Cannot write file");
+  }
+}
+
+std::string read_whole_file(const fs::path& file) {
+  std::error_code error;
+  const std::uintmax_t size = fs::file_size(file, error);
+
+  if (error) {
+    throw std::runtime_error("Cannot read file");
+  }
+
+  if (size > kMaxWriteBytes) {
+    throw std::runtime_error("File is too large to edit (maximum 4 MiB)");
+  }
+
+  std::ifstream in(file, std::ios::binary);
+
+  if (!in) {
+    throw std::runtime_error("Cannot open file");
+  }
+
+  return std::string(
+      std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()
+  );
+}
+
+// Resolves a path for deletion. Only regular files may be removed: a directory
+// (or a symlink to one) is refused, and checked_repo_path() already rejects
+// anything that resolves outside the root.
+fs::path checked_repo_path_for_delete(
+    const std::string& root_str, const std::string& relative
+) {
+  const fs::path file = checked_repo_path(root_str, relative);
+  std::error_code error;
+
+  if (!fs::is_regular_file(file, error) || error) {
+    throw std::runtime_error("Path is not a regular file");
+  }
+
+  return file;
 }
 
 } // namespace
@@ -998,7 +1110,11 @@ boost::json::object chat_tool(boost::json::object function) {
 
 } // namespace
 
-boost::json::array tool_definitions(bool filesystem) {
+boost::json::array tool_definitions(const ToolPermissions& permissions) {
+  if (!permissions.enabled) {
+    return {};
+  }
+
   // Filesystem tools: only offered when the session has a shared directory.
   //
   // The model sees a synthetic tree of relative paths, never the configured
@@ -1137,6 +1253,67 @@ boost::json::array tool_definitions(bool filesystem) {
     read_function["parameters"] = std::move(parameters);
   }
 
+  boost::json::object write_function;
+  write_function["name"] = "write_file";
+  write_function["description"] =
+      "Create or overwrite a text file in the configured shared directories. "
+      "The parent directory must already exist. The whole file is replaced, so "
+      "use edit_file for a targeted change.";
+  {
+    boost::json::object properties;
+    properties["path"] = property("string", "File to write. " + path_help);
+    properties["content"] = property("string", "Full file content to write");
+
+    boost::json::object parameters;
+    parameters["type"] = "object";
+    parameters["properties"] = std::move(properties);
+    parameters["required"] = boost::json::array{"path", "content"};
+    parameters["additionalProperties"] = false;
+
+    write_function["parameters"] = std::move(parameters);
+  }
+
+  boost::json::object edit_function;
+  edit_function["name"] = "edit_file";
+  edit_function["description"] =
+      "Replace one exact occurrence of old_text with new_text in a file in the "
+      "configured shared directories. Fails when the text is absent or occurs "
+      "more than once, so include enough surrounding context to make it unique.";
+  {
+    boost::json::object properties;
+    properties["path"] = property("string", "File to edit. " + path_help);
+    properties["old_text"] = property("string", "Exact text to replace");
+    properties["new_text"] = property("string", "Replacement text");
+
+    boost::json::object parameters;
+    parameters["type"] = "object";
+    parameters["properties"] = std::move(properties);
+    parameters["required"] =
+        boost::json::array{"path", "old_text", "new_text"};
+    parameters["additionalProperties"] = false;
+
+    edit_function["parameters"] = std::move(parameters);
+  }
+
+  boost::json::object delete_function;
+  delete_function["name"] = "delete_file";
+  delete_function["description"] =
+      "Delete one file in the configured shared directories. Directories are "
+      "never removed, and deletion cannot be undone. Use it only when the user "
+      "asked for the file to be removed.";
+  {
+    boost::json::object properties;
+    properties["path"] = property("string", "File to delete. " + path_help);
+
+    boost::json::object parameters;
+    parameters["type"] = "object";
+    parameters["properties"] = std::move(properties);
+    parameters["required"] = boost::json::array{"path"};
+    parameters["additionalProperties"] = false;
+
+    delete_function["parameters"] = std::move(parameters);
+  }
+
   // Network tools: always offered, they work without a shared directory.
   boost::json::object fetch_function;
   fetch_function["name"] = "fetch_url";
@@ -1178,7 +1355,7 @@ boost::json::array tool_definitions(bool filesystem) {
 
   boost::json::array tools;
 
-  if (filesystem) {
+  if (permissions.filesystem && permissions.read) {
     tools.emplace_back(chat_tool(std::move(list_function)));
     tools.emplace_back(chat_tool(std::move(search_function)));
     tools.emplace_back(chat_tool(std::move(search_regex_function)));
@@ -1186,8 +1363,16 @@ boost::json::array tool_definitions(bool filesystem) {
     tools.emplace_back(chat_tool(std::move(read_function)));
   }
 
-  tools.emplace_back(chat_tool(std::move(fetch_function)));
-  tools.emplace_back(chat_tool(std::move(web_search_function)));
+  if (permissions.filesystem && permissions.write) {
+    tools.emplace_back(chat_tool(std::move(write_function)));
+    tools.emplace_back(chat_tool(std::move(edit_function)));
+    tools.emplace_back(chat_tool(std::move(delete_function)));
+  }
+
+  if (permissions.online) {
+    tools.emplace_back(chat_tool(std::move(fetch_function)));
+    tools.emplace_back(chat_tool(std::move(web_search_function)));
+  }
 
   return tools;
 }
@@ -1561,7 +1746,7 @@ std::string run_list_directory(
 
 std::string execute_local_tool(
     const ToolCall& call, const std::vector<std::string>& shared_directories,
-    const std::optional<std::string>& proxy
+    const std::optional<std::string>& proxy, const ToolPermissions& permissions
 ) {
   try {
     boost::system::error_code parse_error;
@@ -1574,11 +1759,33 @@ std::string execute_local_tool(
 
     const boost::json::object& args = parsed.as_object();
 
-    // Filesystem tools need at least one shared directory; network tools do
-    // not, so the gate lives here instead of around the whole call.
-    const bool needs_root = call.name == "list_directory" ||
+    if (!permissions.enabled) {
+      return "Tool error: tools are disabled for this session";
+    }
+
+    const bool is_read_tool = call.name == "list_directory" ||
         call.name == "search_code" || call.name == "search_code_regex" ||
         call.name == "find_files" || call.name == "read_file";
+    const bool is_write_tool = call.name == "write_file" ||
+        call.name == "edit_file" || call.name == "delete_file";
+    const bool is_online_tool =
+        call.name == "fetch_url" || call.name == "web_search";
+
+    if (is_read_tool && !permissions.read) {
+      return "Tool error: file reading is disabled for this session";
+    }
+
+    if (is_write_tool && !permissions.write) {
+      return "Tool error: file writing is disabled for this session";
+    }
+
+    if (is_online_tool && !permissions.online) {
+      return "Tool error: online access is disabled for this session";
+    }
+
+    // Filesystem tools need at least one shared directory; network tools do
+    // not, so the gate lives here instead of around the whole call.
+    const bool needs_root = is_read_tool || is_write_tool;
 
     const std::vector<SharedRoot> roots = needs_root
         ? build_shared_roots(shared_directories)
@@ -1620,6 +1827,86 @@ std::string execute_local_tool(
           checked_repo_path(target.root->path.string(), target.relative), start,
           end
       );
+    }
+
+    if (call.name == "write_file") {
+      const std::string path = json_string_or(args, "path");
+      const boost::json::value* content_value = args.if_contains("content");
+
+      if (content_value == nullptr || !content_value->is_string()) {
+        throw std::runtime_error("Missing content");
+      }
+
+      const std::string content(content_value->as_string());
+      const PathTarget target = resolve_target(roots, path, false);
+      const fs::path file = checked_repo_path_for_write(
+          target.root->path.string(), target.relative
+      );
+
+      write_file_contents(file, content);
+      return "Wrote " + std::to_string(content.size()) + " bytes to " +
+          target.display + ".";
+    }
+
+    if (call.name == "edit_file") {
+      const std::string path = json_string_or(args, "path");
+      const boost::json::value* old_value = args.if_contains("old_text");
+      const boost::json::value* new_value = args.if_contains("new_text");
+
+      if (old_value == nullptr || !old_value->is_string() || new_value == nullptr ||
+          !new_value->is_string()) {
+        throw std::runtime_error("Missing old_text or new_text");
+      }
+
+      const std::string old_text(old_value->as_string());
+      const std::string new_text(new_value->as_string());
+
+      if (old_text.empty()) {
+        throw std::runtime_error("old_text must not be empty");
+      }
+
+      const PathTarget target = resolve_target(roots, path, false);
+      const fs::path file = checked_repo_path(
+          target.root->path.string(), target.relative
+      );
+      std::string content = read_whole_file(file);
+      const std::size_t first = content.find(old_text);
+
+      if (first == std::string::npos) {
+        throw std::runtime_error("The text to replace was not found");
+      }
+
+      if (content.find(old_text, first + old_text.size()) != std::string::npos) {
+        throw std::runtime_error(
+            "The text to replace occurs more than once; include more context"
+        );
+      }
+
+      const auto line = 1 + std::count(
+          content.begin(), content.begin() + static_cast<std::ptrdiff_t>(first),
+          '\n'
+      );
+
+      content.replace(first, old_text.size(), new_text);
+      write_file_contents(file, content);
+
+      return "Replaced one occurrence at line " + std::to_string(line) +
+          " in " + target.display + ".";
+    }
+
+    if (call.name == "delete_file") {
+      const std::string path = json_string_or(args, "path");
+      const PathTarget target = resolve_target(roots, path, false);
+      const fs::path file = checked_repo_path_for_delete(
+          target.root->path.string(), target.relative
+      );
+
+      std::error_code error;
+      if (!fs::remove(file, error) || error) {
+        throw std::runtime_error("Cannot remove file");
+      }
+
+      return "Deleted " + target.display + ".";
     }
 
     if (call.name == "fetch_url") {

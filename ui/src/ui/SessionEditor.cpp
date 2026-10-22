@@ -1,5 +1,6 @@
 #include "ui/SessionEditor.hpp"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QEventLoop>
 #include <QFrame>
@@ -68,13 +69,13 @@ constexpr BudgetPreset kBudgetPresets[] = {
     // memory, reasoning;
     // response;
     // tool: output, rounds, calls
-    {"Instant",      2000,   500,   500,  1000,   500,  1000,  0,   0},
-    {"Very Light",   4000,  1000,  1000,  2000,  1000,  2000,  2,   6},
-    {"Light",        8000,  2000,  2000,  4000,  2000,  4000, 16,  64},
-    {"Balanced",    16000,  4000,  4000,  8000,  4000,  6000, 24,  96},
-    {"Heavy",       32000,  8000,  6000, 16000,  8000,  8000, 32, 128},
-    {"Very Heavy",  64000, 16000,  8000, 24000, 12000, 12000, 48, 192},
-    {"Ultra",       96000, 24000,  8000, 32000, 16000, 16000, 64, 256},
+    {"Instant",      1000,   250,   250,   500,   500,  1000,  0,   0},
+    {"Very Light",   2000,   500,   500,  1000,  1000,  2000,  2,   6},
+    {"Light",        4000,  1000,  1000,  2000,  2000,  4000, 16,  64},
+    {"Balanced",     8000,  2000,  2000,  4000,  4000,  6000, 24,  96},
+    {"Heavy",       16000,  4000,  4000,  8000,  8000,  8000, 32, 128},
+    {"Very Heavy",  32000,  8000,  6000, 16000, 12000, 12000, 48, 192},
+    {"Ultra",       64000, 16000,  8000, 24000, 16000, 16000, 64, 256},
 };
 
 // constexpr BudgetPreset kBudgetPresets[] = {
@@ -178,7 +179,7 @@ QWidget* SessionEditor::build_content() {
     shared_directories_->setMinimumHeight(64);
     shared_directories_->setMaximumHeight(96);
     shared_directories_->setPlaceholderText(
-        trs("Directories the assistant may read and list, one per line (optional)")
+        trs("Directories the assistant may access, one per line (optional)")
     );
 
     // The reasoning level this session asks for. It is stored per session, so
@@ -195,6 +196,53 @@ QWidget* SessionEditor::build_content() {
         field_label(content, trs("Shared directories")), shared_directories_
     );
     form->addRow(field_label(content, trs("Reasoning")), reasoning_);
+    layout->addLayout(form);
+  }
+
+  layout->addWidget(h_separator(content));
+
+  // ---- Tool permissions ----
+  layout->addWidget(section_label(content, trs("Tool permissions")));
+  {
+    auto* form = form_layout(content);
+
+    tools_enabled_ = new QCheckBox(trs("Enable for this session"), content);
+    tools_enabled_->setToolTip(
+        trs(
+            "When off, no tools are offered to the model for this session. The "
+            "switches below keep their values."
+        )
+    );
+
+    read_tools_ = new QCheckBox(trs("Read files"), content);
+    read_tools_->setToolTip(
+        trs("Allow listing, searching and reading files in the shared directories.")
+    );
+
+    write_tools_ = new QCheckBox(trs("Write files"), content);
+    write_tools_->setToolTip(
+        trs(
+            "Allow creating, overwriting, editing and deleting files in the "
+            "shared directories."
+        )
+    );
+
+    online_tools_ = new QCheckBox(trs("Search online"), content);
+    online_tools_->setToolTip(
+        trs("Allow web searches and fetching web pages.")
+    );
+
+    form->addRow(field_label(content, trs("Tools")), tools_enabled_);
+    form->addRow(field_label(content, trs("Read")), read_tools_);
+    form->addRow(field_label(content, trs("Write")), write_tools_);
+    form->addRow(field_label(content, trs("Online")), online_tools_);
+
+    connect(tools_enabled_, &QCheckBox::toggled, this, [this](bool enabled) {
+      read_tools_->setEnabled(enabled);
+      write_tools_->setEnabled(enabled);
+      online_tools_->setEnabled(enabled);
+    });
+
     layout->addLayout(form);
   }
 
@@ -440,6 +488,14 @@ void SessionEditor::load_session() {
 
   shared_directories_->setPlainText(directories.join(u'\n'));
 
+  tools_enabled_->setChecked(session_.tools_enabled_);
+  read_tools_->setChecked(session_.read_tools_enabled_);
+  write_tools_->setChecked(session_.write_tools_enabled_);
+  online_tools_->setChecked(session_.online_tools_enabled_);
+  read_tools_->setEnabled(session_.tools_enabled_);
+  write_tools_->setEnabled(session_.tools_enabled_);
+  online_tools_->setEnabled(session_.tools_enabled_);
+
   watermark_->setValue(static_cast<int>(session_.memory_watermark_));
   assistant_watermark_->setValue(static_cast<int>(session_.assistant_memory_watermark_));
 
@@ -554,6 +610,11 @@ void SessionEditor::save_session() {
   session.max_tool_rounds_ = static_cast<std::size_t>(max_tool_rounds_->value());
   session.max_tool_calls_ = static_cast<std::size_t>(max_tool_calls_->value());
   session.reasoning_effort_ = reasoning_->currentText().toStdString();
+
+  session.tools_enabled_ = tools_enabled_->isChecked();
+  session.read_tools_enabled_ = read_tools_->isChecked();
+  session.write_tools_enabled_ = write_tools_->isChecked();
+  session.online_tools_enabled_ = online_tools_->isChecked();
 
   if (session_id_ == 0) {
     session_id_ = api_.create_session(session);

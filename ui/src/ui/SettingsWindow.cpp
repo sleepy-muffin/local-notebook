@@ -1020,7 +1020,7 @@ void SettingsWindow::restore_config_defaults() {
   const lnb::Settings defaults;
 
   pending_.theme = defaults.theme;
-  pending_.language = defaults.language;
+  pending_.language = lnb::default_language_code();
   pending_.ui_font = defaults.ui_font;
   pending_.ui_font_size = defaults.ui_font_size;
   pending_.font = defaults.font;

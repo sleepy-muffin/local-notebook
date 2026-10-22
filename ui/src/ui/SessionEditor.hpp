@@ -7,6 +7,7 @@
 #include "local-notebook-core/model.hpp"
 
 class QComboBox;
+class QCheckBox;
 class QLineEdit;
 class QPlainTextEdit;
 class QPushButton;
@@ -72,6 +73,13 @@ private:
   // One directory per line; the order sets the mount name when directories
   // share a basename (the second becomes e.g. "project-2").
   QPlainTextEdit* shared_directories_ = nullptr;
+
+  // Tool permissions for this session. The master switch gates all of them; the
+  // three category switches keep their values while it is off.
+  QCheckBox* tools_enabled_ = nullptr;
+  QCheckBox* read_tools_ = nullptr;
+  QCheckBox* write_tools_ = nullptr;
+  QCheckBox* online_tools_ = nullptr;
 
   // The reasoning level this session asks for. The list is model-specific; a
   // stale level stays selectable so it can be corrected rather than dropped.

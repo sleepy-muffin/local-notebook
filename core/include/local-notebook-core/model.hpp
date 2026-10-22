@@ -58,6 +58,17 @@ public:
   // Stored in the session row (design-1.md §9).
   bool pinned_ = false;
 
+  // Tool permissions for this session. The master switch disables every tool
+  // without changing the individual preferences. Read covers the filesystem
+  // reading tools (list, search, find, read); write covers creating, editing and
+  // deleting files in the shared directories; online covers web_search and
+  // fetch_url. Writing is off by default, so an existing session never gains the
+  // ability to modify its shared directories without the user enabling it.
+  bool tools_enabled_ = true;
+  bool read_tools_enabled_ = true;
+  bool write_tools_enabled_ = false;
+  bool online_tools_enabled_ = true;
+
   // The input bound, and the collapse trigger: a request carries the system
   // prompt plus the transcript, and once that reaches this many tokens the
   // older messages are folded into memory_.

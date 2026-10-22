@@ -138,3 +138,23 @@ I will try to make this list ordered by time.
   `docs/screenshots/summary-review.png`. The summary-review capture runs a real
   `lnb::SummaryPlan`; `append_message` was added to the core interface for
   headless seeding.
+
+- (Bug) On any connections involving TLS on Windows: TLS handshake failed: certificate verify failed (SSL routines)
+  The HTTP client now imports the certificates from the Windows ROOT store into
+  the connection's X509 store before verifying. The vcpkg OpenSSL build ships no
+  CA bundle and `set_default_verify_paths()` leaves the store empty on Windows;
+  the `SSL_CERT_FILE`/`SSL_CERT_DIR` overrides are still honoured, and `crypt32`
+  is linked on Windows.
+- (Refinement) Default language should decided by detecting system language.
+  `load_settings()` now defaults the UI language from `QLocale::system()`: Chinese
+  maps to `zh`, Japanese to `ja`, and everything else to `en`. An explicitly
+  stored language still wins.
+- (New Function) Make the shared directories write-able by the models. In session-settings, it should provide switches to turn on or turn off certain permissions (read, write, search online, all 3 kinds of tools) for the current session. (the tools run efficiently even though the repo is large) (Store them persistantly with DB column)
+  Shared directories can now be modified through `write_file`, `edit_file` and
+  `delete_file`, all sandboxed to the configured directories (symlink escapes
+  rejected, the parent must exist, directories are never removed, and a single
+  write is capped at 4 MiB). The Session Editor has a "Tool permissions" section
+  with a master switch plus read, write and online toggles, persisted in new
+  `session` columns (schema version 6, with ALTER TABLE migrations for older
+  databases). Reads and online access keep the previous behaviour; writing
+  defaults to off.

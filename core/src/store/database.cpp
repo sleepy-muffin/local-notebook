@@ -11,12 +11,12 @@ namespace {
 // design-1.md §9. The schema is versioned via PRAGMA user_version so future
 // migrations have a starting point; this is a fresh start, so there is no
 // migration from the legacy database. Version 2 added `session.pinned`, version
-// 3 `session.summary_keep_tokens`, version 4 `session.reasoning_effort` and
-// version 5 turned the single `shared_directory` into a JSON array of
-// directories (`shared_directories`); an older file gains each column in the
-// constructor.
+// 3 `session.summary_keep_tokens`, version 4 `session.reasoning_effort`, version
+// 5 turned the single `shared_directory` into a JSON array of directories
+// (`shared_directories`) and version 6 added the session tool permissions; an
+// older file gains each column in the constructor.
 constexpr std::string_view SCHEMA = R"sql(
-PRAGMA user_version = 5;
+PRAGMA user_version = 6;
 
 CREATE TABLE IF NOT EXISTS session (
   id                                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,7 +35,11 @@ CREATE TABLE IF NOT EXISTS session (
   max_tool_calls                    INTEGER NOT NULL DEFAULT 32,
   tool_output_max_tokens            INTEGER NOT NULL DEFAULT 8000,
   response_token_budget             INTEGER NOT NULL DEFAULT 8000,
-  reasoning_effort                  TEXT    NOT NULL DEFAULT ''
+  reasoning_effort                  TEXT    NOT NULL DEFAULT '',
+  tools_enabled                     INTEGER NOT NULL DEFAULT 1,
+  read_tools                        INTEGER NOT NULL DEFAULT 1,
+  write_tools                       INTEGER NOT NULL DEFAULT 0,
+  online_tools                      INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS message (
@@ -55,7 +59,7 @@ constexpr std::string_view SESSION_COLUMNS =
   "assistant_memory_watermark, shared_directories, pinned, summary_keep_tokens, "
   "summary_trigger_tokens, summary_token_budget, summary_reasoning_headroom_tokens, "
   "max_tool_rounds, max_tool_calls, tool_output_max_tokens, response_token_budget, "
-  "reasoning_effort";
+  "reasoning_effort, tools_enabled, read_tools, write_tools, online_tools";
 
 constexpr std::string_view MESSAGE_COLUMNS = "id, session_id, role, content, made_at";
 
@@ -116,6 +120,10 @@ Session read_session(const shark::sqlite::statement& stmt) {
   session.tool_output_max_tokens_ = static_cast<std::size_t>(stmt.column_int(14));
   session.response_token_budget_ = static_cast<std::size_t>(stmt.column_int(15));
   session.reasoning_effort_ = stmt.column_text(16);
+  session.tools_enabled_ = stmt.column_int(17) != 0;
+  session.read_tools_enabled_ = stmt.column_int(18) != 0;
+  session.write_tools_enabled_ = stmt.column_int(19) != 0;
+  session.online_tools_enabled_ = stmt.column_int(20) != 0;
   return session;
 }
 
@@ -176,6 +184,32 @@ database::database(std::string_view path) : connection_(path) {
       "ALTER TABLE session RENAME COLUMN shared_directory TO shared_directories"
     );
   }
+
+  // Version 6 added per-session tool permissions. Read and online access keep
+  // the behaviour of older sessions; writing stays off until it is enabled.
+  if (!has_column(connection_, "session", "tools_enabled")) {
+    connection_.exec(
+      "ALTER TABLE session ADD COLUMN tools_enabled INTEGER NOT NULL DEFAULT 1"
+    );
+  }
+
+  if (!has_column(connection_, "session", "read_tools")) {
+    connection_.exec(
+      "ALTER TABLE session ADD COLUMN read_tools INTEGER NOT NULL DEFAULT 1"
+    );
+  }
+
+  if (!has_column(connection_, "session", "write_tools")) {
+    connection_.exec(
+      "ALTER TABLE session ADD COLUMN write_tools INTEGER NOT NULL DEFAULT 0"
+    );
+  }
+
+  if (!has_column(connection_, "session", "online_tools")) {
+    connection_.exec(
+      "ALTER TABLE session ADD COLUMN online_tools INTEGER NOT NULL DEFAULT 1"
+    );
+  }
 }
 
 std::uint32_t database::insert_session(const Session& session) {
@@ -184,8 +218,8 @@ std::uint32_t database::insert_session(const Session& session) {
     "assistant_memory_watermark, shared_directories, pinned, summary_keep_tokens, "
     "summary_trigger_tokens, summary_token_budget, summary_reasoning_headroom_tokens, "
     "max_tool_rounds, max_tool_calls, tool_output_max_tokens, response_token_budget, "
-    "reasoning_effort) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "reasoning_effort, tools_enabled, read_tools, write_tools, online_tools) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   );
   stmt.bind(
     session.title_, session.custom_instructions_, session.memory_,
@@ -199,7 +233,11 @@ std::uint32_t database::insert_session(const Session& session) {
     static_cast<int>(session.max_tool_calls_),
     static_cast<int>(session.tool_output_max_tokens_),
     static_cast<int>(session.response_token_budget_),
-    session.reasoning_effort_
+    session.reasoning_effort_,
+    session.tools_enabled_ ? 1 : 0,
+    session.read_tools_enabled_ ? 1 : 0,
+    session.write_tools_enabled_ ? 1 : 0,
+    session.online_tools_enabled_ ? 1 : 0
   );
   return stmt.execute_with_last_row_id();
 }
@@ -211,7 +249,8 @@ void database::update_session(const Session& session) {
     "pinned = ?, summary_keep_tokens = ?, summary_trigger_tokens = ?, "
     "summary_token_budget = ?, summary_reasoning_headroom_tokens = ?, "
     "max_tool_rounds = ?, max_tool_calls = ?, tool_output_max_tokens = ?, "
-    "response_token_budget = ?, reasoning_effort = ? "
+    "response_token_budget = ?, reasoning_effort = ?, tools_enabled = ?, "
+    "read_tools = ?, write_tools = ?, online_tools = ? "
     "WHERE id = ?"
   );
   stmt.bind(
@@ -226,6 +265,10 @@ void database::update_session(const Session& session) {
     static_cast<int>(session.max_tool_calls_),
     static_cast<int>(session.tool_output_max_tokens_),
     static_cast<int>(session.response_token_budget_), session.reasoning_effort_,
+    session.tools_enabled_ ? 1 : 0,
+    session.read_tools_enabled_ ? 1 : 0,
+    session.write_tools_enabled_ ? 1 : 0,
+    session.online_tools_enabled_ ? 1 : 0,
     session.id_
   );
   stmt.execute();

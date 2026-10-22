@@ -82,13 +82,17 @@ Two guarantees fall out of this design:
   column. Ships with **Catppuccin Mocha and Macchiato**, plus a theme system you
   can edit.
 - 🌐 **Three UI languages** — English, 中文 and 日本語, chosen from
-  **Settings → Configuration**.
+  **Settings → Configuration**. The default follows the system language on first
+  run.
 - 🧩 **Tools, not just chat** — `web_search` and `fetch_url` are always available;
   `search_code`, `search_code_regex`, `find_files`, `list_directory` and `read_file`
   appear when a session has shared directories, with paths sandboxed to them (symlink
-  escapes rejected). The model only ever sees relative paths: a single directory is
-  transparent, while several appear as named top-level entries. The ripgrep-style
-  tools honour `.gitignore`/`.ignore` and skip hidden entries.
+  escapes rejected). When writing is enabled, `write_file`, `edit_file` and
+  `delete_file` can create, change and remove files there too. Each session has its
+  own switches for all tools, reading, writing and online access. The model only
+  ever sees relative paths: a single directory is transparent, while several appear
+  as named top-level entries. The ripgrep-style tools honour `.gitignore`/`.ignore`
+  and skip hidden entries.
 - 🔌 **Any OpenAI-compatible endpoint** — local or remote, with optional SOCKS5 /
   HTTP-CONNECT proxy support.
 - 🗂️ **Sessions as notes** — pin, rename, edit instructions and per-session

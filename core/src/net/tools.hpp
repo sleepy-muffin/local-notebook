@@ -22,6 +22,25 @@ struct ToolCall {
   std::string arguments;
 };
 
+// What a session allows the model to do. The master switch disables every tool
+// without changing the individual preferences, so turning tools off and on again
+// restores the previous choice. `filesystem` records whether the session has at
+// least one shared directory; without one the read and write tools are not
+// offered. Reading is the filesystem read/search tools, writing is
+// create/overwrite/edit/delete in the shared directories, and online is
+// web_search and fetch_url. Writing defaults to off.
+struct ToolPermissions {
+  bool enabled = true;
+  bool filesystem = false;
+  bool read = true;
+  bool write = false;
+  bool online = true;
+
+  [[nodiscard]] bool any() const {
+    return enabled && (online || (filesystem && (read || write)));
+  }
+};
+
 // Resolves a model-supplied `relative` path against `root_str` and rejects
 // anything that would escape the root (including via symlinks). Absolute paths
 // are rejected: the model only ever works with relative paths.
@@ -66,19 +85,23 @@ std::string web_search(
     const std::string& query, const std::optional<std::string>& proxy
 );
 
-// The JSON tool schemas offered to the model. Filesystem tools are included
-// only when `filesystem` is true (the session has a shared directory).
-boost::json::array tool_definitions(bool filesystem);
+// The JSON tool schemas offered to the model. Read tools are included only when
+// the session has a shared directory and reading is permitted; write tools only
+// when writing is permitted; network tools only when online access is permitted.
+// A disabled master switch yields an empty array.
+boost::json::array tool_definitions(const ToolPermissions& permissions);
 
 // Executes one tool call. Filesystem tools require at least one configured
 // shared directory and report a clear error when there is none; network tools
-// use `proxy` and work without one. The configured directories are presented to
-// the model as a synthetic, relative tree; their actual paths are never exposed
-// in tool results. Tool failures are returned to the model as text (rather than
-// thrown), so it can correct its arguments.
+// use `proxy` and work without one. A tool whose category is not permitted is
+// refused. The configured directories are presented to the model as a synthetic,
+// relative tree; their actual paths are never exposed in tool results. Tool
+// failures are returned to the model as text (rather than thrown), so it can
+// correct its arguments.
 std::string execute_local_tool(
     const ToolCall& call, const std::vector<std::string>& shared_directories,
-    const std::optional<std::string>& proxy
+    const std::optional<std::string>& proxy,
+    const ToolPermissions& permissions = {}
 );
 
 } // namespace lnb::net

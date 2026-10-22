@@ -36,11 +36,12 @@ struct SummaryPreset {
 
 constexpr SummaryPreset kSummaryPresets[] = {
     // memory, reasoning headroom, trigger, session pool
-    {"Instant",              500,  2000,  6000,  1000},
-    {"Very Light",          1000,  2000, 12000,  2000},
-    {"Light",               2000,  4000, 24000,  4000},
-    {"Balanced",            4000,  8000, 48000,  8000},
-    {"Heavy",               8000, 16000, 96000, 16000},
+    {"Instant",             250,  1000,  3000,   500},
+    {"Very Light",          500,  2000,  6000,  1000},
+    {"Light",              1000,  2000, 12000,  2000},
+    {"Balanced",           2000,  4000, 24000,  4000},
+    {"Heavy",              4000,  8000, 48000,  8000},
+    {"Very Heavy",         8000, 16000, 96000, 16000},
 };
 
 // constexpr SummaryPreset kSummaryPresets[] = {

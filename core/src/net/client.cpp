@@ -90,9 +90,23 @@ std::string tool_status(const ToolCall& call) {
   if (call.name == "search_code_regex") return "Searching code...";
   if (call.name == "find_files") return "Finding files...";
   if (call.name == "list_directory") return "Listing files...";
+  if (call.name == "write_file") return "Writing file...";
+  if (call.name == "edit_file") return "Editing file...";
+  if (call.name == "delete_file") return "Deleting file...";
   if (call.name == "fetch_url") return "Fetching page...";
   if (call.name == "web_search") return "Searching the web...";
   return "Using tools...";
+}
+
+// The session's stored switches, plus whether it has anywhere to read or write.
+ToolPermissions tool_permissions_for(const Session& session) {
+  ToolPermissions permissions;
+  permissions.enabled = session.tools_enabled_;
+  permissions.filesystem = !session.shared_directories_.empty();
+  permissions.read = session.read_tools_enabled_;
+  permissions.write = session.write_tools_enabled_;
+  permissions.online = session.online_tools_enabled_;
+  return permissions;
 }
 
 // A completed turn whose reply hit the completion cap is not an error: the text
@@ -677,8 +691,8 @@ Request build_session_request(
   Request request;
   request.model = assistant.model_;
   request.instructions = system_prompt;
-  request.filesystem_tools = !session.shared_directories_.empty();
-  request.include_tools = true;
+  request.tool_permissions = tool_permissions_for(session);
+  request.include_tools = request.tool_permissions.any();
   request.max_output_tokens = static_cast<int>(session.response_token_budget_);
   // The level is resolved here so an unsupported one fails the turn with a
   // message naming the fix, rather than being corrected behind the user's back.
@@ -896,6 +910,7 @@ ChatCompletionResult generate_reply(
 ) {
   const std::size_t max_rounds = session.max_tool_rounds_;
   const std::size_t max_calls = session.max_tool_calls_;
+  const ToolPermissions permissions = tool_permissions_for(session);
   std::size_t total_calls = 0;
 
   ChatCompletionResult result;
@@ -981,7 +996,7 @@ ChatCompletionResult generate_reply(
       );
 
       std::string output =
-          execute_local_tool(call, shared_directories, remote.proxy);
+          execute_local_tool(call, shared_directories, remote.proxy, permissions);
 
       // Bound each tool result so the in-turn loop cannot grow the context
       // without limit across rounds.

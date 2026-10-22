@@ -1,7 +1,9 @@
-// Regression tests for session shared-directory persistence.
+// Regression tests for session shared-directory and tool-permission persistence.
 //
-// Version 5 stores the list as a JSON array and renames the old single-path
-// column. A database written by the previous version must still read correctly.
+// Version 5 stores the directory list as a JSON array and renames the old
+// single-path column; version 6 adds the tool permissions. A database written by
+// an older version must still read correctly, with writing off and the other
+// permissions on.
 #include "store/database.hpp"
 #include "shark/sqlite3.hpp"
 
@@ -34,6 +36,22 @@ void expect_directories(
       session.shared_directories_ == expected,
       label + " (got " + std::to_string(session.shared_directories_.size()) +
           " entries)"
+  );
+}
+
+void expect_permissions(
+    const lnb::Session& session, bool tools, bool read, bool write, bool online,
+    const std::string& label
+) {
+  expect(
+      session.tools_enabled_ == tools &&
+          session.read_tools_enabled_ == read &&
+          session.write_tools_enabled_ == write &&
+          session.online_tools_enabled_ == online,
+      label + " (got " + std::to_string(session.tools_enabled_) + ", " +
+          std::to_string(session.read_tools_enabled_) + ", " +
+          std::to_string(session.write_tools_enabled_) + ", " +
+          std::to_string(session.online_tools_enabled_) + ")"
   );
 }
 
@@ -72,6 +90,10 @@ void test_round_trip(const fs::path& path) {
   lnb::Session session;
   session.title_ = "round trip";
   session.shared_directories_ = {"/one", "/two with spaces"};
+  session.tools_enabled_ = false;
+  session.read_tools_enabled_ = false;
+  session.write_tools_enabled_ = true;
+  session.online_tools_enabled_ = false;
 
   const std::uint32_t id = db.insert_session(session);
   const std::optional<lnb::Session> loaded = db.session(id);
@@ -80,10 +102,17 @@ void test_round_trip(const fs::path& path) {
 
   if (loaded.has_value()) {
     expect_directories(*loaded, session.shared_directories_, "round trip: list preserved");
+    expect_permissions(
+        *loaded, false, false, true, false, "round trip: permissions preserved"
+    );
   }
 
   lnb::Session cleared = loaded.value_or(session);
   cleared.shared_directories_.clear();
+  cleared.tools_enabled_ = true;
+  cleared.read_tools_enabled_ = true;
+  cleared.write_tools_enabled_ = false;
+  cleared.online_tools_enabled_ = true;
   db.update_session(cleared);
 
   const std::optional<lnb::Session> empty = db.session(id);
@@ -91,6 +120,9 @@ void test_round_trip(const fs::path& path) {
 
   if (empty.has_value()) {
     expect(empty->shared_directories_.empty(), "round trip: empty list preserved");
+    expect_permissions(
+        *empty, true, true, false, true, "round trip: updated permissions preserved"
+    );
   }
 }
 
@@ -107,6 +139,10 @@ void test_legacy_migration(const fs::path& path) {
   if (session.has_value()) {
     expect_directories(
         *session, {"/old/shared"}, "migration: legacy path becomes one entry"
+    );
+    expect_permissions(
+        *session, true, true, false, true,
+        "migration: older sessions read and browse but cannot write"
     );
   }
 }

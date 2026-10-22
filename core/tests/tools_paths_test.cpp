@@ -1,13 +1,17 @@
-// Regression tests for the filesystem tools' model-visible path view.
+// Regression tests for the filesystem tools: the model-visible path view, the
+// per-session permission gates, and the sandbox on the write tools.
 //
 // The model must only ever see relative paths, whether one directory is
 // configured or several. These tests build a small temporary tree and check the
-// tool output never contains an actual configured path.
+// tool output never contains an actual configured path, that writes stay inside
+// it, and that a disabled permission is refused.
 #include "net/tools.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <vector>
@@ -36,6 +40,13 @@ void write_file(const fs::path& path, const std::string& content) {
   out << content;
 }
 
+std::string read_text(const fs::path& path) {
+  std::ifstream in(path, std::ios::binary);
+  return std::string(
+      std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()
+  );
+}
+
 std::string run(
     const std::string& name, const std::string& arguments,
     const std::vector<std::string>& roots
@@ -44,6 +55,17 @@ std::string run(
   call.name = name;
   call.arguments = arguments;
   return lnb::net::execute_local_tool(call, roots, std::nullopt);
+}
+
+std::string run_with(
+    const std::string& name, const std::string& arguments,
+    const std::vector<std::string>& roots,
+    const lnb::net::ToolPermissions& permissions
+) {
+  lnb::net::ToolCall call;
+  call.name = name;
+  call.arguments = arguments;
+  return lnb::net::execute_local_tool(call, roots, std::nullopt, permissions);
 }
 
 std::string path_argument(const fs::path& path) {
@@ -149,6 +171,313 @@ void test_multiple_directories(
   expect(contains(unknown, "Unknown shared directory"), "multi: unknown mount named");
 }
 
+void test_permissions(const fs::path& alpha) {
+  const std::vector<std::string> roots{alpha.string()};
+
+  lnb::net::ToolPermissions defaults;
+  defaults.filesystem = true;
+
+  // The default posture reads and browses online, but never writes.
+  const std::string denied = run_with(
+      "write_file", "{\"path\":\"denied.txt\",\"content\":\"x\"}", roots,
+      defaults
+  );
+  expect(
+      contains(denied, "file writing is disabled"),
+      "permissions: writing is off by default"
+  );
+  expect(
+      !fs::exists(alpha / "denied.txt"),
+      "permissions: a denied write creates nothing"
+  );
+
+  const std::string delete_denied = run_with(
+      "delete_file", "{\"path\":\"notes.txt\"}", roots, defaults
+  );
+  expect(
+      contains(delete_denied, "file writing is disabled"),
+      "permissions: deletion is off by default"
+  );
+  expect(
+      fs::exists(alpha / "notes.txt"),
+      "permissions: a denied delete removes nothing"
+  );
+
+  const std::string read = run_with(
+      "read_file", "{\"path\":\"notes.txt\",\"start_line\":1,\"end_line\":5}",
+      roots, defaults
+  );
+  expect(
+      contains(read, "hello needle"), "permissions: reading is on by default"
+  );
+
+  lnb::net::ToolPermissions no_read = defaults;
+  no_read.read = false;
+  const std::string read_denied =
+      run_with("list_directory", "{}", roots, no_read);
+  expect(
+      contains(read_denied, "file reading is disabled"),
+      "permissions: reading can be disabled"
+  );
+
+  lnb::net::ToolPermissions no_online = defaults;
+  no_online.online = false;
+  const std::string online_denied = run_with(
+      "fetch_url", "{\"url\":\"https://example.com\"}", roots, no_online
+  );
+  expect(
+      contains(online_denied, "online access is disabled"),
+      "permissions: online access can be disabled"
+  );
+
+  lnb::net::ToolPermissions off = defaults;
+  off.enabled = false;
+  const std::string master_denied =
+      run_with("list_directory", "{}", roots, off);
+  expect(
+      contains(master_denied, "tools are disabled"),
+      "permissions: the master switch disables everything"
+  );
+}
+
+void test_write_tools(const fs::path& alpha, const fs::path& outside) {
+  const std::vector<std::string> roots{alpha.string()};
+
+  lnb::net::ToolPermissions permissions;
+  permissions.filesystem = true;
+  permissions.write = true;
+
+  const std::string created = run_with(
+      "write_file", "{\"path\":\"created.txt\",\"content\":\"fresh content\\n\"}",
+      roots, permissions
+  );
+  expect(contains(created, "Wrote"), "write: creation is reported");
+  expect(
+      read_text(alpha / "created.txt") == "fresh content\n",
+      "write: content is written verbatim"
+  );
+
+  run_with(
+      "write_file", "{\"path\":\"created.txt\",\"content\":\"replaced\"}",
+      roots, permissions
+  );
+  expect(
+      read_text(alpha / "created.txt") == "replaced",
+      "write: an existing file is overwritten"
+  );
+
+  const std::string nested = run_with(
+      "write_file", "{\"path\":\"src/nested.cpp\",\"content\":\"nested\\n\"}",
+      roots, permissions
+  );
+  expect(!contains(nested, "Tool error"), "write: writes into a subdirectory");
+  expect(
+      read_text(alpha / "src" / "nested.cpp") == "nested\n",
+      "write: nested content is written"
+  );
+
+  const std::string escape = run_with(
+      "write_file", "{\"path\":\"../outside/new.txt\",\"content\":\"x\"}",
+      roots, permissions
+  );
+  expect(contains(escape, "Tool error"), "write: rejects parent traversal");
+  expect(
+      !fs::exists(outside / "new.txt"), "write: traversal creates nothing"
+  );
+
+  const std::string link = run_with(
+      "write_file", "{\"path\":\"link/new.txt\",\"content\":\"x\"}", roots,
+      permissions
+  );
+  expect(contains(link, "Tool error"), "write: rejects a symlink escape");
+  expect(
+      !fs::exists(outside / "new.txt"), "write: symlink escape creates nothing"
+  );
+
+  const std::string missing_parent = run_with(
+      "write_file", "{\"path\":\"missing/deep.txt\",\"content\":\"x\"}", roots,
+      permissions
+  );
+  expect(
+      contains(missing_parent, "Parent directory does not exist"),
+      "write: requires an existing parent"
+  );
+
+  const std::string directory = run_with(
+      "write_file", "{\"path\":\"src\",\"content\":\"x\"}", roots, permissions
+  );
+  expect(
+      contains(directory, "Path is a directory"),
+      "write: refuses to overwrite a directory"
+  );
+
+  // Editing a unique occurrence.
+  write_file(alpha / "editme.txt", "alpha beta\n");
+  const std::string edited = run_with(
+      "edit_file",
+      "{\"path\":\"editme.txt\",\"old_text\":\"alpha\",\"new_text\":\"gamma\"}",
+      roots, permissions
+  );
+  expect(
+      contains(edited, "Replaced one occurrence at line 1"),
+      "edit: replaces a unique occurrence"
+  );
+  expect(
+      read_text(alpha / "editme.txt") == "gamma beta\n",
+      "edit: the file is updated on disk"
+  );
+
+  write_file(alpha / "dupe.txt", "same same\n");
+  const std::string ambiguous = run_with(
+      "edit_file",
+      "{\"path\":\"dupe.txt\",\"old_text\":\"same\",\"new_text\":\"other\"}",
+      roots, permissions
+  );
+  expect(
+      contains(ambiguous, "occurs more than once"),
+      "edit: rejects an ambiguous match"
+  );
+  expect(
+      read_text(alpha / "dupe.txt") == "same same\n",
+      "edit: an ambiguous match leaves the file unchanged"
+  );
+
+  const std::string absent = run_with(
+      "edit_file",
+      "{\"path\":\"dupe.txt\",\"old_text\":\"absent-token\",\"new_text\":\"x\"}",
+      roots, permissions
+  );
+  expect(
+      contains(absent, "was not found"), "edit: rejects an absent match"
+  );
+}
+
+void test_delete_tool(const fs::path& alpha, const fs::path& outside) {
+  const std::vector<std::string> roots{alpha.string()};
+
+  lnb::net::ToolPermissions permissions;
+  permissions.filesystem = true;
+  permissions.write = true;
+
+  write_file(alpha / "delete-me.txt", "temporary\n");
+
+  const std::string removed = run_with(
+      "delete_file", "{\"path\":\"delete-me.txt\"}", roots, permissions
+  );
+  expect(contains(removed, "Deleted"), "delete: reports the removal");
+  expect(!fs::exists(alpha / "delete-me.txt"), "delete: removes the file");
+
+  const std::string missing = run_with(
+      "delete_file", "{\"path\":\"delete-me.txt\"}", roots, permissions
+  );
+  expect(
+      contains(missing, "Path does not exist"), "delete: missing file is reported"
+  );
+
+  const std::string directory = run_with(
+      "delete_file", "{\"path\":\"src\"}", roots, permissions
+  );
+  expect(
+      contains(directory, "not a regular file"), "delete: refuses a directory"
+  );
+  expect(fs::is_directory(alpha / "src"), "delete: the directory remains");
+
+  const std::string escape = run_with(
+      "delete_file", "{\"path\":\"../outside/secret.txt\"}", roots, permissions
+  );
+  expect(contains(escape, "Tool error"), "delete: rejects parent traversal");
+  expect(
+      fs::exists(outside / "secret.txt"), "delete: traversal removes nothing"
+  );
+
+  const std::string link = run_with(
+      "delete_file", "{\"path\":\"link/secret.txt\"}", roots, permissions
+  );
+  expect(contains(link, "Tool error"), "delete: rejects a symlink escape");
+  expect(
+      fs::exists(outside / "secret.txt"),
+      "delete: symlink escape removes nothing"
+  );
+}
+
+void test_tool_definitions() {
+  const auto names = [](const lnb::net::ToolPermissions& permissions) {
+    std::vector<std::string> out;
+
+    for (const boost::json::value& value:
+         lnb::net::tool_definitions(permissions)) {
+      out.emplace_back(
+          value.as_object().at("function").as_object().at("name").as_string()
+      );
+    }
+
+    return out;
+  };
+
+  const auto has = [](const std::vector<std::string>& list, const std::string& name) {
+    return std::find(list.begin(), list.end(), name) != list.end();
+  };
+
+  // Without a shared directory, only the network tools are offered even when
+  // the read and write switches are on.
+  lnb::net::ToolPermissions no_filesystem;
+  no_filesystem.filesystem = false;
+  no_filesystem.read = true;
+  no_filesystem.write = true;
+
+  const std::vector<std::string> network = names(no_filesystem);
+  expect(
+      !has(network, "list_directory") && !has(network, "write_file"),
+      "definitions: filesystem tools need a shared directory"
+  );
+  expect(
+      has(network, "fetch_url") && has(network, "web_search"),
+      "definitions: online tools are offered"
+  );
+
+  lnb::net::ToolPermissions read_only;
+  read_only.filesystem = true;
+  read_only.read = true;
+  read_only.write = false;
+  read_only.online = false;
+
+  const std::vector<std::string> read_tools = names(read_only);
+  expect(
+      has(read_tools, "read_file") && has(read_tools, "search_code") &&
+          has(read_tools, "list_directory"),
+      "definitions: reading offers the read tools"
+  );
+  expect(
+      !has(read_tools, "write_file") && !has(read_tools, "edit_file") &&
+          !has(read_tools, "delete_file"),
+      "definitions: reading alone does not offer write tools"
+  );
+  expect(
+      !has(read_tools, "fetch_url"), "definitions: offline omits the network tools"
+  );
+
+  lnb::net::ToolPermissions write_only = read_only;
+  write_only.read = false;
+  write_only.write = true;
+
+  const std::vector<std::string> write_tools = names(write_only);
+  expect(
+      !has(write_tools, "read_file"),
+      "definitions: writing alone omits the read tools"
+  );
+  expect(
+      has(write_tools, "write_file") && has(write_tools, "edit_file") &&
+          has(write_tools, "delete_file"),
+      "definitions: writing offers the write and delete tools"
+  );
+
+  lnb::net::ToolPermissions disabled;
+  disabled.enabled = false;
+  expect(
+      names(disabled).empty(), "definitions: the master switch offers nothing"
+  );
+}
+
 } // namespace
 
 int main() {
@@ -181,6 +510,10 @@ int main() {
 
   test_single_directory(alpha, outside);
   test_multiple_directories(alpha, beta, duplicate);
+  test_permissions(alpha);
+  test_write_tools(alpha, outside);
+  test_delete_tool(alpha, outside);
+  test_tool_definitions();
 
   fs::remove_all(base, error);
 

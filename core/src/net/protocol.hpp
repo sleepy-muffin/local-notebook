@@ -39,8 +39,10 @@ struct Request {
   // carries it in the top-level `instructions` field.
   std::string instructions;
   std::vector<OutgoingMessage> messages;
-  // Offer the filesystem tools as well as the network tools.
-  bool filesystem_tools = false;
+  // Which tools this request may advertise and execute. The master switch and
+  // the per-category switches are carried to the request builder and to the tool
+  // loop, so a session's choice is enforced in both places.
+  ToolPermissions tool_permissions;
   // False omits the `tools` array entirely. Summarisation requests carry no
   // tools, so they must not advertise them.
   bool include_tools = true;
@@ -74,8 +76,11 @@ struct Request {
 
 // The tool schemas for `protocol`. Chat nests each schema under `function`
 // (`{type, function: {...}}`); Responses flattens it
-// (`{type, name, description, parameters}`).
-[[nodiscard]] boost::json::array tools_for(ApiProtocol protocol, bool filesystem);
+// (`{type, name, description, parameters}`). `permissions` decides which tools
+// are offered.
+[[nodiscard]] boost::json::array tools_for(
+    ApiProtocol protocol, const ToolPermissions& permissions
+);
 
 // --- Endpoints ----------------------------------------------------------
 

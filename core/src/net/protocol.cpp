@@ -44,10 +44,10 @@ std::string normalize_model_id(const std::string& model) {
   return id;
 }
 
-boost::json::array responses_tools(bool filesystem) {
+boost::json::array responses_tools(const ToolPermissions& permissions) {
   boost::json::array tools;
 
-  for (const boost::json::value& value: tool_definitions(filesystem)) {
+  for (const boost::json::value& value: tool_definitions(permissions)) {
     const boost::json::object& tool = value.as_object();
     const boost::json::object& function = tool.at("function").as_object();
 
@@ -140,7 +140,7 @@ boost::json::object build_chat_request(const Request& request) {
   payload["stream"] = true;
 
   if (request.include_tools) {
-    payload["tools"] = tool_definitions(request.filesystem_tools);
+    payload["tools"] = tool_definitions(request.tool_permissions);
   }
 
   if (request.max_output_tokens > 0) {
@@ -212,7 +212,7 @@ boost::json::object build_responses_request(const Request& request) {
   payload["stream"] = true;
 
   if (request.include_tools) {
-    payload["tools"] = responses_tools(request.filesystem_tools);
+    payload["tools"] = responses_tools(request.tool_permissions);
   }
 
   if (!request.instructions.empty()) {
@@ -232,12 +232,14 @@ boost::json::object build_responses_request(const Request& request) {
   return payload;
 }
 
-boost::json::array tools_for(ApiProtocol protocol, bool filesystem) {
+boost::json::array tools_for(
+    ApiProtocol protocol, const ToolPermissions& permissions
+) {
   if (protocol == ApiProtocol::Responses) {
-    return responses_tools(filesystem);
+    return responses_tools(permissions);
   }
 
-  return tool_definitions(filesystem);
+  return tool_definitions(permissions);
 }
 
 std::string normalize_base_url(const std::string& url) {

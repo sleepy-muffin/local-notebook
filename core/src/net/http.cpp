@@ -29,6 +29,23 @@
 #include <utility>
 #include <vector>
 
+// The Windows root-store APIs. The block comes after every other header:
+// windows.h is full of macros (and wincrypt.h defines X509_* encoding macros
+// with the same names as OpenSSL types), so nothing that could be affected by
+// them is parsed afterwards. WIN32_LEAN_AND_MEAN and NOMINMAX keep windows.h
+// from pulling in winsock.h and the min/max macros, which would otherwise clash
+// with Boost.Asio and the standard library.
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <wincrypt.h>
+#endif
+
 namespace lnb::net {
 
 namespace {
@@ -37,6 +54,43 @@ namespace asio = boost::asio;
 namespace beast = boost::beast;
 namespace http = boost::beast::http;
 using tcp = boost::asio::ip::tcp;
+
+#ifdef _WIN32
+// A vcpkg OpenSSL build ships no CA bundle and Windows rarely defines
+// SSL_CERT_FILE, so set_default_verify_paths() leaves the trust store nearly
+// empty and every TLS handshake fails with "certificate verify failed". Copy the
+// certificates from the Windows ROOT store into the connection's X509 store.
+void load_windows_root_certificates(asio::ssl::context& context) {
+  HCERTSTORE store = CertOpenSystemStoreW(0, L"ROOT");
+
+  if (store == nullptr) {
+    return;
+  }
+
+  X509_STORE* x509_store = SSL_CTX_get_cert_store(context.native_handle());
+
+  if (x509_store != nullptr) {
+    PCCERT_CONTEXT certificate = nullptr;
+
+    while ((certificate = CertEnumCertificatesInStore(store, certificate)) !=
+           nullptr) {
+      const unsigned char* der = certificate->pbCertEncoded;
+      X509* x509 = d2i_X509(
+          nullptr, &der, static_cast<long>(certificate->cbCertEncoded)
+      );
+
+      if (x509 != nullptr) {
+        // The store commonly repeats a root under several aliases, so failure
+        // (usually "already in hash table") is expected and harmless.
+        X509_STORE_add_cert(x509_store, x509);
+        X509_free(x509);
+      }
+    }
+  }
+
+  CertCloseStore(store, 0);
+}
+#endif
 
 // One parsed absolute URL, in the pieces the request needs.
 struct parsed_url {
@@ -647,8 +701,21 @@ int http_request(
 
     asio::io_context ioc;
     asio::ssl::context ssl_context(asio::ssl::context::tls_client);
-    ssl_context.set_default_verify_paths();
     ssl_context.set_verify_mode(asio::ssl::verify_peer);
+
+#ifdef _WIN32
+    // Honour SSL_CERT_FILE/SSL_CERT_DIR when they are set, then add the system
+    // roots. The default paths call may fail on Windows; that must not prevent
+    // the system store from being loaded.
+    try {
+      ssl_context.set_default_verify_paths();
+    } catch (const std::exception&) {
+    }
+
+    load_windows_root_certificates(ssl_context);
+#else
+    ssl_context.set_default_verify_paths();
+#endif
 
     beast::tcp_stream plain = connect_stream(
         ioc, target, proxy.has_value() ? &*proxy : nullptr, stop,

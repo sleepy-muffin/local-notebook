@@ -123,6 +123,12 @@ target_link_libraries(
         Threads::Threads
 )
 
+# The TLS client loads the OS root store on Windows so HTTPS works without a
+# bundled CA file.
+if(WIN32)
+    target_link_libraries(${PROJECT_NAME} PRIVATE crypt32)
+endif()
+
 # ========== ---------- ---------- ---------- ==========
 #                          TEST
 # ========== ---------- ---------- ---------- ==========

@@ -5,6 +5,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QLocale>
 
 #include <filesystem>
 
@@ -13,6 +14,12 @@
 
 namespace lnb {
 namespace {
+
+Settings default_settings() {
+  Settings settings;
+  settings.language = default_language_code();
+  return settings;
+}
 
 QJsonObject metrics_to_json(const ThemeMetrics& metrics) {
   QJsonObject object;
@@ -121,7 +128,7 @@ QJsonObject to_json(const Settings& settings) {
 }
 
 Settings from_json(const QJsonObject& object) {
-  Settings settings;
+  Settings settings = default_settings();
 
   settings.last_assistant = object.value("last_assistant").toString().toStdString();
 
@@ -170,18 +177,31 @@ Settings from_json(const QJsonObject& object) {
 
 } // namespace
 
+std::string default_language_code() {
+  // Only the languages the translations cover are matched; everything else
+  // uses English.
+  switch (QLocale::system().language()) {
+  case QLocale::Chinese:
+    return "zh";
+  case QLocale::Japanese:
+    return "ja";
+  default:
+    return "en";
+  }
+}
+
 Settings load_settings() {
   const auto path = lnb::api::global_settings_path();
 
   QFile file(QString::fromStdString(path.string()));
   if (!file.open(QIODevice::ReadOnly)) {
-    return Settings{};
+    return default_settings();
   }
 
   const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
   if (!document.isObject()) {
     shark::log::error("{} is not a JSON object; using defaults", path.string());
-    return Settings{};
+    return default_settings();
   }
 
   return from_json(document.object());

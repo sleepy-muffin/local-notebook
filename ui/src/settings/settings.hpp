@@ -23,7 +23,8 @@ struct Settings {
   std::string theme = "Catppuccin Mocha";
 
   // UI language code: "en", "zh" or "ja". Applied at startup (and on Save
-  // from the Configuration page); see support/i18n.hpp.
+  // from the Configuration page); see support/i18n.hpp. This value is always
+  // explicit; a missing stored value is resolved through default_language_code().
   std::string language = "en";
 
   // Optional background image, resolved relative to the working directory.
@@ -66,5 +67,10 @@ struct Settings {
 // data/settings.json. A missing or malformed file yields the defaults.
 Settings load_settings();
 void save_settings(const Settings& settings);
+
+// The language to use before the user has chosen one, derived from the system
+// locale: "zh" for Chinese, "ja" for Japanese, and "en" otherwise. This is
+// also what "Restore to defaults" puts back in the language selector.
+std::string default_language_code();
 
 } // namespace lnb
