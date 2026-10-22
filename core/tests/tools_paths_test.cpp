@@ -36,7 +36,9 @@ bool contains(const std::string& text, const std::string& needle) {
 }
 
 void write_file(const fs::path& path, const std::string& content) {
-  std::ofstream out(path);
+  // Binary mode keeps the bytes identical on Windows, where text mode would
+  // translate \n to \r\n and break the exact-content assertions below.
+  std::ofstream out(path, std::ios::binary);
   out << content;
 }
 
