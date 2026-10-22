@@ -9,7 +9,7 @@ hand-drawn, native desktop UI.**
 [![Built with Qt 6](https://img.shields.io/badge/Qt-6-cba6f7.svg)](https://qt.io)
 
 <!-- TODO: replace with a 30–60s demo GIF (see docs/architecture.md for the screenshot tool) -->
-![Local Notebook](docs/screenshots/main-window.png)
+![Local Notebook](docs/screenshots/main-window-light.png)
 
 Local Notebook is a desktop notebook for talking to a local or self-hosted model.
 It runs one **assistant** per process across many **sessions**, and keeps long
@@ -60,7 +60,7 @@ and **every** summarisation, automatic or manual, is shown to you for review
 *before* it is sent, together with the exact payload and the bookkeeping it will
 update:
 
-![Summarisation review: the exact request is shown before it is sent](docs/screenshots/summary-review.png)
+![Summarisation review: the exact request is shown before it is sent](docs/screenshots/summary-review-light.png)
 
 Two guarantees fall out of this design:
 

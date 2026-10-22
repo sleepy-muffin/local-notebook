@@ -1,7 +1,6 @@
 # Local Notebook
 
-**A local-first AI notebook whose memory you can read, edit, and trust — in a
-hand-drawn, native desktop UI.**
+An AI client optimized to be high-performance and comfortable to be used.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-cba6f7.svg)](LICENSE.txt)
 [![Latest release](https://img.shields.io/github/v/release/sleepy-muffin/local-notebook?color=f5c2e7)](../../releases/latest)
@@ -9,7 +8,18 @@ hand-drawn, native desktop UI.**
 [![Built with Qt 6](https://img.shields.io/badge/Qt-6-cba6f7.svg)](https://qt.io)
 
 <!-- TODO: replace with a 30–60s demo GIF (see docs/architecture.md for the screenshot tool) -->
-![Local Notebook](docs/screenshots/main-window.png)
+![Local Notebook](docs/screenshots/main-window-light.png)
+
+---
+
+## Download
+
+| Platform | File |
+|---|---|
+| **Linux** (x86_64) | [`local-notebook-*-linux-x86_64.AppImage`](../../releases/latest) |
+| **Windows** (x86_64) | [`local-notebook-*-windows-x86_64.zip`](../../releases/latest) |
+
+---
 
 Local Notebook is a desktop notebook for talking to a local or self-hosted model.
 It runs one **assistant** per process across many **sessions**, and keeps long
@@ -27,18 +37,7 @@ Supports tools:
 
 ---
 
-## Download
-
-Grab a self-contained build — no compiler, no Qt install required:
-
-| Platform | File |
-|---|---|
-| **Linux** (x86_64) | [`local-notebook-*-linux-x86_64.AppImage`](../../releases/latest) |
-| **Windows** (x86_64) | [`local-notebook-*-windows-x86_64.zip`](../../releases/latest) |
-
----
-
-![Summarisation review: the exact request is shown before it is sent](docs/screenshots/summary-review.png)
+![Summarisation review: the exact request is shown before it is sent](docs/screenshots/summary-review-light.png)
 
 Two guarantees fall out of this design:
 

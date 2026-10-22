@@ -14,6 +14,7 @@
 #include <QPainter>
 #include <QPalette>
 #include <QString>
+#include <QStyle>
 #include <QWidget>
 
 #include <optional>
@@ -400,7 +401,12 @@ void apply_theme(QApplication& app, const lnb::Settings& settings) {
 
   const ThemeColors& c = current.theme.colors;
 
-  QPalette palette = app.palette();
+  // Start from the style's own palette rather than the one currently installed.
+  // On the first call the two are the same, but apply_theme() may run again in
+  // the same process (the screenshot tool renders one sample per theme), and
+  // every role not set below - Light, Mid, Link, BrightText and so on - would
+  // otherwise be inherited from the previous theme.
+  QPalette palette = app.style()->standardPalette();
   palette.setColor(QPalette::Window, c.window);
   palette.setColor(QPalette::WindowText, c.text);
   palette.setColor(QPalette::Base, c.base);

@@ -36,6 +36,50 @@ void shoot(
   std::cout << "wrote " << path << '\n';
 }
 
+// One rendered sample: the theme to apply and the suffix its files carry. Every
+// sample gets a suffix, so the files say which theme they show — main-window-light
+// and main-window-dark — rather than relying on which one happens to be
+// unsuffixed. README.md and docs/architecture.md reference the light pair.
+struct Sample {
+  const char* theme;
+  const char* suffix;
+};
+
+lnb::Settings make_settings(const char* theme) {
+  lnb::Settings settings;
+  settings.theme = theme;
+  settings.ui_font = "Carlito";
+  settings.font = "Carlito";
+  settings.mono_font = "JetBrains Mono Light";
+  return settings;
+}
+
+// Applies one theme and captures every window under it.
+//
+// The palette, stylesheet and fonts installed by apply_theme() are application
+// wide, and widgets read them when they are constructed and repainted, so a
+// sample must be rendered from scratch: apply the theme while no widget exists,
+// create the windows, capture, then let them go before the next theme is
+// applied. Capturing two themes from one window would only relabel the first
+// one's pixels.
+void capture(
+    QApplication& app, lnb::api::interface& api, const lnb::SummaryPlan& plan,
+    const std::filesystem::path& output, lnb::Settings& settings,
+    const std::string& suffix
+) {
+  ui::apply_theme(app, settings);
+
+  {
+    ui::MainWindow window(api, settings);
+    shoot(window, output / ("main-window" + suffix + ".png"), QSize(1180, 760));
+  }
+
+  {
+    ui::SummaryReviewDialog dialog(plan);
+    shoot(dialog, output / ("summary-review" + suffix + ".png"), QSize(760, 640));
+  }
+}
+
 lnb::Assistant make_assistant() {
   lnb::Assistant assistant;
   assistant.name_ = "Aurora";
@@ -119,14 +163,6 @@ int main(int argc, char** argv) {
 
   lnb::api::set_data_root(scratch / "data");
 
-  lnb::Settings settings;
-  settings.ui_font = "Carlito";
-  settings.font = "Carlito";
-  settings.mono_font = "JetBrains Mono Light";
-
-  lnb::i18n::set_language(lnb::i18n::language_from_code(settings.language));
-  ui::apply_theme(app, settings);
-
   lnb::api::interface api;
   api.open_assistant(
       "a1b2c3d4-0000-0000-0000-000000000001",
@@ -198,14 +234,19 @@ int main(int argc, char** argv) {
     return EXIT_FAILURE;
   }
 
-  {
-    ui::MainWindow window(api, settings);
-    shoot(window, output / "main-window.png", QSize(1180, 760));
-  }
+  // A light and a dark sample. "Catppuccin Latte" is the theme the published
+  // screenshots were taken with, so it keeps the names README.md references;
+  // "Catppuccin Mocha" is the application default, shown beside it.
+  const Sample samples[] = {
+      {"Catppuccin Latte", "-light"},
+      {"Catppuccin Mocha", "-dark"},
+  };
 
-  {
-    ui::SummaryReviewDialog dialog(plan);
-    shoot(dialog, output / "summary-review.png", QSize(760, 640));
+  for (const Sample& sample : samples) {
+    lnb::Settings settings = make_settings(sample.theme);
+
+    lnb::i18n::set_language(lnb::i18n::language_from_code(settings.language));
+    capture(app, api, plan, output, settings, sample.suffix);
   }
 
   api.wait_for_generation();
