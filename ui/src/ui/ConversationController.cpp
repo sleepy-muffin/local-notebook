@@ -83,7 +83,7 @@ bool ConversationController::send(std::string text) {
   return track(api_.start_generation());
 }
 
-void ConversationController::summarize() {
+void ConversationController::summarize(lnb::SummaryApprover approver) {
   if (busy() || api_.busy()) {
     return;
   }
@@ -94,7 +94,7 @@ void ConversationController::summarize() {
       api_.has_session_memory_trigger_met(session_id_);
 
   if (status == lnb::api::error_code::ERR_SESSION_MEMORY_TRIGGER_HAS_MET) {
-    summarize_session_now();
+    summarize_session_now(std::move(approver));
     return;
   }
 
@@ -104,7 +104,7 @@ void ConversationController::summarize() {
 
   // The automatic assistant pass is a no-op when the trigger is no longer
   // reached, so it still completes cleanly without contacting the network.
-  track(api_.summarize_assistant(false));
+  track(api_.summarize_assistant(false, std::move(approver)));
 }
 
 void ConversationController::summarize_session_now(

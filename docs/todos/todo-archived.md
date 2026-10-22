@@ -156,5 +156,7 @@ I will try to make this list ordered by time.
   write is capped at 4 MiB). The Session Editor has a "Tool permissions" section
   with a master switch plus read, write and online toggles, persisted in new
   `session` columns (schema version 6, with ALTER TABLE migrations for older
-  databases). Reads and online access keep the previous behaviour; writing
+  databases). Reads and online access keep the previous behavior; writing
   defaults to off.
+
+- (Refinement) It now shows reviewer launched by the altered button on the right of the input box when either the session-level trigger or the assistant-level trigger is met.

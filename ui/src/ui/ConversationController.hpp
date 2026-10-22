@@ -56,8 +56,9 @@ public:
   // interface rejects the prompt (for example, a memory trigger has been met).
   [[nodiscard]] bool send(std::string text);
 
-  // Resolves one summarisation level per press, the session first.
-  void summarize();
+  // Resolves one summarisation level per press, the session first. `approver`
+  // reviews the proposed pass before it is sent.
+  void summarize(lnb::SummaryApprover approver = {});
 
   // Folds the session's overflow into memory on demand, forcing the pass even
   // when the automatic trigger has not been reached.

@@ -1,5 +1,7 @@
 #include "ui/ConversationView.hpp"
 
+#include "ui/SummaryReviewDialog.hpp"
+
 #include <QApplication>
 #include <QClipboard>
 #include <QCursor>
@@ -816,7 +818,9 @@ void ConversationView::submit() {
     // The send button has become a summarize button: fold the overflow into
     // memory, sending nothing. A fresh pass lands at the bottom.
     transcript_->scroll_to_bottom();
-    controller_.summarize();
+    const lnb::SummaryApprover approver =
+        [](const lnb::SummaryPlan& plan) { return review_summary(plan); };
+    controller_.summarize(approver);
     set_busy(controller_.busy());
     return;
   }
