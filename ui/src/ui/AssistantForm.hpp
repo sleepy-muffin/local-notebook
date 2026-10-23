@@ -12,6 +12,7 @@ class QSpinBox;
 class QWidget;
 
 namespace ui {
+class PlainTextEdit;
 
 // A reusable editor for an assistant's configuration: identity, connection
 // details, custom instructions and the assistant-level summarisation budgets.
@@ -54,7 +55,7 @@ private:
   QLineEdit* proxy_ = nullptr;
   QSpinBox* turn_timeout_ = nullptr;
   QSpinBox* summary_timeout_ = nullptr;
-  QPlainTextEdit* instructions_ = nullptr;
+  PlainTextEdit* instructions_ = nullptr;
   QComboBox* protocol_ = nullptr;
   QComboBox* reasoning_ = nullptr;
   QComboBox* preset_ = nullptr;

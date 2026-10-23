@@ -194,7 +194,7 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
 
   // ---- Instructions ----
   content->addWidget(section_label(this, trs("Custom instructions")));
-  instructions_ = new QPlainTextEdit(this);
+  instructions_ = new PlainTextEdit(this);
   instructions_->setPlaceholderText(trs("System prompt for this assistant"));
   instructions_->setMinimumHeight(96);
   content->addWidget(instructions_);

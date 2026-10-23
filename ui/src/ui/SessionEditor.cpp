@@ -174,7 +174,7 @@ QWidget* SessionEditor::build_content() {
     title_ = new QLineEdit(content);
     title_->setPlaceholderText(trs("Session title"));
 
-    shared_directories_ = new QPlainTextEdit(content);
+    shared_directories_ = new PlainTextEdit(content);
     shared_directories_->setTabChangesFocus(true);
     shared_directories_->setMinimumHeight(64);
     shared_directories_->setMaximumHeight(96);
@@ -278,7 +278,7 @@ QWidget* SessionEditor::build_content() {
   memory_header->addWidget(summarize_button_);
   layout->addLayout(memory_header);
 
-  memory_ = new QPlainTextEdit(content);
+  memory_ = new PlainTextEdit(content);
   memory_->setTabChangesFocus(true);
   memory_->setMinimumHeight(140);
   memory_->setPlaceholderText(

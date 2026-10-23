@@ -18,6 +18,7 @@
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFontComboBox>
+#include <QPlainTextEdit>
 #include <QSpinBox>
 #include <QWheelEvent>
 
@@ -27,19 +28,18 @@ namespace ui {
 
 namespace detail {
 
-// A spin box's preferred width follows its widest possible value, which for the
-// token budgets is "1,000,000,000" — wide enough to push a form past its viewport
-// on platforms with large font metrics. Cap the *minimum* width at a
-// representative number instead: the field still grows to show the full value
-// whenever the form has room, but it can also shrink (eliding the value) rather
-// than widening the whole page.
-inline QSize capped_spin_minimum(const QWidget* widget, const QSize& natural) {
-  const int width =
-      widget->fontMetrics().horizontalAdvance(QStringLiteral("000,000")) + 32;
-  QSize size = natural;
-  size.setWidth(std::min(size.width(), width));
-  return size;
-}
+  // A spin box's preferred width follows its widest possible value, which for the
+  // token budgets is "1,000,000,000" — wide enough to push a form past its viewport
+  // on platforms with large font metrics. Cap the *minimum* width at a
+  // representative number instead: the field still grows to show the full value
+  // whenever the form has room, but it can also shrink (eliding the value) rather
+  // than widening the whole page.
+  inline QSize capped_spin_minimum(const QWidget *widget, const QSize &natural) {
+    const int width = widget->fontMetrics().horizontalAdvance(QStringLiteral("000,000")) + 32;
+    QSize size = natural;
+    size.setWidth(std::min(size.width(), width));
+    return size;
+  }
 
 } // namespace detail
 
@@ -47,8 +47,12 @@ class SpinBox : public QSpinBox {
 public:
   using QSpinBox::QSpinBox;
 
+  explicit SpinBox(QWidget *parent = nullptr) : QSpinBox(parent) {
+    setButtonSymbols(QAbstractSpinBox::NoButtons);
+  }
+
 protected:
-  void wheelEvent(QWheelEvent* event) override { event->ignore(); }
+  void wheelEvent(QWheelEvent *event) override { event->ignore(); }
 
   QSize minimumSizeHint() const override {
     return detail::capped_spin_minimum(this, QSpinBox::sizeHint());
@@ -59,8 +63,12 @@ class DoubleSpinBox : public QDoubleSpinBox {
 public:
   using QDoubleSpinBox::QDoubleSpinBox;
 
+  explicit DoubleSpinBox(QWidget *parent = nullptr) : QDoubleSpinBox(parent) {
+    setButtonSymbols(QAbstractSpinBox::NoButtons);
+  }
+
 protected:
-  void wheelEvent(QWheelEvent* event) override { event->ignore(); }
+  void wheelEvent(QWheelEvent *event) override { event->ignore(); }
 };
 
 // A wheel-safe combo box whose minimum width is bounded: the size hint follows a
@@ -68,24 +76,49 @@ protected:
 // name (or wide platform font metrics) cannot push a form past its viewport.
 class ComboBox : public QComboBox {
 public:
-  explicit ComboBox(QWidget* parent = nullptr) : QComboBox(parent) {
+  explicit ComboBox(QWidget *parent = nullptr) : QComboBox(parent) {
     setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     setMinimumContentsLength(6);
+
+    setStyleSheet(
+        styleSheet() + QStringLiteral(
+                           "QComboBox::drop-down { width: 0px; border: none; }"
+                           "QComboBox::down-arrow { image: none; }"));
   }
 
 protected:
-  void wheelEvent(QWheelEvent* event) override { event->ignore(); }
+  void wheelEvent(QWheelEvent *event) override { event->ignore(); }
 };
 
 class FontComboBox : public QFontComboBox {
 public:
-  explicit FontComboBox(QWidget* parent = nullptr) : QFontComboBox(parent) {
+  explicit FontComboBox(QWidget *parent = nullptr) : QFontComboBox(parent) {
     setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     setMinimumContentsLength(6);
+
+    setStyleSheet(
+        styleSheet() + QStringLiteral(
+                           "QComboBox::drop-down { width: 0px; border: none; }"
+                           "QComboBox::down-arrow { image: none; }"));
   }
 
 protected:
-  void wheelEvent(QWheelEvent* event) override { event->ignore(); }
+  void wheelEvent(QWheelEvent *event) override { event->ignore(); }
+};
+
+class PlainTextEdit : public QPlainTextEdit {
+public:
+  using QPlainTextEdit::QPlainTextEdit;
+
+protected:
+  void wheelEvent(QWheelEvent *event) override {
+    if (!hasFocus()) {
+      event->ignore();
+      return;
+    }
+
+    QPlainTextEdit::wheelEvent(event);
+  }
 };
 
 } // namespace ui

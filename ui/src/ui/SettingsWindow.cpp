@@ -115,8 +115,8 @@ QString read_license(const QString& path) {
 // The verbatim license text. It is a plain, read-only text view rather than a
 // label: the text is shown exactly as shipped, so it is not run through the
 // markdown-ish label styling, and a long license scrolls within a fixed height.
-QPlainTextEdit* license_view(QWidget* parent, const QString& text) {
-  auto* view = new QPlainTextEdit(text, parent);
+PlainTextEdit* license_view(QWidget* parent, const QString& text) {
+  auto* view = new PlainTextEdit(text, parent);
   view->setReadOnly(true);
   view->setTabChangesFocus(true);
   view->setMinimumHeight(220);
@@ -786,7 +786,7 @@ QWidget* SettingsWindow::build_assistant_page() {
   memory_header->addWidget(assistant_summarize_);
   memory_layout->addLayout(memory_header);
 
-  assistant_memory_ = new QPlainTextEdit(memory_block);
+  assistant_memory_ = new PlainTextEdit(memory_block);
   assistant_memory_->setTabChangesFocus(true);
   assistant_memory_->setMinimumHeight(160);
   assistant_memory_->setPlaceholderText(

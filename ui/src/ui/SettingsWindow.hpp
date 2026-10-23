@@ -6,6 +6,7 @@
 #include <functional>
 #include <vector>
 
+#include "SpinBox.hpp"
 #include "settings/metrics.hpp"
 #include "settings/settings.hpp"
 
@@ -117,7 +118,7 @@ private:
 
   // The assistant-level memory: shared across every session, edited (and folded)
   // on the Assistant page. Written back to the assistant on Save.
-  QPlainTextEdit* assistant_memory_ = nullptr;
+  PlainTextEdit* assistant_memory_ = nullptr;
   QPushButton* assistant_summarize_ = nullptr;
   bool assistant_summarizing_ = false;
 

@@ -21,6 +21,7 @@ class interface;
 }
 
 namespace ui {
+class PlainTextEdit;
 
 class ConversationView;
 
@@ -72,7 +73,7 @@ private:
 
   // One directory per line; the order sets the mount name when directories
   // share a basename (the second becomes e.g. "project-2").
-  QPlainTextEdit* shared_directories_ = nullptr;
+  PlainTextEdit* shared_directories_ = nullptr;
 
   // Tool permissions for this session. The master switch gates all of them; the
   // three category switches keep their values while it is off.
@@ -85,7 +86,7 @@ private:
   // stale level stays selectable so it can be corrected rather than dropped.
   QComboBox* reasoning_ = nullptr;
 
-  QPlainTextEdit* memory_ = nullptr;
+  PlainTextEdit* memory_ = nullptr;
   QSpinBox* watermark_ = nullptr;
   QSpinBox* assistant_watermark_ = nullptr;
 
