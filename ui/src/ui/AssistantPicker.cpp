@@ -569,9 +569,17 @@ void AssistantPicker::open_selected() {
   const std::string id = uuid.toStdString();
   shark::log::info("opening assistant {}", id);
 
+  // Another running instance may already own this assistant. The core refuses,
+  // so keep the picker open and say why rather than silently doing nothing.
+  if (!api_.open_assistant(id, lnb::api::load_assistant(id))) {
+    QMessageBox::warning(
+        this, trs("Assistant in use"), to_qstring(api_.last_error())
+    );
+    return;
+  }
+
   settings_.auto_login = auto_login_->isChecked();
   settings_.last_assistant = id;
-  api_.open_assistant(id, lnb::api::load_assistant(id));
   accept();
 }
 
@@ -587,9 +595,18 @@ void AssistantPicker::create_new() {
   lnb::api::save_assistant(uuid, assistant);
   shark::log::info("created assistant {}", uuid);
 
+  if (!api_.open_assistant(uuid, assistant)) {
+    QMessageBox::warning(
+        this, trs("Assistant in use"), to_qstring(api_.last_error())
+    );
+    refresh();
+    select_uuid(to_qstring(uuid));
+    update_preview();
+    return;
+  }
+
   settings_.auto_login = auto_login_->isChecked();
   settings_.last_assistant = uuid;
-  api_.open_assistant(uuid, assistant);
   accept();
 }
 

@@ -72,9 +72,10 @@ public:
 
   // Folds the session's transcript into memory on demand as the session's single
   // task, forcing the pass even when the automatic trigger has not been reached.
-  // The session editor's "Summarize now" drives this, so the fold shows up in the
-  // tasks window like any other turn and never races a generation on the same
-  // session. `approver` reviews the request; an absent one reviews interactively.
+  // The session editor's "Update memory now" drives this, so the pass shows up
+  // in the tasks window like any other turn and never races a generation on the
+  // same session. `approver` reviews the request; an absent one reviews
+  // interactively.
   void summarize_session_now(lnb::SummaryApprover approver = {});
 
   // The diagnostic log for the current (or last finished) turn, and the last

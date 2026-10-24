@@ -87,6 +87,10 @@ std::filesystem::path assistant_log(std::string_view uuid) {
   return assistant_dir(uuid) / "local-notebook.log";
 }
 
+std::filesystem::path assistant_lock(std::string_view uuid) {
+  return assistant_dir(uuid) / "lock";
+}
+
 } // namespace paths
 
 std::vector<std::string> scan_assistants() {

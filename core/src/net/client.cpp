@@ -1142,7 +1142,7 @@ std::string fold_session_memory(
       break; // defensive: no progress is possible
     }
 
-    task.set_status("Summarizing conversation...");
+    task.set_status("Updating memory...");
 
     const boost::json::object request = build_request(
         remote.protocol,
@@ -1183,13 +1183,13 @@ std::string fold_session_memory(
     if (text.empty()) {
       // An empty completion almost always means the model spent its whole budget
       // on hidden reasoning and never emitted the memory. A manual request must
-      // say so instead of reporting "nothing to fold".
+      // say so instead of reporting "nothing to merge".
       if (force) {
         const std::string reason =
             result.finish_reason.empty() ? "unknown" : result.finish_reason;
 
         throw std::runtime_error(
-            "The summariser returned no text (finish_reason=" + reason +
+            "The memory update returned no text (finish_reason=" + reason +
             "). Increase summary_reasoning_headroom_tokens for a reasoning model."
         );
       }
@@ -1295,7 +1295,20 @@ std::string fold_assistant_memory(
   // empty log makes those outcomes indistinguishable from a broken task.
   task.append_log("[assistant-summary] starting");
 
-  const std::vector<Session> sessions = db.sessions_by_recent();
+  std::vector<Session> sessions = db.sessions_by_recent();
+
+  // A session can opt out of the shared memory. Dropping it here keeps its
+  // messages out of the gathered pools and its watermark untouched, so the
+  // per-session state stays valid if it is opted back in later.
+  sessions.erase(
+      std::remove_if(
+          sessions.begin(), sessions.end(), [](const Session& session) {
+            return !session.include_in_assistant_memory_;
+          }
+      ),
+      sessions.end()
+  );
+
   task.append_log(
       "[assistant-summary] sessions=" + std::to_string(sessions.size())
   );
@@ -1391,12 +1404,12 @@ std::string fold_assistant_memory(
 
   if (sessions_block.empty()) {
     task.append_log(
-        "[assistant-summary] nothing to fold: no session memory or recent messages"
+        "[assistant-summary] nothing to merge: no session memory or recent messages"
     );
     return assistant.memory_;
   }
 
-  task.set_status("Summarizing assistant memory...");
+  task.set_status("Updating assistant memory...");
 
   // The summariser inherits the assistant's reasoning level; an unsupported
   // level is refused rather than silently replaced (see resolve_reasoning_effort).
@@ -1485,13 +1498,13 @@ std::string fold_assistant_memory(
         result.finish_reason.empty() ? "unknown" : result.finish_reason;
 
     task.append_log(
-        "[assistant-summary] summariser returned no text (finish_reason=" +
+        "[assistant-summary] memory update returned no text (finish_reason=" +
         reason + ")"
     );
 
     if (strict) {
       throw std::runtime_error(
-          "The summariser returned no text (finish_reason=" + reason +
+          "The memory update returned no text (finish_reason=" + reason +
           "). Increase summary_reasoning_headroom_tokens for a reasoning model."
       );
     }
@@ -1521,6 +1534,11 @@ bool assistant_trigger_reached(
   for (const Session& session: db.sessions_by_recent()) {
     if (stop_token.stop_requested()) {
       return false;
+    }
+
+    // An opted-out session neither triggers the pass nor contributes to it.
+    if (!session.include_in_assistant_memory_) {
+      continue;
     }
 
     for (const Message& message: db.messages(session.id_)) {

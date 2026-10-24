@@ -54,6 +54,12 @@ public:
   // Empty disables the filesystem tools.
   std::vector<std::string> shared_directories_;
 
+  // Whether this session contributes to the shared assistant memory. Turning it
+  // off keeps the session's own memory and transcript intact but leaves it out of
+  // both the assistant trigger and the assistant fold. It is stored per session
+  // (schema version 7) so a restart preserves the choice.
+  bool include_in_assistant_memory_ = true;
+
   // Pinned sessions are listed in their own sidebar category above the rest.
   // Stored in the session row (design-1.md §9).
   bool pinned_ = false;

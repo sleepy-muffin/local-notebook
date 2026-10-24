@@ -596,10 +596,9 @@ void ConversationView::set_failure_notice_handler(std::function<void()> handler)
 }
 
 void ConversationView::set_busy(bool busy) {
-  // The interface runs one task at a time. A task in another session therefore
-  // blocks this composer's send button too, even though this view has no task
-  // of its own to show a cancel button for.
-  send_button_->setEnabled(!(busy || api_.busy()));
+  // A task in another session no longer blocks this composer; only this
+  // session's own task and the shared assistant fold do.
+  send_button_->setEnabled(!(busy || api_.assistant_busy()));
 
   if (busy_ == busy) {
     return;
@@ -707,7 +706,7 @@ void ConversationView::apply_composer_icons() {
       }
 
       send_button_->setIcon(icon);
-      send_button_->setToolTip(trs("Summarize the conversation into memory"));
+      send_button_->setToolTip(trs("Update memory from the conversation"));
     } else {
       // The send arrow takes the accent colour; a busy composer mutes it through
       // the icon's disabled pixmap.
@@ -777,7 +776,12 @@ bool ConversationView::summarize_due() const {
   return api_.has_session_memory_trigger_met(session_id_) != lnb::api::error_code::SUCCESS;
 }
 
-void ConversationView::refresh_send_mode() { update_send_mode(); }
+void ConversationView::refresh_send_mode() {
+  // The shared assistant fold can start or finish between poll ticks, so the
+  // enabled state is refreshed here too, not only in poll().
+  set_busy(controller_.busy());
+  update_send_mode();
+}
 
 void ConversationView::update_send_mode() {
   const bool due = summarize_due();
@@ -791,7 +795,7 @@ void ConversationView::update_send_mode() {
 }
 
 void ConversationView::summarize_session_now(lnb::SummaryApprover approver) {
-  if (controller_.busy() || api_.busy()) {
+  if (controller_.busy() || api_.assistant_busy()) {
     return;
   }
 
@@ -805,7 +809,7 @@ void ConversationView::summarize_session_now(lnb::SummaryApprover approver) {
 }
 
 void ConversationView::submit() {
-  if (controller_.busy() || api_.busy()) {
+  if (controller_.busy() || api_.assistant_busy()) {
     return;
   }
 

@@ -58,10 +58,10 @@ bool ConversationController::track(std::shared_ptr<GenerationTask> task) {
 }
 
 bool ConversationController::send(std::string text) {
-  // The interface runs one task at a time. Refuse a send while any task is in
-  // flight (including another session's), so starting this turn cannot silently
-  // cancel that work.
-  if (busy() || api_.busy() || text.empty()) {
+  // One task per session, plus the shared assistant fold which reads every
+  // session. A task in another session no longer blocks this send.
+  if (busy() || api_.session_busy(session_id_) || api_.assistant_busy() ||
+      text.empty()) {
     return false;
   }
 
@@ -80,11 +80,11 @@ bool ConversationController::send(std::string text) {
 
   // The prompt is stored; now start the turn. The interface keeps the task alive
   // and runs the worker, so the controller only polls it.
-  return track(api_.start_generation());
+  return track(api_.start_generation(session_id_));
 }
 
 void ConversationController::summarize(lnb::SummaryApprover approver) {
-  if (busy() || api_.busy()) {
+  if (busy() || api_.session_busy(session_id_) || api_.assistant_busy()) {
     return;
   }
 
@@ -110,7 +110,7 @@ void ConversationController::summarize(lnb::SummaryApprover approver) {
 void ConversationController::summarize_session_now(
     lnb::SummaryApprover approver
 ) {
-  if (busy() || api_.busy()) {
+  if (busy() || api_.session_busy(session_id_) || api_.assistant_busy()) {
     return;
   }
 
@@ -160,7 +160,7 @@ void ConversationController::poll() {
     }
   }
 
-  // The transient operation title ("Searching...", "Summarizing...") is shown
+  // The transient operation title ("Searching...", "Updating memory...") is shown
   // until the first assistant token arrives.
   if (snapshot.status == GenerationTask::Status::RUNNING &&
       snapshot.operation_status != last_status_) {

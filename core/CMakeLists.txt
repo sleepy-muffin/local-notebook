@@ -62,6 +62,8 @@ add_library(${PROJECT_NAME}
 
         src/utils/util.hpp
         src/utils/util.cpp
+        src/utils/lock.hpp
+        src/utils/lock.cpp
 
         src/store/database.hpp
         src/store/database.cpp

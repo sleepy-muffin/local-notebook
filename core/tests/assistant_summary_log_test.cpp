@@ -88,7 +88,7 @@ int main() {
   assistant.model_ = "test-model";
   api.open_assistant("log-test", assistant);
 
-  // 1. Nothing to fold: the pass still completes, and the log says why.
+  // 1. Nothing to merge: the pass still completes, and the log says why.
   {
     const auto task = api.summarize_assistant(true, approve());
     expect(wait_terminal(task), "no-sessions: task did not finish");
@@ -97,7 +97,7 @@ int main() {
     const std::string log = task != nullptr ? task->log_text() : std::string{};
     expect(!log.empty(), "no-sessions: log is empty");
     expect_contains(log, "[assistant-summary] starting", "no-sessions");
-    expect_contains(log, "nothing to fold", "no-sessions");
+    expect_contains(log, "nothing to merge", "no-sessions");
   }
 
   lnb::Session session;

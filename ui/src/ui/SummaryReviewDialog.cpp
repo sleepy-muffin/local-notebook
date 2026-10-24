@@ -386,7 +386,7 @@ SummaryReviewDialog::SummaryReviewDialog(
 )
     : QDialog(parent) {
   setObjectName(QStringLiteral("SummaryReview"));
-  setWindowTitle(trs("Review summarization"));
+  setWindowTitle(trs("Review memory update"));
   setModal(true);
   resize(680, 640);
   setMinimumSize(480, 400);
@@ -403,7 +403,7 @@ SummaryReviewDialog::SummaryReviewDialog(
   outer->setContentsMargins(24, 20, 24, 16);
   outer->setSpacing(0);
 
-  auto* heading = new QLabel(trs("Review summarization"), background);
+  auto* heading = new QLabel(trs("Review memory update"), background);
   heading->setObjectName(QStringLiteral("FormTitle"));
   heading->setFont(scaled_font(4.0, true));
   outer->addWidget(heading);
@@ -412,7 +412,7 @@ SummaryReviewDialog::SummaryReviewDialog(
   auto* subtitle = new QLabel(
       trs(
           "The following request is about to be sent to the model to update the %1. "
-          "Review it and choose whether to run the summarisation."
+          "Review it and choose whether to run the memory update."
       )
           .arg(to_qstring(plan.kind)),
       background
@@ -461,7 +461,7 @@ SummaryReviewDialog::SummaryReviewDialog(
 
     auto* note = new QLabel(
         trs(
-            "This is the first of several requests: the remaining messages are folded "
+            "This is the first of several requests: the remaining messages are merged "
             "in further batches after this one."
         ),
         background
@@ -505,15 +505,15 @@ bool review_summary(const lnb::SummaryPlan& plan) {
   });
 
   if (!approved && plan.automatic) {
-    // Skipping an automatic pass leaves the messages unfolded, which is not
+    // Skipping an automatic pass leaves the messages unmerged, which is not
     // harmless: say so, and point at the manual action.
     on_ui_thread([]() {
       QMessageBox::warning(
-          QApplication::activeWindow(), trs("Summarization Skipped"),
+          QApplication::activeWindow(), trs("Memory Update Skipped"),
           trs(
-              "The automatic summarisation was skipped. Some messages may not be "
-              "folded into memory; use Summarize now before sending new messages if "
-              "you want them converged."
+              "The automatic memory update was skipped. Some messages may not be "
+              "merged into memory; use Update memory now before sending new messages "
+              "if you want them included."
           )
       );
     });

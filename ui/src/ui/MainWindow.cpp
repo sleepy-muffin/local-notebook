@@ -923,14 +923,7 @@ void MainWindow::open_settings() {
       api_.mark_assistant_summary_stale();
       last_assistant_due_ = api_.assistant_summary_due();
 
-      const std::shared_ptr<lnb::GenerationTask> current = api_.current_task();
-      last_assistant_busy_ = current != nullptr && !current->is_terminal() &&
-          std::none_of(
-              conversations_.begin(), conversations_.end(),
-              [&current](const auto& entry) {
-                return entry.second != nullptr && entry.second->task() == current;
-              }
-          );
+      last_assistant_busy_ = api_.assistant_busy();
 
       for (auto& [id, view] : conversations_) {
         if (view != nullptr) {
@@ -971,19 +964,9 @@ void MainWindow::poll_conversations() {
   const bool assistant_due = api_.assistant_summary_due();
 
   // "Busy" here means the shared assistant fold, not a session turn: a session
-  // turn already disables every composer through api_.busy(), and querying the
-  // session trigger while that turn writes the database is unnecessary.
-  const std::shared_ptr<lnb::GenerationTask> current = api_.current_task();
-  bool assistant_busy = false;
-
-  if (current != nullptr && !current->is_terminal()) {
-    assistant_busy = std::none_of(
-        views.begin(), views.end(),
-        [&current](ConversationView* view) {
-          return view != nullptr && view->task() == current;
-        }
-    );
-  }
+  // turn only disables its own composer now, and querying the session trigger
+  // while that turn writes the database is unnecessary.
+  const bool assistant_busy = api_.assistant_busy();
 
   if (assistant_due != last_assistant_due_ || assistant_busy != last_assistant_busy_) {
     last_assistant_due_ = assistant_due;
@@ -1035,8 +1018,7 @@ void MainWindow::update_task_indicator() {
 
   // Count the running tasks without touching the database: this runs on every
   // poll tick, while the full entry list is only built for a visible window.
-  const std::shared_ptr<lnb::GenerationTask> current = api_.current_task();
-  bool current_is_view = false;
+  const std::shared_ptr<lnb::GenerationTask> assistant = api_.assistant_task();
   int running = 0;
 
   for (const auto& [id, view] : conversations_) {
@@ -1044,23 +1026,13 @@ void MainWindow::update_task_indicator() {
       continue;
     }
 
-    const std::shared_ptr<lnb::GenerationTask> task = view->task();
-
-    if (task == nullptr) {
-      continue;
-    }
-
-    if (task == current) {
-      current_is_view = true;
-    }
-
     if (view->busy()) {
       ++running;
     }
   }
 
-  // The shared assistant fold is not owned by any session view.
-  if (current != nullptr && !current_is_view && !current->is_terminal()) {
+  // The shared assistant fold has its own slot, shared by no session view.
+  if (api_.assistant_busy()) {
     ++running;
   }
 
@@ -1098,9 +1070,8 @@ void MainWindow::update_task_indicator() {
   };
 
   // One entry per session view that has a task (running or the last finished
-  // one), plus the shared assistant fold when it is not owned by a view. The
-  // interface runs one task at a time, so a finished view task stays visible
-  // until the next turn replaces it.
+  // one), plus the shared assistant fold when it has ever run. Session slots and
+  // the assistant slot are separate, so no task belongs to two entries.
   std::vector<TasksWindow::Entry> entries;
 
   for (const auto& [id, view] : conversations_) {
@@ -1134,8 +1105,8 @@ void MainWindow::update_task_indicator() {
     entries.push_back(std::move(entry));
   }
 
-  if (current != nullptr && !current_is_view) {
-    const bool busy = !current->is_terminal();
+  if (assistant != nullptr) {
+    const bool busy = !assistant->is_terminal();
 
     TasksWindow::Entry entry;
     entry.id = 0;
@@ -1144,7 +1115,7 @@ void MainWindow::update_task_indicator() {
     entry.cancellable = busy;
     entry.title = trs("Assistant memory");
 
-    const lnb::GenerationTask::Snapshot snapshot = current->snapshot();
+    const lnb::GenerationTask::Snapshot snapshot = assistant->snapshot();
     entry.rounds = snapshot.rounds;
     entry.elapsed_ms = snapshot.elapsed_ms;
     entry.error = from_utf8(snapshot.error);
@@ -1164,7 +1135,7 @@ void MainWindow::open_tasks_window() {
     // never pays for the (potentially large) request bodies it recorded.
     tasks_window_->set_log_provider([this](std::uint64_t id) -> QString {
       if (id == 0) {
-        const auto task = api_.current_task();
+        const auto task = api_.assistant_task();
         return task != nullptr ? from_utf8(task->log_text()) : QString();
       }
 
@@ -1178,7 +1149,7 @@ void MainWindow::open_tasks_window() {
     // assistant fold can be cancelled: the session composer never offers it.
     tasks_window_->set_cancel_handler([this](std::uint64_t id) {
       if (id == 0) {
-        api_.cancel_generation();
+        api_.cancel_assistant();
       } else {
         const auto it = conversations_.find(static_cast<std::uint32_t>(id));
 
@@ -1225,7 +1196,7 @@ void MainWindow::edit_session(std::uint32_t session_id) {
 
   SessionEditor editor(api_, session_id, this);
 
-  // A manual "Summarize now" runs as the session's own background task, so it
+  // A manual "Update memory now" runs as the session's own background task, so it
   // shows up in the tasks window like any other turn and can never race a
   // generation on the same session. The editor drives the view that owns that
   // task; it is created on first use here, without switching the visible pane.
@@ -1288,10 +1259,12 @@ void MainWindow::update_header() {
 
   const lnb::api::ContextUsage usage = api_.context_usage(current_session_);
 
-  header_summarization_trigger_->setText(trs("summarisation trigger: ") + format_tokens(usage.used_tokens, usage.limit_tokens));
+  header_summarization_trigger_->setText(
+      trs("memory trigger: ") + format_tokens(usage.used_tokens, usage.limit_tokens)
+  );
   header_summarization_trigger_->setToolTip(
-      trs("%1 / %2 conversation tokens (system prompt excluded; the collapse "
-          "fires at the limit)")
+      trs("%1 / %2 conversation tokens (system prompt excluded; the memory "
+          "update fires at the limit)")
           .arg(usage.used_tokens)
           .arg(usage.limit_tokens)
   );

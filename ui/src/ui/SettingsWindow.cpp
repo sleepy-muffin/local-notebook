@@ -774,13 +774,13 @@ QWidget* SettingsWindow::build_assistant_page() {
   memory_header->addWidget(section_label(memory_block, trs("Assistant memory")));
   memory_header->addStretch(1);
 
-  assistant_summarize_ = new QPushButton(trs("Summarize now"), memory_block);
+  assistant_summarize_ = new QPushButton(trs("Update memory now"), memory_block);
   assistant_summarize_->setObjectName(QStringLiteral("Secondary"));
   assistant_summarize_->setToolTip(
       trs(
-          "Fold the recent messages of every session into the memory below, ignoring "
-          "the automatic trigger. Idempotent: pressing it again with no new messages "
-          "changes nothing."
+          "Merge the recent messages of every session into the memory below, "
+          "ignoring the automatic memory trigger. Idempotent: pressing it again "
+          "with no new messages changes nothing."
       )
   );
   memory_header->addWidget(assistant_summarize_);
@@ -791,7 +791,7 @@ QWidget* SettingsWindow::build_assistant_page() {
   assistant_memory_->setMinimumHeight(160);
   assistant_memory_->setPlaceholderText(
       trs(
-          "Automatically maintained summary shared across every session. Edit to "
+          "Automatically maintained record shared across every session. Edit to "
           "correct it, or clear it to rebuild it from the transcript."
       )
   );
@@ -807,13 +807,14 @@ QWidget* SettingsWindow::build_assistant_page() {
   docs->setSizePolicy(docs_policy);
   docs->setText(trs(
       "<b>How assistant memory works</b><br>"
-      "This memory is shared across every session of the assistant. It is folded from "
+      "This memory is shared across every session of the assistant. It is merged from "
       "the recent messages of all sessions (bounded by <i>Trigger tokens</i>) together "
-      "with each session's own summary (bounded by <i>Session pool</i>). Older sessions "
+      "with each session's own memory (bounded by <i>Session pool</i>). Older sessions "
       "may therefore be forgotten.<br><br>"
-      "<b>Summarize now</b> ignores the automatic trigger and folds on demand. It is "
-      "idempotent: running it again with no new messages reads the same set and produces "
-      "the same memory. Custom instructions are kept separate and are never touched."
+      "<b>Update memory now</b> ignores the automatic trigger and merges on demand. It "
+      "is idempotent: running it again with no new messages reads the same set and "
+      "produces the same memory. Custom instructions are kept separate and are never "
+      "touched."
   ));
   memory_layout->addWidget(docs);
 
@@ -1132,15 +1133,15 @@ void SettingsWindow::summarize_assistant_now() {
     return;
   }
 
-  // The interface runs one task at a time; a fold already in flight is left to
-  // finish (it can be watched — and cancelled — in the tasks window).
-  if (api_.busy()) {
+  // The shared fold has its own task slot; a session turn no longer blocks it,
+  // and it waits for those turns before reading their rows.
+  if (api_.assistant_busy()) {
     return;
   }
 
   assistant_summarizing_ = true;
   assistant_summarize_->setEnabled(false);
-  assistant_summarize_->setText(trs("Summarizing..."));
+  assistant_summarize_->setText(trs("Updating memory..."));
 
   // The review runs on the worker thread and blocks on the interface thread, so
   // a decline is recorded here and read after the task finishes.
@@ -1162,7 +1163,7 @@ void SettingsWindow::summarize_assistant_now() {
   if (task == nullptr) {
     assistant_summarizing_ = false;
     assistant_summarize_->setEnabled(true);
-    assistant_summarize_->setText(trs("Summarize now"));
+    assistant_summarize_->setText(trs("Update memory now"));
     return;
   }
 
@@ -1185,7 +1186,7 @@ void SettingsWindow::summarize_assistant_now() {
 
   assistant_summarizing_ = false;
   assistant_summarize_->setEnabled(true);
-  assistant_summarize_->setText(trs("Summarize now"));
+  assistant_summarize_->setText(trs("Update memory now"));
 
   // A declined review is a deliberate no-op: say nothing about it.
   if (declined) {
@@ -1201,7 +1202,7 @@ void SettingsWindow::summarize_assistant_now() {
 
   if (snapshot.status == lnb::GenerationTask::Status::FAILED) {
     QMessageBox::warning(
-        this, trs("Summarization Failed"), to_qstring(snapshot.error)
+        this, trs("Memory Update Failed"), to_qstring(snapshot.error)
     );
     return;
   }
@@ -1216,8 +1217,8 @@ void SettingsWindow::summarize_assistant_now() {
 
   if (memory.isEmpty() || memory == previous) {
     QMessageBox::information(
-        this, trs("Nothing to Summarize"),
-        trs("There is no new conversation to fold into memory yet.")
+        this, trs("Nothing to Update"),
+        trs("There is no new conversation to merge into memory yet.")
     );
   }
 }

@@ -94,7 +94,7 @@ private:
 
   // Folds the recent conversation of every session into the assistant memory,
   // ignoring the automatic trigger (the assistant-level counterpart of the
-  // session editor's "Summarize now").
+  // session editor's "Update memory now").
   void summarize_assistant_now();
 
   void update_account_page();

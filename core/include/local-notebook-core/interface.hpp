@@ -39,7 +39,18 @@ public:
 
   // Opens the assistant's directory and the database it owns. Any turn still in
   // flight is cancelled and joined before the old database is replaced.
-  void open_assistant(std::string uuid, Assistant assistant);
+  //
+  // Only one process may have an assistant open at a time. The guard is an
+  // operating-system lock on data/<uuid>/lock, released automatically if this
+  // process dies, so a crashed instance never leaves a stale lock behind.
+  // Returns false when another running instance owns the assistant; the
+  // interface then keeps whatever it had open, and last_error() describes the
+  // owner.
+  bool open_assistant(std::string uuid, Assistant assistant);
+
+  // The reason the last open_assistant() failed, or an empty string. Written on
+  // the thread that called open_assistant().
+  [[nodiscard]] std::string last_error() const;
 
   [[nodiscard]] bool has_assistant() const;
   [[nodiscard]] std::string assistant_uuid() const;
@@ -107,15 +118,24 @@ public:
   reasoning_efforts_with_stored(const std::string &stored) const;
 
   // --- Turns -------------------------------------------------------------
+  //
+  // Every session has its own task slot, so a turn or fold in one session never
+  // blocks another session. The single shared assistant fold is the exception:
+  // while it runs, no session may start a new task (it would race the rows it
+  // reads), and it waits for the session tasks already in flight before folding.
 
-  // True while a turn or summarisation is in flight. The interface runs one
-  // task at a time, so a caller can use this to refuse a send that would
-  // otherwise cancel another session's work.
+  // True while any session task or the assistant fold is in flight.
   [[nodiscard]] bool busy() const;
 
-  // The current (or last finished) task, shared with the interface. nullptr
-  // before any task has been started.
-  [[nodiscard]] std::shared_ptr<GenerationTask> current_task() const;
+  // True while this session's task is in flight.
+  [[nodiscard]] bool session_busy(std::uint32_t session_id) const;
+
+  // True while the shared assistant fold is in flight.
+  [[nodiscard]] bool assistant_busy() const;
+
+  // The assistant fold's current (or last finished) task, shared with the
+  // interface. nullptr before any assistant fold has been started.
+  [[nodiscard]] std::shared_ptr<GenerationTask> assistant_task() const;
 
   // True when the shared assistant-memory trigger is reached. The answer is
   // cached; mark_assistant_summary_stale() drops the cache after a change that
@@ -131,27 +151,36 @@ public:
   [[nodiscard]] error_code session_prompt(std::uint32_t session_id, const std::string &prompt);
 
   // Starts the turn for the prompt session_prompt() just stored. Returns nullptr
-  // when no prompt is pending or no assistant is open.
+  // when no assistant is open, the session already has a task in flight, or the
+  // shared assistant fold is running.
+  //
+  // The session id is explicit rather than carried over from session_prompt(),
+  // so two sessions can never race over one "pending" slot.
   //
   // The returned task is shared with the interface, which keeps it alive while
   // the executor runs; the caller only polls its snapshot.
-  [[nodiscard]] std::shared_ptr<GenerationTask> start_generation();
+  [[nodiscard]] std::shared_ptr<GenerationTask> start_generation(std::uint32_t session_id);
 
   // Folds a session's overflow into memory. `force` ignores the automatic
-  // trigger. The task is polled exactly like a turn.
+  // trigger. The task is polled exactly like a turn. Returns nullptr when the
+  // session or the assistant fold already owns a task.
   [[nodiscard]] std::shared_ptr<GenerationTask>
   summarize_session(std::uint32_t session_id, bool force, SummaryApprover approver = {});
 
   // Folds every session's contribution into the assistant memory. The interface
-  // persists the resulting memory itself.
+  // persists the resulting memory itself. While it runs it blocks new session
+  // tasks, and it first waits for the ones already in flight.
   [[nodiscard]] std::shared_ptr<GenerationTask>
   summarize_assistant(bool force, SummaryApprover approver = {});
 
-  // Requests the in-flight turn to stop. The partial reply is discarded.
-  void cancel_generation();
+  // Requests one session's in-flight task to stop. The partial reply is discarded.
+  void cancel_session(std::uint32_t session_id);
 
-  // Waits for the executor job to exit. The destructor calls this, so an
-  // interface is never torn down while its worker still reads the database.
+  // Requests the shared assistant fold to stop.
+  void cancel_assistant();
+
+  // Waits for every executor job to exit. The destructor calls this, so an
+  // interface is never torn down while a worker still reads the database.
   void wait_for_generation();
 
 private:

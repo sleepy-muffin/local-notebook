@@ -850,6 +850,16 @@ struct TranscriptCanvas::Private {
       return;
     }
 
+    // While the reader holds the scrollbar thumb, Qt keeps the value under the
+    // pointer: a page loaded at value 0 would be scrolled straight back to 0 on
+    // the next mouse move and immediately page again, so the whole history
+    // would stream in. Waiting for the release means the thumb visibly moves
+    // down once the page is inserted (the release handler below asks for this
+    // check again).
+    if (q->verticalScrollBar()->isSliderDown()) {
+      return;
+    }
+
     // Only the top of the window asks for history. When the transcript is
     // shorter than the viewport the scrollbar stays at 0, which is exactly the
     // signal that another page should fill it.
@@ -1175,6 +1185,13 @@ TranscriptCanvas::TranscriptCanvas(QWidget* parent)
   d_->drag_timer->setInterval(30);
 
   connect(d_->drag_timer, &QTimer::timeout, this, [this]() { d_->auto_scroll(); });
+
+  // A drag that ended at the top deferred its page load until the thumb was
+  // released, so ask for the check now: if the view is still at the top, one
+  // page is inserted and the anchored restore moves the thumb down.
+  connect(verticalScrollBar(), &QScrollBar::sliderReleased, this, [this]() {
+    d_->maybe_load_more_deferred();
+  });
 
   refresh_style();
 }

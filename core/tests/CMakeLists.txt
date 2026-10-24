@@ -155,3 +155,43 @@ target_link_libraries(
 )
 
 add_test(NAME http-headers COMMAND http-headers-test)
+
+add_executable(
+  instance-lock-test
+  instance_lock_test.cpp
+)
+
+target_link_libraries(
+  instance-lock-test
+  PRIVATE
+    local-notebook-core
+)
+
+add_test(NAME instance-lock COMMAND instance-lock-test)
+
+add_executable(
+  assistant-memory-filter-test
+  assistant_memory_filter_test.cpp
+)
+
+target_link_libraries(
+  assistant-memory-filter-test
+  PRIVATE
+    local-notebook-core
+)
+
+add_test(NAME assistant-memory-filter COMMAND assistant-memory-filter-test)
+
+add_executable(
+  concurrent-sessions-test
+  concurrent_sessions_test.cpp
+)
+
+target_link_libraries(
+  concurrent-sessions-test
+  PRIVATE
+    local-notebook-core
+    Threads::Threads
+)
+
+add_test(NAME concurrent-sessions COMMAND concurrent-sessions-test)

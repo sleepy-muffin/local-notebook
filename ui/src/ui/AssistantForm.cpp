@@ -24,8 +24,8 @@ using namespace dialog_style;
 
 namespace {
 
-// Presets for the assistant-level summarisation budgets. Selecting one only fills
-// the fields; it never saves, so the values can still be tweaked before Save.
+// Presets for the assistant-level memory budgets. Selecting one only fills the
+// fields; it never saves, so the values can still be tweaked before Save.
 struct SummaryPreset {
   const char* name;
   int memory_budget;
@@ -105,13 +105,14 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
     form->addRow(field_label(this, trs("Reasoning")), reasoning_);
 
     // A description indented under the control, so it reads as part of the
-    // Reasoning row: the level applies to new sessions and to the assistant-level
-    // summariser, while a turn and the session summariser use the session's level.
+    // Reasoning row: the level applies to new sessions and to assistant-wide
+    // memory updates, while a turn and a session memory update use the session's
+    // level.
     form->addRow(
         QString(), field_label(this, trs(
-                       "Applies to a new session's starting level and to assistant-level "
-                       "summarisation, the shared memory across sessions. Chat turns and "
-                       "session-level summarisation use the session's own level instead."
+                       "Applies to a new session's starting level and to assistant-wide "
+                       "memory updates, the shared memory across sessions. Chat turns "
+                       "and session memory updates use the session's own level instead."
                    ))
     );
 
@@ -151,7 +152,7 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
 
     // Request windows live with the connection because they describe how long a
     // silent socket is tolerated, not how much context is sent. A turn and a
-    // summarisation pass legitimately need different windows.
+    // memory update legitimately need different windows.
     turn_timeout_ = make_spin(this, 180);
     turn_timeout_->setObjectName(QStringLiteral("AssistantTurnTimeout"));
     turn_timeout_->setRange(30, 3600);
@@ -167,8 +168,8 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
     summary_timeout_->setSingleStep(60);
     summary_timeout_->setSuffix(QStringLiteral(" s"));
     summary_timeout_->setToolTip(
-        trs("Maximum silence, in seconds, while a session or assistant "
-            "summarisation runs. Reasoning models often need longer.")
+        trs("Maximum silence, in seconds, while a session or assistant memory "
+            "update runs. Reasoning models often need longer.")
     );
 
     form->addRow(field_label(this, trs("API URL")), api_url_);
@@ -176,13 +177,13 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
     form->addRow(field_label(this, trs("Proxy")), proxy_);
     form->addRow(field_label(this, trs("Turn timeout")), turn_timeout_);
     form->addRow(
-        field_label(this, trs("Summarisation timeout")), summary_timeout_
+        field_label(this, trs("Memory update timeout")), summary_timeout_
     );
     form->addRow(
         QString(), field_label(this, trs(
                        "Seconds a request may wait for the next response byte "
                        "before it is abandoned. Chat turns use the turn timeout; "
-                       "session and assistant summarisation use the summarisation "
+                       "session and assistant memory updates use the memory update "
                        "timeout. Connecting and uploading keep a fixed 60-second "
                        "window."
                    ))
@@ -201,8 +202,8 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
 
   content->addWidget(h_separator(this));
 
-  // ---- Summarisation ----
-  content->addWidget(section_label(this, trs("Summarisation")));
+  // ---- Memory triggers ----
+  content->addWidget(section_label(this, trs("Memory triggers")));
 
   preset_ = new ComboBox(this);
   preset_->setObjectName(QStringLiteral("SummaryPreset"));
@@ -211,17 +212,44 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
     preset_->addItem(trs(summary_preset.name));
   }
   preset_->setToolTip(
-      trs("Fill the budgets below with a preset. Nothing is saved until you press Save.")
+      trs("Fill the memory trigger and budget fields below with a preset. "
+          "Nothing is saved until you press Save.")
   );
   content->addWidget(preset_);
 
   {
     auto* form = form_layout(this);
 
-    summary_token_budget_ = make_spin(this, 0);
-    summary_reasoning_headroom_ = make_spin(this, 0);
     summary_trigger_ = make_spin(this, 0);
     summary_session_budget_ = make_spin(this, 0);
+
+    summary_trigger_->setToolTip(
+        trs(
+            "New tokens across all sessions that trigger a memory update; also the cap "
+            "on the recent messages gathered."
+        )
+    );
+    summary_session_budget_->setToolTip(
+        trs(
+            "Token cap on the per-session memories included in the assistant memory."
+        )
+    );
+
+    form->addRow(field_label(this, trs("Trigger tokens")), summary_trigger_);
+    form->addRow(field_label(this, trs("Session pool")), summary_session_budget_);
+    content->addLayout(form);
+  }
+
+  content->addWidget(h_separator(this));
+
+  // ---- Budgets ----
+  content->addWidget(section_label(this, trs("Budgets")));
+
+  {
+    auto* form = form_layout(this);
+
+    summary_token_budget_ = make_spin(this, 0);
+    summary_reasoning_headroom_ = make_spin(this, 0);
 
     summary_token_budget_->setToolTip(
         trs("Target size of the generated assistant memory.")
@@ -232,38 +260,25 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
             "visible memory is not starved."
         )
     );
-    summary_trigger_->setToolTip(
-        trs(
-            "New tokens across all sessions that trigger the summariser; also the cap "
-            "on the recent messages gathered."
-        )
-    );
-    summary_session_budget_->setToolTip(
-        trs(
-            "Token cap on the per-session summaries included in the assistant fold."
-        )
-    );
 
     form->addRow(field_label(this, trs("Memory budget")), summary_token_budget_);
     form->addRow(
         field_label(this, trs("Reasoning headroom")), summary_reasoning_headroom_
     );
-    form->addRow(field_label(this, trs("Trigger tokens")), summary_trigger_);
-    form->addRow(field_label(this, trs("Session pool")), summary_session_budget_);
     content->addLayout(form);
-
-    connect(preset_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
-      if (index <= 0) {
-        return;
-      }
-
-      const SummaryPreset& summary_preset = kSummaryPresets[index - 1];
-      summary_token_budget_->setValue(summary_preset.memory_budget);
-      summary_reasoning_headroom_->setValue(summary_preset.headroom);
-      summary_trigger_->setValue(summary_preset.trigger);
-      summary_session_budget_->setValue(summary_preset.session_pool);
-    });
   }
+
+  connect(preset_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
+    if (index <= 0) {
+      return;
+    }
+
+    const SummaryPreset& summary_preset = kSummaryPresets[index - 1];
+    summary_token_budget_->setValue(summary_preset.memory_budget);
+    summary_reasoning_headroom_->setValue(summary_preset.headroom);
+    summary_trigger_->setValue(summary_preset.trigger);
+    summary_session_budget_->setValue(summary_preset.session_pool);
+  });
 
   content->addStretch(1);
 }

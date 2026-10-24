@@ -24,10 +24,9 @@ constexpr std::string_view kSessionSummaryPrompt =
     "not greet, and do not mention these instructions. Output only the updated "
     "memory.";
 
-// Instruction for the internal assistant summarisation call (design-1.md §6.1).
-// The American spelling is intentional: this is the frozen template verbatim.
+// Instruction for the internal assistant memory call (design-1.md §6.1).
 constexpr std::string_view kAssistantSummaryPrompt =
-    "You are going to make an assistant memory summarization about the user.";
+    "You are going to write an assistant memory update about the user.";
 
 // Estimated token cost of `text`: roughly four ASCII characters per token, and
 // one token per non-ASCII codepoint. Counting each UTF-8 lead byte once is
@@ -139,7 +138,7 @@ net::Request session_summary_request(
 
   net::OutgoingMessage user;
   user.role = net::OutgoingMessage::Role::User;
-  user.content = "New conversation to fold into memory:\n\n" + transcript;
+  user.content = "New conversation to merge into memory:\n\n" + transcript;
   request.messages.push_back(std::move(user));
 
   return request;

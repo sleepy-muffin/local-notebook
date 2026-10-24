@@ -22,6 +22,7 @@ namespace lnb::store {
 //   <root>/<uuid>/settings.json       assistant-level settings
 //   <root>/<uuid>/data.db             sessions + messages
 //   <root>/<uuid>/local-notebook.log  assistant-level log
+//   <root>/<uuid>/lock                one-instance guard (see utils/lock.hpp)
 //
 // The root defaults to the relative "data" so headless tests and the screenshot
 // tool can sandbox it by changing the working directory. The application calls
@@ -39,6 +40,10 @@ void set_data_root(std::filesystem::path root);
 [[nodiscard]] std::filesystem::path assistant_settings(std::string_view uuid);
 [[nodiscard]] std::filesystem::path assistant_db(std::string_view uuid);
 [[nodiscard]] std::filesystem::path assistant_log(std::string_view uuid);
+
+// The instance lock held while this process has the assistant open. It is
+// deliberately never deleted; see instance_lock for why.
+[[nodiscard]] std::filesystem::path assistant_lock(std::string_view uuid);
 
 } // namespace paths
 

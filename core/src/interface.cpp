@@ -1,11 +1,14 @@
 #include "local-notebook-core/interface.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <exception>
 #include <filesystem>
 #include <mutex>
+#include <thread>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include "app/assistant_io.hpp"
 #include "context/context.hpp"
@@ -13,6 +16,7 @@
 #include "shark/log.hpp"
 #include "net/client.hpp"
 #include "store/managers.hpp"
+#include "utils/lock.hpp"
 #include "utils/util.hpp"
 
 namespace lnb::api {
@@ -56,14 +60,22 @@ net::Remote remote_for(const Assistant& assistant) {
 struct interface::impl {
   using executor = shark::async::multi_executor<void()>;
 
+  // One task per owner: a session id, or the single shared assistant fold. A
+  // slot keeps the last task alive for the tasks window, exactly as the old
+  // single-slot interface did, but each session has its own.
+  struct task_slot {
+    std::shared_ptr<GenerationTask> task;
+    executor::handle worker;
+
+    [[nodiscard]] bool busy() const {
+      return task != nullptr && !task->is_terminal();
+    }
+  };
+
   impl() {
-    // Two lanes: one for the turn, one so a summarisation pass can run without
-    // the executor ever needing a thread of its own. The interface still keeps
-    // at most one task in flight, so the second lane is headroom, not a licence
-    // to run turns concurrently.
-    //
-    // Important: Since we don't block other sessions while a session is running.
-    // There should be more than 2 threads so the user can launch many tasks.
+    // One lane per concurrently running task. Sessions only ever run their own
+    // turn, so five lanes comfortably cover a handful of sessions plus the
+    // assistant fold; a queued job simply waits for a free thread.
     multi_executor_ = std::make_unique<executor>(5);
   }
 
@@ -85,46 +97,114 @@ struct interface::impl {
     shark::log::info("===== local-notebook session started =====");
   }
 
-  // Cancels the in-flight turn (if any) and waits for its executor job. Called
-  // before the database is replaced and from the destructor.
+  // Cancels every in-flight task and waits for its executor job. Called before
+  // the database is replaced and from the destructor.
   void stop_worker() {
-    if (task != nullptr) {
+    std::vector<std::shared_ptr<GenerationTask>> tasks;
+    std::vector<executor::handle> workers;
+
+    {
+      std::scoped_lock lock(tasks_mutex);
+
+      for (auto& [id, slot] : session_tasks) {
+        if (slot.task != nullptr) {
+          tasks.push_back(slot.task);
+        }
+
+        workers.push_back(slot.worker);
+        slot.task.reset();
+        slot.worker = {};
+      }
+
+      session_tasks.clear();
+
+      if (assistant_slot.task != nullptr) {
+        tasks.push_back(assistant_slot.task);
+      }
+
+      workers.push_back(assistant_slot.worker);
+      assistant_slot.task.reset();
+      assistant_slot.worker = {};
+    }
+
+    // Cancel outside the lock: a worker may already be waiting for tasks_mutex
+    // (the assistant fold waits for the session slots).
+    for (const auto& task : tasks) {
       task->cancel();
     }
 
-    worker.request_stop();
-    worker.wait();
-    worker = {};
-    task.reset();
+    for (auto& worker : workers) {
+      worker.wait();
+    }
   }
 
-  // Runs `work` on the executor and publishes it as the current task. The
-  // returned task is the same object the caller polls.
+  // Drops the slots of sessions whose last task has finished and whose job has
+  // exited. The interface only needs a slot to refuse concurrent work; the UI's
+  // controller keeps its own reference for the tasks window, so nothing is lost.
+  // Caller holds tasks_mutex.
+  void prune_finished_sessions() {
+    for (auto it = session_tasks.begin(); it != session_tasks.end();) {
+      if (!it->second.busy() && it->second.worker.finished()) {
+        it = session_tasks.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+
+  // Runs `work` on the executor and publishes it in `slot`. Returns nullptr when
+  // the slot is already busy; a caller never cancels another task to make room.
+  //
+  // The previous job is joined *outside* the lock before the slot is reused, so
+  // an assistant fold that is waiting on tasks_mutex cannot deadlock against a
+  // replacement.
   template<typename Work>
-  std::shared_ptr<GenerationTask> spawn_task(Work&& work) {
-    stop_worker();
+  std::shared_ptr<GenerationTask> spawn_task(task_slot& slot, Work&& work) {
+    executor::handle previous;
+
+    {
+      std::scoped_lock lock(tasks_mutex);
+
+      if (slot.busy()) {
+        return nullptr;
+      }
+
+      previous = slot.worker;
+    }
+
+    previous.wait();
 
     auto next = std::make_shared<GenerationTask>();
-    task = next;
 
-    worker = multi_executor_->spawn(
-        [next, work = std::forward<Work>(work)](std::stop_token) mutable {
-          // A cancel that landed before the job ran leaves the task terminal;
-          // start() refuses it and there is nothing to do.
-          if (!next->start()) {
-            return;
-          }
+    {
+      std::scoped_lock lock(tasks_mutex);
 
-          try {
-            work(*next);
-            next->complete();
-          } catch (const std::exception& error) {
-            next->fail(error.what());
-          } catch (...) {
-            next->fail("Generation failed");
+      // Defensive: a second caller may have taken the slot while the previous
+      // job was joined.
+      if (slot.busy()) {
+        return nullptr;
+      }
+
+      slot.task = next;
+      slot.worker = multi_executor_->spawn(
+          [next, work = std::forward<Work>(work)](std::stop_token) mutable {
+            // A cancel that landed before the job ran leaves the task terminal;
+            // start() refuses it and there is nothing to do.
+            if (!next->start()) {
+              return;
+            }
+
+            try {
+              work(*next);
+              next->complete();
+            } catch (const std::exception& error) {
+              next->fail(error.what());
+            } catch (...) {
+              next->fail("Generation failed");
+            }
           }
-        }
-    );
+      );
+    }
 
     return next;
   }
@@ -136,6 +216,13 @@ struct interface::impl {
   Assistant assistant;
   mutable std::mutex assistant_mutex;
 
+  // The single live lock for the open assistant's directory. Held until another
+  // assistant is opened or the interface is destroyed.
+  std::unique_ptr<store::instance_lock> assistant_lock;
+
+  // The reason the last open_assistant() failed. Guarded by assistant_mutex.
+  std::string last_error;
+
   // The cached assistant-memory trigger. Guarded by assistant_mutex, and
   // dropped whenever a change can move it.
   mutable std::optional<bool> assistant_due_cache;
@@ -144,50 +231,91 @@ struct interface::impl {
   // through it.
   std::unique_ptr<store::SessionManager> sessions;
 
-  // The session whose prompt is waiting for start_generation().
-  std::optional<std::uint32_t> pending_session_id;
-
-  // The current (or last finished) turn. Shared with the caller so it can poll
-  // after start_generation() returns.
-  std::shared_ptr<GenerationTask> task;
-  executor::handle worker;
+  // Guards the task slots below. Session tasks are keyed by session id; the
+  // assistant fold has its own slot because it is shared by every session.
+  mutable std::mutex tasks_mutex;
+  std::unordered_map<std::uint32_t, task_slot> session_tasks;
+  task_slot assistant_slot;
 };
 
 interface::interface() : impl_(std::make_unique<impl>()) {}
 
 interface::~interface() = default;
 
-void interface::open_assistant(std::string uuid, Assistant assistant) {
-  // The worker reads `sessions` through the impl, so it must be gone before the
-  // database it is using is replaced.
-  impl_->stop_worker();
+bool interface::open_assistant(std::string uuid, Assistant assistant) {
+  const std::string requested = uuid;
+
+  // Reopening the assistant already open in this process must not try to take a
+  // second exclusive lock on the same file (a second open descriptor would
+  // conflict with the one this process already holds).
+  bool already_held = false;
 
   {
     std::scoped_lock lock(impl_->assistant_mutex);
+    already_held = impl_->assistant_lock != nullptr &&
+        impl_->assistant_uuid == requested;
+    impl_->last_error.clear();
+  }
+
+  std::unique_ptr<store::instance_lock> lock;
+
+  if (!already_held) {
+    lock = std::make_unique<store::instance_lock>();
+
+    std::string error;
+
+    if (!lock->acquire(store::paths::assistant_lock(requested), error)) {
+      shark::log::error("cannot open assistant {}: {}", requested, error);
+
+      std::scoped_lock guard(impl_->assistant_mutex);
+      impl_->last_error = std::move(error);
+      return false;
+    }
+  }
+
+  // The worker reads `sessions` through the impl, so it must be gone before the
+  // database it is using is replaced. `stop_worker` also clears every task slot.
+  impl_->stop_worker();
+
+  std::string opened_uuid;
+
+  {
+    std::scoped_lock guard(impl_->assistant_mutex);
     impl_->assistant_uuid = std::move(uuid);
     impl_->assistant = std::move(assistant);
     impl_->assistant_due_cache.reset();
+
+    if (lock != nullptr) {
+      impl_->assistant_lock = std::move(lock);
+    }
+
+    opened_uuid = impl_->assistant_uuid;
   }
 
-  const auto directory = store::paths::assistant_dir(impl_->assistant_uuid);
+  const auto directory = store::paths::assistant_dir(opened_uuid);
   std::error_code error;
   std::filesystem::create_directories(directory, error);
 
   // Everything from here on is written to this assistant's log, including the
   // startup lines buffered before an assistant was chosen.
-  impl_->open_log(impl_->assistant_uuid);
+  impl_->open_log(opened_uuid);
 
   // The manager owns the database from here on: the interface only talks to the
   // store through it.
   impl_->sessions = std::make_unique<store::SessionManager>(
-      store::paths::assistant_db(impl_->assistant_uuid).string()
+      store::paths::assistant_db(opened_uuid).string()
   );
-
-  impl_->pending_session_id.reset();
 
   shark::log::info(
-      "opened assistant {} at {}", impl_->assistant_uuid, directory.string()
+      "opened assistant {} at {}", opened_uuid, directory.string()
   );
+
+  return true;
+}
+
+std::string interface::last_error() const {
+  std::scoped_lock lock(impl_->assistant_mutex);
+  return impl_->last_error;
 }
 
 bool interface::has_assistant() const {
@@ -338,6 +466,10 @@ void interface::delete_session(std::uint32_t session_id) {
     return;
   }
 
+  // Stop the session's own task before its row disappears. The worker bails at
+  // its next stop check; the slot is kept so the tasks window still has its log.
+  cancel_session(session_id);
+
   impl_->sessions->remove(session_id);
   mark_assistant_summary_stale();
 }
@@ -450,6 +582,29 @@ error_code interface::has_session_memory_trigger_met(
 error_code interface::session_prompt(
     std::uint32_t session_id, const std::string& prompt
 ) {
+  if (impl_->sessions == nullptr) {
+    return error_code::ERR_INVALID_SESSION_ID;
+  }
+
+  // A session owns one task at a time, and the shared assistant fold reads every
+  // session's rows: refuse a prompt that would start a task while either is in
+  // flight, instead of letting the new turn corrupt the running one's work.
+  {
+    std::scoped_lock lock(impl_->tasks_mutex);
+
+    impl_->prune_finished_sessions();
+
+    if (impl_->assistant_slot.busy()) {
+      return error_code::ERR_ASSISTANT_BUSY;
+    }
+
+    const auto it = impl_->session_tasks.find(session_id);
+
+    if (it != impl_->session_tasks.end() && it->second.busy()) {
+      return error_code::ERR_SESSION_BUSY;
+    }
+  }
+
   const error_code met = has_session_memory_trigger_met(session_id);
   if (met != error_code::SUCCESS) {
     return met;
@@ -465,18 +620,37 @@ error_code interface::session_prompt(
   message_mgr->append(Role::User, prompt);
   mark_assistant_summary_stale();
 
-  // Remember which session the next start_generation() belongs to.
-  impl_->pending_session_id = session_id;
-
   return error_code::SUCCESS;
 }
 
 bool interface::busy() const {
-  return impl_->task != nullptr && !impl_->task->is_terminal();
+  std::scoped_lock lock(impl_->tasks_mutex);
+
+  if (impl_->assistant_slot.busy()) {
+    return true;
+  }
+
+  return std::any_of(
+      impl_->session_tasks.begin(), impl_->session_tasks.end(),
+      [](const auto& entry) { return entry.second.busy(); }
+  );
 }
 
-std::shared_ptr<GenerationTask> interface::current_task() const {
-  return impl_->task;
+bool interface::session_busy(std::uint32_t session_id) const {
+  std::scoped_lock lock(impl_->tasks_mutex);
+
+  const auto it = impl_->session_tasks.find(session_id);
+  return it != impl_->session_tasks.end() && it->second.busy();
+}
+
+bool interface::assistant_busy() const {
+  std::scoped_lock lock(impl_->tasks_mutex);
+  return impl_->assistant_slot.busy();
+}
+
+std::shared_ptr<GenerationTask> interface::assistant_task() const {
+  std::scoped_lock lock(impl_->tasks_mutex);
+  return impl_->assistant_slot.task;
 }
 
 bool interface::assistant_summary_due() const {
@@ -500,19 +674,29 @@ void interface::mark_assistant_summary_stale() {
   impl_->assistant_due_cache.reset();
 }
 
-std::shared_ptr<GenerationTask> interface::start_generation() {
-  if (impl_->sessions == nullptr || !impl_->pending_session_id.has_value()) {
+std::shared_ptr<GenerationTask> interface::start_generation(
+    std::uint32_t session_id
+) {
+  if (impl_->sessions == nullptr) {
     return nullptr;
   }
 
-  const std::uint32_t session_id = *impl_->pending_session_id;
-  impl_->pending_session_id.reset();
+  {
+    std::scoped_lock lock(impl_->tasks_mutex);
+
+    impl_->prune_finished_sessions();
+
+    if (impl_->assistant_slot.busy()) {
+      return nullptr;
+    }
+  }
 
   // Snapshot the assistant so the worker never reads state the UI thread may be
   // mutating.
   const Assistant snapshot = assistant();
 
   return impl_->spawn_task(
+      impl_->session_tasks[session_id],
       [this, session_id, snapshot](GenerationTask& task) {
         auto session = impl_->sessions->get(session_id);
         if (!session.has_value()) {
@@ -563,9 +747,20 @@ std::shared_ptr<GenerationTask> interface::summarize_session(
     return nullptr;
   }
 
+  {
+    std::scoped_lock lock(impl_->tasks_mutex);
+
+    impl_->prune_finished_sessions();
+
+    if (impl_->assistant_slot.busy()) {
+      return nullptr;
+    }
+  }
+
   const Assistant snapshot = assistant();
 
   return impl_->spawn_task(
+      impl_->session_tasks[session_id],
       [this, session_id, force, approver = std::move(approver), snapshot](
           GenerationTask& task
       ) {
@@ -605,11 +800,45 @@ std::shared_ptr<GenerationTask> interface::summarize_assistant(
   const Assistant snapshot = assistant();
 
   return impl_->spawn_task(
+      impl_->assistant_slot,
       [this, force, approver = std::move(approver), snapshot](
           GenerationTask& task
       ) {
-        const net::Remote remote = remote_for(snapshot);
+        // The fold reads every session's rows, so it must not overlap a session
+        // turn. New session tasks are already blocked (the assistant slot is
+        // busy); wait for the ones that started first, without holding the task
+        // lock so a finishing worker can publish its result.
+        std::vector<impl::executor::handle> workers;
+
+        {
+          std::scoped_lock lock(impl_->tasks_mutex);
+
+          workers.reserve(impl_->session_tasks.size());
+
+          for (const auto& [id, slot] : impl_->session_tasks) {
+            workers.push_back(slot.worker);
+          }
+        }
+
+        if (std::any_of(workers.begin(), workers.end(), [](const auto& worker) {
+              return !worker.finished();
+            })) {
+          task.set_status("Waiting for other tasks...");
+        }
+
         const std::stop_token stop = task.stop_token();
+
+        for (auto& worker : workers) {
+          while (!worker.finished()) {
+            if (stop.stop_requested()) {
+              return;
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+          }
+        }
+
+        const net::Remote remote = remote_for(snapshot);
 
         std::string memory;
 
@@ -636,14 +865,42 @@ std::shared_ptr<GenerationTask> interface::summarize_assistant(
   );
 }
 
-void interface::cancel_generation() {
-  if (impl_->task != nullptr) {
-    impl_->task->cancel();
+void interface::cancel_session(std::uint32_t session_id) {
+  std::scoped_lock lock(impl_->tasks_mutex);
+
+  const auto it = impl_->session_tasks.find(session_id);
+
+  if (it != impl_->session_tasks.end() && it->second.task != nullptr) {
+    it->second.task->cancel();
+  }
+}
+
+void interface::cancel_assistant() {
+  std::scoped_lock lock(impl_->tasks_mutex);
+
+  if (impl_->assistant_slot.task != nullptr) {
+    impl_->assistant_slot.task->cancel();
   }
 }
 
 void interface::wait_for_generation() {
-  impl_->worker.wait();
+  std::vector<impl::executor::handle> workers;
+
+  {
+    std::scoped_lock lock(impl_->tasks_mutex);
+
+    workers.reserve(impl_->session_tasks.size() + 1);
+
+    for (const auto& [id, slot] : impl_->session_tasks) {
+      workers.push_back(slot.worker);
+    }
+
+    workers.push_back(impl_->assistant_slot.worker);
+  }
+
+  for (auto& worker : workers) {
+    worker.wait();
+  }
 }
 
 // --- Process-wide storage and assistant registry ------------------------

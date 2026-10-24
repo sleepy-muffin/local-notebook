@@ -94,8 +94,11 @@ int main(int argc, char** argv) {
     const std::vector<std::string> uuids = lnb::api::scan_assistants();
 
     if (std::find(uuids.begin(), uuids.end(), last) != uuids.end()) {
-      api.open_assistant(last, lnb::api::load_assistant(last));
-      opened = true;
+      opened = api.open_assistant(last, lnb::api::load_assistant(last));
+
+      if (!opened) {
+        shark::log::error("cannot auto-open assistant: {}", api.last_error());
+      }
     }
   }
 

@@ -179,11 +179,11 @@ int main() {
       "session_prompt failed"
   );
 
-  const auto task = api.start_generation();
+  const auto task = api.start_generation(session_id);
   const bool finished = wait_terminal(task, 5s);
 
   if (!finished) {
-    api.cancel_generation();
+    api.cancel_session(session_id);
   }
 
   api.wait_for_generation();

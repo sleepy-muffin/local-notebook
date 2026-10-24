@@ -160,3 +160,49 @@ I will try to make this list ordered by time.
   defaults to off.
 
 - (Refinement) It now shows reviewer launched by the altered button on the right of the input box when either the session-level trigger or the assistant-level trigger is met.
+
+- (Refinement) Scrollbar strip should move when history is loaded. Currently, it will if it's scrolled, but the strip will not move if it's because the user drags the strip.
+  The transcript no longer pages history while the scrollbar thumb is held. A drag
+  that reaches the top defers its single page load until `sliderReleased`, so the
+  anchored restore moves the thumb down by the inserted page instead of Qt
+  snapping it back to the pointer and paging again. Wheel, keyboard and track
+  scrolling keep paging as before.
+- (Refinement) Summarization settings should be separated from budget settings.
+  The session editor now groups its fields into *Summarisation* (summary trigger,
+  retained tokens), *Budgets* (memory budget, reasoning headroom, response
+  budget) and *Tool limits* (output cap, rounds, calls). The assistant form
+  separates *Summarisation* (trigger tokens, session pool) from *Budgets* (memory
+  budget, reasoning headroom). Presets still fill every group.
+- (Refinement) Generation tasks should not block other sessions, only assistant-level summerization should block others.
+  The core keeps one task slot per session plus one slot for the shared
+  assistant fold. A turn or session summarisation in one session no longer
+  cancels or blocks another; the old single `task`/`worker` pair and its global
+  "busy" refusal are gone. The assistant fold is the only cross-session
+  operation: while it runs, new prompts are refused (`ERR_ASSISTANT_BUSY`) and
+  it waits for the session turns already in flight before reading their rows.
+  `start_generation()` now takes the session id explicitly (no shared "pending
+  prompt" slot), `cancel_generation()` became `cancel_session()` and
+  `cancel_assistant()`, and the UI uses `session_busy()`, `assistant_busy()` and
+  `assistant_task()` instead of inferring the fold from one global task.
+- (New Function) Make lock files to prevent the same assistant (so it's stored in the assistant directory, which is under `UUID/`) to be opened by more than one instances. Automatically remove it if it's stale (The program should check it, the lock file might do this by saving a PID for later programs to check if it's stale, on the case it's stale, the program can remove it). Afterall, it's the first time I make draft for such specific demand, you can always propose a "better" design.
+  `interface::open_assistant()` takes an exclusive operating-system lock
+  (`flock` on POSIX, `LockFileEx` on Windows) on `data/<uuid>/lock` and holds it
+  for the process lifetime. The file records the owner's pid and start time for
+  diagnostics only. Staleness needs no pid-liveness check: the kernel releases
+  the lock when the owner exits, even after a crash, so a leftover file never
+  blocks the next instance (and a pid check would be wrong across pid reuse). A
+  second instance is refused; `open_assistant()` returns false and
+  `last_error()` names the owner. The file is deliberately not deleted on
+  release, so every process always opens the same inode.
+- (Refinement) Add a toggle to make assistant-level memory summarisation ignore this session. (Store them persistantly with DB column)
+  `session.include_in_assistant_memory` (schema version 7, migrated with ALTER
+  TABLE) defaults to on. The Session Editor has an *Include in assistant memory*
+  switch. An opted-out session is skipped by the cross-session watermark query,
+  by `assistant_trigger_reached()` and by the assistant fold itself; its own
+  conversation memory is untouched, and opting back in reads only messages newer
+  than its unchanged watermark.
+- (Refinement) Add more default themes (Ordinary).
+  `themes/theme.json` now also ships Plain Light, Plain Dark, GitHub Light,
+  GitHub Dark, One Dark, Nord, Solarized Light and Solarized Dark, all with the
+  complete colour key set and no transparency, so they behave like the plain
+  Catppuccin themes.

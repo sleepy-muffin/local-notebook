@@ -13,10 +13,11 @@ namespace {
 // migration from the legacy database. Version 2 added `session.pinned`, version
 // 3 `session.summary_keep_tokens`, version 4 `session.reasoning_effort`, version
 // 5 turned the single `shared_directory` into a JSON array of directories
-// (`shared_directories`) and version 6 added the session tool permissions; an
-// older file gains each column in the constructor.
+// (`shared_directories`), version 6 added the session tool permissions and
+// version 7 added `session.include_in_assistant_memory`; an older file gains
+// each column in the constructor.
 constexpr std::string_view SCHEMA = R"sql(
-PRAGMA user_version = 6;
+PRAGMA user_version = 7;
 
 CREATE TABLE IF NOT EXISTS session (
   id                                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,7 +40,8 @@ CREATE TABLE IF NOT EXISTS session (
   tools_enabled                     INTEGER NOT NULL DEFAULT 1,
   read_tools                        INTEGER NOT NULL DEFAULT 1,
   write_tools                       INTEGER NOT NULL DEFAULT 0,
-  online_tools                      INTEGER NOT NULL DEFAULT 1
+  online_tools                      INTEGER NOT NULL DEFAULT 1,
+  include_in_assistant_memory       INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS message (
@@ -59,7 +61,8 @@ constexpr std::string_view SESSION_COLUMNS =
   "assistant_memory_watermark, shared_directories, pinned, summary_keep_tokens, "
   "summary_trigger_tokens, summary_token_budget, summary_reasoning_headroom_tokens, "
   "max_tool_rounds, max_tool_calls, tool_output_max_tokens, response_token_budget, "
-  "reasoning_effort, tools_enabled, read_tools, write_tools, online_tools";
+  "reasoning_effort, tools_enabled, read_tools, write_tools, online_tools, "
+  "include_in_assistant_memory";
 
 constexpr std::string_view MESSAGE_COLUMNS = "id, session_id, role, content, made_at";
 
@@ -124,6 +127,7 @@ Session read_session(const shark::sqlite::statement& stmt) {
   session.read_tools_enabled_ = stmt.column_int(18) != 0;
   session.write_tools_enabled_ = stmt.column_int(19) != 0;
   session.online_tools_enabled_ = stmt.column_int(20) != 0;
+  session.include_in_assistant_memory_ = stmt.column_int(21) != 0;
   return session;
 }
 
@@ -210,6 +214,15 @@ database::database(std::string_view path) : connection_(path) {
       "ALTER TABLE session ADD COLUMN online_tools INTEGER NOT NULL DEFAULT 1"
     );
   }
+
+  // Version 7 lets one session opt out of the shared assistant memory. Existing
+  // sessions keep contributing, so the default is on.
+  if (!has_column(connection_, "session", "include_in_assistant_memory")) {
+    connection_.exec(
+      "ALTER TABLE session ADD COLUMN include_in_assistant_memory INTEGER NOT NULL "
+      "DEFAULT 1"
+    );
+  }
 }
 
 std::uint32_t database::insert_session(const Session& session) {
@@ -218,8 +231,9 @@ std::uint32_t database::insert_session(const Session& session) {
     "assistant_memory_watermark, shared_directories, pinned, summary_keep_tokens, "
     "summary_trigger_tokens, summary_token_budget, summary_reasoning_headroom_tokens, "
     "max_tool_rounds, max_tool_calls, tool_output_max_tokens, response_token_budget, "
-    "reasoning_effort, tools_enabled, read_tools, write_tools, online_tools) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "reasoning_effort, tools_enabled, read_tools, write_tools, online_tools, "
+    "include_in_assistant_memory) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   );
   stmt.bind(
     session.title_, session.custom_instructions_, session.memory_,
@@ -237,7 +251,8 @@ std::uint32_t database::insert_session(const Session& session) {
     session.tools_enabled_ ? 1 : 0,
     session.read_tools_enabled_ ? 1 : 0,
     session.write_tools_enabled_ ? 1 : 0,
-    session.online_tools_enabled_ ? 1 : 0
+    session.online_tools_enabled_ ? 1 : 0,
+    session.include_in_assistant_memory_ ? 1 : 0
   );
   return stmt.execute_with_last_row_id();
 }
@@ -250,7 +265,8 @@ void database::update_session(const Session& session) {
     "summary_token_budget = ?, summary_reasoning_headroom_tokens = ?, "
     "max_tool_rounds = ?, max_tool_calls = ?, tool_output_max_tokens = ?, "
     "response_token_budget = ?, reasoning_effort = ?, tools_enabled = ?, "
-    "read_tools = ?, write_tools = ?, online_tools = ? "
+    "read_tools = ?, write_tools = ?, online_tools = ?, "
+    "include_in_assistant_memory = ? "
     "WHERE id = ?"
   );
   stmt.bind(
@@ -269,6 +285,7 @@ void database::update_session(const Session& session) {
     session.read_tools_enabled_ ? 1 : 0,
     session.write_tools_enabled_ ? 1 : 0,
     session.online_tools_enabled_ ? 1 : 0,
+    session.include_in_assistant_memory_ ? 1 : 0,
     session.id_
   );
   stmt.execute();
@@ -412,7 +429,8 @@ std::vector<Message> database::messages_after_assistant_memory_watermark() const
   auto stmt = connection_.prepare(
     "SELECT m.id, m.session_id, m.role, m.content, m.made_at "
     "FROM message m JOIN session s ON s.id = m.session_id "
-    "WHERE m.id > s.assistant_memory_watermark ORDER BY m.id ASC"
+    "WHERE m.id > s.assistant_memory_watermark "
+    "AND s.include_in_assistant_memory != 0 ORDER BY m.id ASC"
   );
 
   std::vector<Message> messages;
