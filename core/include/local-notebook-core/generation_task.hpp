@@ -39,6 +39,18 @@ public:
     // Progress of a running turn: the tool-call round reached and how long it has
     // been running. Both are zero for a task that has not started.
     std::size_t rounds = 0;
+    // Tokens the turn has billed so far, summed over every request it made
+    // (each round re-sends the whole history, so this is the billed total, not
+    // the size of the final request). `tool_tokens` is the estimated cost of the
+    // tool results fed back to the model; the readout charges it against the
+    // same response budget, so it is shown added to `output_tokens`.
+    // `usage_measured` is false when any round reported no usage and the figures
+    // are local estimates.
+    std::size_t input_tokens = 0;
+    std::size_t output_tokens = 0;
+    std::size_t tool_tokens = 0;
+    std::size_t output_budget = 0;
+    bool usage_measured = true;
     std::int64_t elapsed_ms = 0;
   };
 
@@ -78,6 +90,11 @@ public:
     thinking_.clear();
     log_.clear();
     rounds_ = 0;
+    input_tokens_ = 0;
+    output_tokens_ = 0;
+    tool_tokens_ = 0;
+    output_budget_ = 0;
+    usage_measured_ = true;
     final_elapsed_ms_ = 0;
     stop_source_ = std::stop_source{};
   }
@@ -119,6 +136,57 @@ public:
 
     rounds_ = rounds;
     return true;
+  }
+
+  // Adds what one request billed to the turn's running totals. `measured` is
+  // false when the service reported no usage, so the readout can mark the
+  // figures as an estimate; once any round is an estimate it stays one.
+  void add_usage(
+      std::size_t input_tokens, std::size_t output_tokens, bool measured
+  ) {
+    std::lock_guard lock(mutex_);
+
+    input_tokens_ += input_tokens;
+    output_tokens_ += output_tokens;
+    usage_measured_ = usage_measured_ && measured;
+  }
+
+  // The cumulative cost of the tool results fed back to the model during this
+  // turn. Replaced rather than added, because the worker tracks the running
+  // total itself as it clamps each result.
+  void set_tool_tokens(std::size_t tool_tokens) {
+    std::lock_guard lock(mutex_);
+
+    tool_tokens_ = tool_tokens;
+  }
+
+  // The budget the produced tokens (generated text plus tool results) are
+  // charged against, so the readout can show them as a fraction.
+  void set_output_budget(std::size_t output_budget) {
+    std::lock_guard lock(mutex_);
+
+    output_budget_ = output_budget;
+  }
+
+  [[nodiscard]] std::size_t input_tokens() const {
+    std::lock_guard lock(mutex_);
+    return input_tokens_;
+  }
+
+  [[nodiscard]] std::size_t output_tokens() const {
+    std::lock_guard lock(mutex_);
+    return output_tokens_;
+  }
+
+  [[nodiscard]] std::size_t tool_tokens() const {
+    std::lock_guard lock(mutex_);
+    return tool_tokens_;
+  }
+
+  // False once any request of this task reported no usage.
+  [[nodiscard]] bool usage_measured() const {
+    std::lock_guard lock(mutex_);
+    return usage_measured_;
   }
 
   // Appends a diagnostic line to this task's own log. The log is what the tasks
@@ -248,6 +316,11 @@ public:
       error_,
       warning_,
       rounds_,
+      input_tokens_,
+      output_tokens_,
+      tool_tokens_,
+      output_budget_,
+      usage_measured_,
       elapsed_locked(),
     };
   }
@@ -296,6 +369,11 @@ private:
   // Progress bookkeeping for the running-task readout.
   std::chrono::steady_clock::time_point started_at_ = std::chrono::steady_clock::now();
   std::size_t rounds_ = 0;
+  std::size_t input_tokens_ = 0;
+  std::size_t output_tokens_ = 0;
+  std::size_t tool_tokens_ = 0;
+  std::size_t output_budget_ = 0;
+  bool usage_measured_ = true;
   // The elapsed time frozen when the task reached a terminal state.
   std::int64_t final_elapsed_ms_ = 0;
 };

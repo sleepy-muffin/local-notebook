@@ -122,9 +122,7 @@ private:
   QSpinBox* summary_trigger_ = nullptr;
   QSpinBox* summary_budget_ = nullptr;
   QSpinBox* summary_headroom_ = nullptr;
-  QSpinBox* max_tool_rounds_ = nullptr;
-  QSpinBox* max_tool_calls_ = nullptr;
-  QSpinBox* tool_output_cap_ = nullptr;
+  QSpinBox* midturn_input_budget_ = nullptr;
   QSpinBox* response_budget_ = nullptr;
 
   // The page rail and the pages it selects.

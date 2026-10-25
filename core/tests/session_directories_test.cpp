@@ -94,6 +94,7 @@ void test_round_trip(const fs::path& path) {
   session.read_tools_enabled_ = false;
   session.write_tools_enabled_ = true;
   session.online_tools_enabled_ = false;
+  session.input_token_produced_midway_ = 12345;
 
   const std::uint32_t id = db.insert_session(session);
   const std::optional<lnb::Session> loaded = db.session(id);
@@ -104,6 +105,10 @@ void test_round_trip(const fs::path& path) {
     expect_directories(*loaded, session.shared_directories_, "round trip: list preserved");
     expect_permissions(
         *loaded, false, false, true, false, "round trip: permissions preserved"
+    );
+    expect(
+        loaded->input_token_produced_midway_ == 12345,
+        "round trip: midway input budget preserved"
     );
   }
 
@@ -126,25 +131,69 @@ void test_round_trip(const fs::path& path) {
   }
 }
 
+bool table_has_column(const fs::path& path, const std::string& column) {
+  shark::sqlite::connection connection(path.string());
+  auto stmt = connection.prepare("PRAGMA table_info(session)");
+
+  while (stmt.step()) {
+    // table_info columns: cid, name, type, notnull, dflt_value, pk.
+    if (stmt.column_text(1) == column) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 void test_legacy_migration(const fs::path& path) {
   {
     create_legacy_database(path);
   }
 
-  lnb::store::database db(path.string());
-  const std::optional<lnb::Session> session = db.session(1);
+  {
+    lnb::store::database db(path.string());
+    const std::optional<lnb::Session> session = db.session(1);
 
-  expect(session.has_value(), "migration: legacy session reloads");
+    expect(session.has_value(), "migration: legacy session reloads");
 
-  if (session.has_value()) {
-    expect_directories(
-        *session, {"/old/shared"}, "migration: legacy path becomes one entry"
-    );
-    expect_permissions(
-        *session, true, true, false, true,
-        "migration: older sessions read and browse but cannot write"
-    );
+    if (session.has_value()) {
+      expect_directories(
+          *session, {"/old/shared"}, "migration: legacy path becomes one entry"
+      );
+      expect_permissions(
+          *session, true, true, false, true,
+          "migration: older sessions read and browse but cannot write"
+      );
+      // Version 8 renamed the per-result tool clamp into a cumulative per-turn
+      // budget and scaled the stored default (8000) to match it.
+      expect(
+          session->input_token_produced_midway_ == 32000,
+          "migration: old tool output cap becomes the cumulative midway budget"
+      );
+      expect(
+          session->response_token_budget_ == 8000,
+          "migration: the stored response budget is preserved"
+      );
+    }
   }
+
+  // The per-session loop guards moved into the core, so their columns are gone.
+  expect(
+      !table_has_column(path, "max_tool_rounds"),
+      "migration: max_tool_rounds column was dropped"
+  );
+  expect(
+      !table_has_column(path, "max_tool_calls"),
+      "migration: max_tool_calls column was dropped"
+  );
+  expect(
+      !table_has_column(path, "tool_output_max_tokens"),
+      "migration: old tool output column was renamed"
+  );
+  expect(
+      table_has_column(path, "input_token_produced_midway"),
+      "migration: the midway input budget column exists"
+  );
 }
 
 } // namespace

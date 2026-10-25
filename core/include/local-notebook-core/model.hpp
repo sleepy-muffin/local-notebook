@@ -88,12 +88,13 @@ public:
   std::size_t summary_token_budget_ = 4000;
   std::size_t summary_reasoning_headroom_tokens_ = 12000;
 
-  // One assistant turn's tool loop.
-  std::size_t max_tool_rounds_ = 8;
-  std::size_t max_tool_calls_ = 32;
-  std::size_t tool_output_max_tokens_ = 8000;
+  // Token budget for the tool results fed back to the model as input during one
+  // turn. The tool loop's round and call counts are fixed in the core (they are
+  // loop guards, not a cost knob), so only this cumulative budget is exposed.
+  std::size_t input_token_produced_midway_ = 32000;
 
-  // Tokens reserved for the assistant's visible answer.
+  // The whole turn's budget for produced tokens: the visible answer plus the
+  // tool results fed back to the model. Each round only gets what is left.
   std::size_t response_token_budget_ = 8000;
 };
 

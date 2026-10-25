@@ -30,6 +30,23 @@ QString format_elapsed(std::int64_t milliseconds) {
   return trs("%1 s").arg(static_cast<double>(milliseconds) / 1000.0, 0, 'f', 1);
 }
 
+// A compact token count: plain below a thousand, otherwise one decimal of a
+// thousand. The same shorthand the title bar's memory readout uses, so the two
+// numbers read alike.
+QString compact_tokens(std::size_t value) {
+  if (value < 1000) {
+    return QString::number(static_cast<qulonglong>(value));
+  }
+
+  const double thousands = static_cast<double>(value) / 1000.0;
+
+  if (value % 1000 == 0 || value >= 100000) {
+    return QStringLiteral("%1k").arg(qRound(thousands));
+  }
+
+  return QStringLiteral("%1k").arg(thousands, 0, 'f', 1);
+}
+
 // A read-only, scrollable, plain-text dump of one task's log. It deliberately
 // never renders Markdown: the log is raw diagnostic text, and it carries detail
 // the transcript never shows (the exact request body, the tool calls, and the
@@ -233,9 +250,32 @@ void TasksWindow::rebuild_rows(std::size_t count) {
     column->setContentsMargins(0, 0, 0, 0);
     column->setSpacing(2);
 
+    // Row 1: the session name, with its id pushed to the trailing edge. The id
+    // label is right-aligned in the layout's direction, so it follows the
+    // interface direction instead of assuming one.
+    auto* heading = new QHBoxLayout();
+    heading->setContentsMargins(0, 0, 0, 0);
+    heading->setSpacing(8);
+
     auto* row_title = new QLabel(card);
     row_title->setObjectName(QStringLiteral("CurrentName"));
 
+    auto* row_id = new QLabel(card);
+    row_id->setObjectName(QStringLiteral("Muted"));
+    row_id->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+    heading->addWidget(row_title);
+    heading->addStretch(1);
+    heading->addWidget(row_id);
+
+    // Row 2: the two token indicators. The output figure is shown against the
+    // session's response budget, because both the reply and the tool results it
+    // was fed are charged against that one bound.
+    auto* row_tokens = new QLabel(card);
+    row_tokens->setObjectName(QStringLiteral("Muted"));
+
+    // Row 3: the state, round and elapsed time, exactly what the single detail
+    // line carried before the token row was added.
     auto* row_detail = new QLabel(card);
     row_detail->setObjectName(QStringLiteral("Muted"));
 
@@ -244,11 +284,12 @@ void TasksWindow::rebuild_rows(std::size_t count) {
     row_error->setWordWrap(true);
 
     // The labels must not swallow the click; the card owns the press.
-    for (QLabel* label : {row_title, row_detail, row_error}) {
+    for (QLabel* label : {row_title, row_id, row_tokens, row_detail, row_error}) {
       label->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     }
 
-    column->addWidget(row_title);
+    column->addLayout(heading);
+    column->addWidget(row_tokens);
     column->addWidget(row_detail);
     column->addWidget(row_error);
 
@@ -270,7 +311,7 @@ void TasksWindow::rebuild_rows(std::size_t count) {
     outer->addWidget(cancel, 0, Qt::AlignVCenter);
 
     list_layout_->insertWidget(static_cast<int>(i), card);
-    rows_[i] = Row{card, row_title, row_detail, row_error, cancel};
+    rows_[i] = Row{card, row_title, row_id, row_tokens, row_detail, row_error, cancel};
   }
 }
 
@@ -285,19 +326,41 @@ void TasksWindow::set_entries(std::vector<Entry> entries) {
     const Entry& entry = entries_[i];
 
     rows_[i].title->setText(entry.title);
+    rows_[i].id->setText(
+        entry.session_id == 0 ? QString() : trs("#%1").arg(entry.session_id)
+    );
 
-    // The shared assistant task has no session, so its row reads without the
-    // "Session #0" prefix.
-    const QString detail = entry.session_id == 0
-        ? trs("%1   ·   Round %2   ·   %3")
-              .arg(entry.state)
-              .arg(entry.rounds)
-              .arg(format_elapsed(entry.elapsed_ms))
-        : trs("Session #%1   ·   %2   ·   Round %3   ·   %4")
-              .arg(entry.session_id)
-              .arg(entry.state)
-              .arg(entry.rounds)
-              .arg(format_elapsed(entry.elapsed_ms));
+    // The produced figure merges what the model generated with the tool results
+    // it was fed, because the session's response budget bounds both. A leading
+    // tilde marks an estimate: the service did not report usage for at least one
+    // request, so the number is locally approximated.
+    const std::size_t produced = entry.output_tokens + entry.tool_tokens;
+    const QString mark = entry.usage_measured ? QString() : QStringLiteral("~");
+    const QString produced_text = entry.output_budget == 0
+        ? mark + compact_tokens(produced)
+        : mark + compact_tokens(produced) + QStringLiteral("/") +
+            compact_tokens(entry.output_budget);
+
+    rows_[i].tokens->setText(
+        trs("Input %1   ·   Output %2")
+            .arg(mark + compact_tokens(entry.input_tokens), produced_text)
+    );
+    rows_[i].tokens->setToolTip(
+        trs(
+            "Input: prompt tokens billed by every request of this task, summed "
+            "over its tool rounds. Output: tokens generated plus the tool "
+            "results fed back, charged against the response budget. Tool output "
+            "is always counted at an estimated cost; a leading ~ marks a task "
+            "whose request usage was estimated."
+        )
+    );
+
+    // The session id has its own row, so this line carries only the state, the
+    // round reached and the elapsed time.
+    const QString detail = trs("%1   ·   Round %2   ·   %3")
+        .arg(entry.state)
+        .arg(entry.rounds)
+        .arg(format_elapsed(entry.elapsed_ms));
 
     rows_[i].detail->setText(detail);
 

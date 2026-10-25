@@ -122,11 +122,16 @@ private:
       (void)boost::asio::read(socket, boost::asio::buffer(body), error);
     }
 
+    // The last chunk carries usage and no choice, exactly what a provider sends
+    // when `stream_options.include_usage` is requested. It must be read before
+    // the (empty) choice list can stop parsing.
     const std::string events =
         "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"},"
         "\"finish_reason\":null}]}\n\n"
         "data: {\"choices\":[{\"delta\":{\"content\":\" world\"},"
         "\"finish_reason\":\"stop\"}]}\n\n"
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":11,"
+        "\"completion_tokens\":2,\"total_tokens\":13}}\n\n"
         "data: [DONE]\n\n";
 
     const std::string response =
@@ -200,6 +205,15 @@ int main() {
   expect(
       !messages.empty() && messages.back().content_ == "Hello world",
       "assistant reply was not stored"
+  );
+
+  const lnb::GenerationTask::Snapshot snapshot = task->snapshot();
+  expect(snapshot.input_tokens == 11, "reported prompt tokens were not recorded");
+  expect(snapshot.output_tokens == 2, "reported completion tokens were not recorded");
+  expect(snapshot.usage_measured, "reported usage must not be marked an estimate");
+  expect(
+      snapshot.output_budget == session.response_token_budget_,
+      "the response budget was not published for the readout"
   );
 
   if (failures != 0) {

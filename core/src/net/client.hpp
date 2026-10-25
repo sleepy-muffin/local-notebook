@@ -41,6 +41,16 @@ struct Remote {
   int summary_read_timeout_ms = 7 * 60'000;
 };
 
+// What one streaming request billed, as reported by the service or estimated
+// from the request and reply when it reports nothing. `reported` is false for an
+// estimate, so the tasks window can mark the figure instead of presenting a
+// guess as a measurement.
+struct RoundUsage {
+  std::size_t input_tokens = 0;
+  std::size_t output_tokens = 0;
+  bool reported = false;
+};
+
 // The outcome of one streaming request. `assistant_message` is the exact
 // assistant message (role/content/optional tool_calls) that has to be echoed
 // back to the model when the tool call is answered. `response_items` carries the
@@ -52,6 +62,7 @@ struct ChatCompletionResult {
   std::string finish_reason;
   boost::json::object assistant_message;
   std::vector<boost::json::object> response_items;
+  RoundUsage usage;
 };
 
 // Assembles the protocol-neutral request for one turn (design-1.md §4): system
@@ -92,9 +103,11 @@ ChatCompletionResult send_message_once(
 
 // Runs one full assistant turn: sends the payload, executes any local tool
 // calls the model requests, feeds the results back, and repeats until the model
-// answers without requesting tools (or a round/call cap is reached). Tool
-// rounds, total tool calls and the size of each tool result are bounded by
-// `session`, so the in-turn loop can never grow the context without limit.
+// answers without requesting tools (or the fixed round/call guard is reached).
+// The produced tokens (reply plus tool results) share the session's
+// `response_token_budget_`, and the tool results alone are additionally bounded
+// by `input_token_produced_midway_`, so the loop can never grow the context
+// without limit.
 ChatCompletionResult generate_reply(
     Request request, const Remote& remote, GenerationTask& task,
     std::stop_token stop_token,

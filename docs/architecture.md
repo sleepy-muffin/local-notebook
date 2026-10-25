@@ -68,8 +68,9 @@ Two guarantees fall out of this design:
   memory — because the watermarks only *count* what is new; they never decide
   what gets sent.
 - **No derived budgets.** The input bound is the session's own
-  `summary_trigger_tokens`; the output bound is `response_token_budget`. Nothing
-  is computed from a "context window", so nothing drifts.
+  `summary_trigger_tokens`; the produced bound is `response_token_budget`, which
+  covers the reply and the tool results it fed back during the turn. Nothing is
+  computed from a "context window", so nothing drifts.
 
 ---
 

@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -80,6 +81,66 @@ int int_at(const boost::json::object& object, std::string_view key, int fallback
   }
 
   return static_cast<int>(value->as_double());
+}
+
+// Reads a non-negative count, which is how every `usage` field is shaped.
+std::size_t size_at(
+    const boost::json::object& object, std::string_view key,
+    std::size_t fallback = 0
+) {
+  const boost::json::value* value = object.if_contains(key);
+
+  if (value == nullptr) {
+    return fallback;
+  }
+
+  if (value->is_int64()) {
+    const std::int64_t count = value->as_int64();
+    return count > 0 ? static_cast<std::size_t>(count) : 0;
+  }
+
+  if (value->is_uint64()) {
+    return static_cast<std::size_t>(value->as_uint64());
+  }
+
+  if (value->is_double()) {
+    const double count = value->as_double();
+    return count > 0 ? static_cast<std::size_t>(count) : 0;
+  }
+
+  return fallback;
+}
+
+// Reads a provider `usage` block. Chat reports `prompt_tokens`/`completion_tokens`,
+// Responses `input_tokens`/`output_tokens`; both shapes are accepted.
+RoundUsage read_usage(const boost::json::object& usage) {
+  RoundUsage out;
+  out.input_tokens = size_at(usage, "prompt_tokens", size_at(usage, "input_tokens"));
+  out.output_tokens =
+      size_at(usage, "completion_tokens", size_at(usage, "output_tokens"));
+  out.reported = usage.if_contains("prompt_tokens") != nullptr ||
+      usage.if_contains("input_tokens") != nullptr;
+  return out;
+}
+
+// Best-effort reply cost when the service reported no usage: the visible text,
+// the tool-call arguments it asked for, and the reasoning it streamed. It is a
+// character-based estimate, never a bill.
+RoundUsage estimate_round_usage(
+    const std::string& body, std::string_view reply, std::string_view thinking,
+    const std::vector<ToolCall>& calls
+) {
+  RoundUsage out;
+  out.input_tokens = context::prompt_tokens(body);
+  out.output_tokens = context::prompt_tokens(std::string(reply)) +
+      context::prompt_tokens(std::string(thinking));
+
+  for (const ToolCall& call: calls) {
+    out.output_tokens += context::prompt_tokens(call.name) +
+        context::prompt_tokens(call.arguments);
+  }
+
+  return out;
 }
 
 // A human-readable status for the tool the model just requested. Kept out of the
@@ -188,6 +249,8 @@ public:
   [[nodiscard]] const std::string& error() const { return error_; }
   [[nodiscard]] const std::string& text() const { return full_reply_; }
   [[nodiscard]] const std::string& finish_reason() const { return finish_reason_; }
+  [[nodiscard]] RoundUsage usage() const { return usage_; }
+  [[nodiscard]] const std::string& thinking() const { return thinking_; }
 
   [[nodiscard]] std::vector<ToolCall> tool_calls() const {
     std::vector<ToolCall> calls;
@@ -265,6 +328,14 @@ private:
     }
 
     const boost::json::object& root = document.as_object();
+
+    // With `stream_options.include_usage`, the final chunk carries the counts and
+    // an empty `choices` array, so usage is read before the choice check below.
+    if (const boost::json::object* usage = object_at(root, "usage");
+        usage != nullptr) {
+      usage_ = read_usage(*usage);
+    }
+
     const boost::json::array* choices = array_at(root, "choices");
 
     if (choices == nullptr || choices->empty() || !choices->front().is_object()) {
@@ -309,6 +380,7 @@ private:
 
     if (reasoning != nullptr && reasoning->is_string()) {
       task_.append_thinking(reasoning->as_string());
+      thinking_ += std::string(reasoning->as_string());
     }
 
     // Tool calls arrive split across chunks; merge them per `index`.
@@ -347,8 +419,10 @@ private:
 
   std::string buffer_;
   std::string full_reply_;
+  std::string thinking_;
   std::string finish_reason_;
   std::map<int, ToolCall> tool_calls_;
+  RoundUsage usage_;
 
   bool finished_ = false;
   bool failed_ = false;
@@ -397,6 +471,8 @@ public:
   [[nodiscard]] const std::string& error() const { return error_; }
   [[nodiscard]] const std::string& text() const { return full_reply_; }
   [[nodiscard]] const std::string& finish_reason() const { return finish_reason_; }
+  [[nodiscard]] RoundUsage usage() const { return usage_; }
+  [[nodiscard]] const std::string& thinking() const { return thinking_; }
 
   // The tool calls the model requested, in output order. `id` is the Responses
   // `call_id`, which is exactly what a function_call_output must quote back.
@@ -487,7 +563,9 @@ private:
     // requested. When present it is recorded on the task, never the reply.
     if (type == "response.reasoning_summary_text.delta" ||
         type == "response.reasoning_text.delta") {
-      task_.append_thinking(string_at(root, "delta"));
+      const std::string delta = string_at(root, "delta");
+      task_.append_thinking(delta);
+      thinking_ += delta;
       return true;
     }
 
@@ -555,6 +633,13 @@ private:
   // present, is the authoritative item list and supersedes what the item events
   // gathered.
   void adopt_output(const boost::json::object& response) {
+    // The terminal event carries the whole response, `usage` included. It is the
+    // only place the Responses protocol reports the counts.
+    if (const boost::json::object* usage = object_at(response, "usage");
+        usage != nullptr) {
+      usage_ = read_usage(*usage);
+    }
+
     const boost::json::array* output = array_at(response, "output");
 
     if (output == nullptr || output->empty()) {
@@ -631,8 +716,10 @@ private:
 
   std::string buffer_;
   std::string full_reply_;
+  std::string thinking_;
   std::string finish_reason_;
   std::map<int, boost::json::object> items_;
+  RoundUsage usage_;
 
   bool finished_ = false;
   bool failed_ = false;
@@ -882,16 +969,37 @@ ChatCompletionResult send_message_once(
     result.finish_reason = chat_stream->finish_reason();
     result.tool_calls = chat_stream->tool_calls();
     result.assistant_message = chat_stream->assistant_message();
+    result.usage = chat_stream->usage();
+
+    if (!result.usage.reported) {
+      result.usage = estimate_round_usage(
+          body, chat_stream->text(), chat_stream->thinking(), result.tool_calls
+      );
+    }
   } else {
     result.text = responses_stream->text();
     result.finish_reason = responses_stream->finish_reason();
     result.tool_calls = responses_stream->tool_calls();
     result.response_items = responses_stream->output_items();
+    result.usage = responses_stream->usage();
+
+    if (!result.usage.reported) {
+      result.usage = estimate_round_usage(
+          body, responses_stream->text(), responses_stream->thinking(),
+          result.tool_calls
+      );
+    }
   }
 
+  task.add_usage(
+      result.usage.input_tokens, result.usage.output_tokens, result.usage.reported
+  );
+
   shark::log::info(
-      "send_message_once protocol={} tool_calls={}, finish_reason={}",
-      protocol_name(remote.protocol), result.tool_calls.size(), result.finish_reason
+      "send_message_once protocol={} tool_calls={}, finish_reason={} "
+      "input_tokens={}, output_tokens={}",
+      protocol_name(remote.protocol), result.tool_calls.size(), result.finish_reason,
+      result.usage.input_tokens, result.usage.output_tokens
   );
 
   task.append_log(
@@ -908,16 +1016,66 @@ ChatCompletionResult generate_reply(
     std::stop_token stop_token,
     const std::vector<std::string>& shared_directories, const Session& session
 ) {
-  const std::size_t max_rounds = session.max_tool_rounds_;
-  const std::size_t max_calls = session.max_tool_calls_;
+  // Loop guards, not settings: they exist only so a model that keeps asking for
+  // tools cannot run forever. The cost bounds are the session's budgets below.
+  constexpr std::size_t kMaxToolRounds = 64;
+  constexpr std::size_t kMaxToolCalls = 512;
+  // The smallest completion worth spending the last of a budget on.
+  constexpr std::size_t kMinOutputTokens = 64;
+
   const ToolPermissions permissions = tool_permissions_for(session);
+
+  // Tool results are input the model reads back. The whole turn may add at most
+  // this many such tokens, and 0 disables the bound.
+  const std::size_t midway_budget = session.input_token_produced_midway_;
+
+  // One budget covers the whole turn: the text the model generates and the tool
+  // results it is fed back are charged against `response_token_budget`, and each
+  // round only gets what is left.
+  const std::size_t response_budget = request.max_output_tokens > 0
+      ? static_cast<std::size_t>(request.max_output_tokens)
+      : 0;
+
+  std::size_t midway_used = 0;
+  // What this reply has produced so far: the model's generated tokens plus the
+  // tool results it was fed. It starts at zero even when the task already
+  // carries a summarisation pass, whose own budget is separate.
+  std::size_t produced_used = 0;
   std::size_t total_calls = 0;
+  bool tools_closed = false;
+
+  // The response budget is published up front so the readout can show the
+  // produced total against it from the first round, before any usage arrives.
+  task.set_tool_tokens(0);
+  task.set_output_budget(response_budget);
 
   ChatCompletionResult result;
 
-  for (std::size_t round = 0; round < max_rounds; ++round) {
+  for (std::size_t round = 0; round < kMaxToolRounds; ++round) {
     if (stop_token.stop_requested()) {
       throw std::runtime_error("Generation cancelled");
+    }
+
+    if (response_budget > 0) {
+      // Below the smallest useful completion there is nothing left to answer
+      // with, so the turn stops here instead of sending a doomed request.
+      const std::size_t remaining = response_budget > produced_used
+          ? response_budget - produced_used
+          : 0;
+
+      if (remaining < kMinOutputTokens) {
+        shark::log::info("generate_reply: response budget exhausted");
+        task.set_warning(
+            "The turn stopped because it reached the response budget."
+        );
+        return result;
+      }
+
+      request.max_output_tokens = static_cast<int>(
+          std::min<std::size_t>(
+              remaining, static_cast<std::size_t>(std::numeric_limits<int>::max())
+          )
+      );
     }
 
     shark::log::info(
@@ -929,11 +1087,23 @@ ChatCompletionResult generate_reply(
     // Publish the round so the running-task readout can show progress.
     task.set_rounds(round);
 
+    // Once the tool output budget (or the call guard) is spent, the rest of the
+    // turn is answered without tools, so the model still produces a reply from
+    // what it has already read instead of failing outright.
+    if (tools_closed) {
+      request.include_tools = false;
+    }
+
     // Rebuilt each round from the accumulated request, so the body reflects the
     // tool history: appended messages for Chat, replayed raw items for Responses.
     const boost::json::object payload = build_request(remote.protocol, request);
 
+    // send_message_once adds what the request billed to the task's running
+    // totals. Every request re-sends the accumulated history, so the billed
+    // input is the sum over rounds; the output is what each round generated
+    // (hidden reasoning, tool-call arguments and visible text alike).
     result = send_message_once(payload, remote, task, stop_token, "chat");
+    produced_used += result.usage.output_tokens;
 
     if (result.tool_calls.empty()) {
       note_length_warning(result, task);
@@ -954,11 +1124,6 @@ ChatCompletionResult generate_reply(
           last == ':' || last == ';';
       task.append_content(ends_sentence ? "\n\n" : "\n");
     }
-
-    if (total_calls + result.tool_calls.size() > max_calls) {
-      throw std::runtime_error("Tool-call budget exhausted");
-    }
-    total_calls += result.tool_calls.size();
 
     // Echo the assistant turn back in the shape the protocol expects, before
     // the results, so the model can match them by id.
@@ -995,12 +1160,60 @@ ChatCompletionResult generate_reply(
           "tool call: " + call.name + "(" + call.arguments.substr(0, 2000) + ")"
       );
 
-      std::string output =
-          execute_local_tool(call, shared_directories, remote.proxy, permissions);
+      // The call guard is exact: once the turn has executed its allowance, any
+      // further call in this batch is answered with a stub instead of run, so a
+      // model that asks for hundreds at once cannot multiply the work.
+      std::string output;
 
-      // Bound each tool result so the in-turn loop cannot grow the context
-      // without limit across rounds.
-      output = context::clamp_tokens(output, session.tool_output_max_tokens_);
+      if (total_calls >= kMaxToolCalls) {
+        tools_closed = true;
+        output = "[Tool call limit reached; this call was not executed.]";
+      } else {
+        ++total_calls;
+        output =
+            execute_local_tool(call, shared_directories, remote.proxy, permissions);
+
+        if (total_calls >= kMaxToolCalls) {
+          tools_closed = true;
+        }
+      }
+
+      // Bound the tool results cumulatively: the whole turn may add at most
+      // `input_token_produced_midway_` tokens of tool output in total. The
+      // remainder is this result's clamp, so the last one can never overshoot.
+      // The same result is also charged against what is left of the response
+      // budget, so one large read cannot overshoot that bound either.
+      std::size_t allowance = std::numeric_limits<std::size_t>::max();
+
+      if (midway_budget > 0) {
+        allowance = midway_budget > midway_used
+            ? midway_budget - midway_used
+            : 0;
+      }
+
+      if (response_budget > 0) {
+        const std::size_t remaining = response_budget > produced_used
+            ? response_budget - produced_used
+            : 0;
+        allowance = std::min(allowance, remaining);
+      }
+
+      if (allowance != std::numeric_limits<std::size_t>::max()) {
+        output = allowance == 0
+            ? std::string("[Tool output budget exhausted; nothing further was read.]")
+            : context::clamp_tokens(output, allowance);
+      }
+
+      // The readout always charges the tool results, even when their own budget
+      // is disabled, because the response budget covers them too.
+      const std::size_t tool_tokens = context::prompt_tokens(output);
+      midway_used += tool_tokens;
+      produced_used += tool_tokens;
+      task.set_tool_tokens(midway_used);
+
+      if (midway_budget > 0 && midway_used >= midway_budget) {
+        tools_closed = true;
+      }
 
       shark::log::debug(
           "generate_reply: tool result: name={} -> {} chars", call.name,
@@ -1027,7 +1240,9 @@ ChatCompletionResult generate_reply(
     }
   }
 
-  shark::log::info("generate_reply: reached the tool-call round cap ({})", max_rounds);
+  shark::log::info(
+      "generate_reply: reached the tool-call round cap ({})", kMaxToolRounds
+  );
 
   note_length_warning(result, task);
   return result;
@@ -1042,7 +1257,7 @@ namespace {
 std::string fold_session_memory(
     store::database& db, const Session& session, const Remote& remote,
     GenerationTask& task, std::stop_token stop_token, bool force,
-    const SummaryApprover& approver
+    const SummaryApprover& approver, bool standalone
 ) {
   // A cancelled turn must not keep the interface waiting while a large gather
   // runs, so the pass bails out as soon as a stop is requested.
@@ -1175,8 +1390,16 @@ std::string fold_session_memory(
 
     // The summariser's own diagnostics (the exact request and response) are
     // copied onto the visible task, so the tasks window shows what was sent
-    // instead of an empty log.
+    // instead of an empty log. Its input is always billed into the turn's total,
+    // but its generated text is the task's output only for a standalone update:
+    // when the fold merely precedes a reply, the output figure must stay the
+    // reply plus its tool results, because those are what the response budget
+    // bounds.
     task.append_log(silent_task.log_text());
+    task.add_usage(
+        silent_task.input_tokens(), standalone ? silent_task.output_tokens() : 0,
+        silent_task.usage_measured()
+    );
 
     const std::string text = trimmed(result.text);
 
@@ -1488,8 +1711,13 @@ std::string fold_assistant_memory(
 
   // The summariser's own diagnostics (the exact request and response) are copied
   // onto the visible task, so the tasks window shows what was sent instead of an
-  // empty log.
+  // empty log. This task *is* the memory pass, so its token counts are carried
+  // over for the readout.
   task.append_log(silent_task.log_text());
+  task.add_usage(
+      silent_task.input_tokens(), silent_task.output_tokens(),
+      silent_task.usage_measured()
+  );
 
   const std::string memory = trimmed(result.text);
 
@@ -1556,7 +1784,9 @@ std::string maybe_summarize_session(
     GenerationTask& task, std::stop_token stop_token, SummaryApprover approver
 ) {
   try {
-    return fold_session_memory(db, session, remote, task, stop_token, false, approver);
+    return fold_session_memory(
+        db, session, remote, task, stop_token, false, approver, false
+    );
   } catch (const std::exception& error) {
     // Best effort: an automatic summarisation must never fail the user's turn,
     // so an unchanged memory is returned instead of propagating.
@@ -1575,7 +1805,9 @@ std::string summarize_session_now(
     store::database& db, const Session& session, const Remote& remote,
     GenerationTask& task, std::stop_token stop_token, SummaryApprover approver
 ) {
-  return fold_session_memory(db, session, remote, task, stop_token, true, approver);
+  return fold_session_memory(
+      db, session, remote, task, stop_token, true, approver, true
+  );
 }
 
 std::string maybe_summarize_assistant(

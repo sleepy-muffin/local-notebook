@@ -1098,6 +1098,13 @@ void MainWindow::update_task_indicator() {
 
     const lnb::GenerationTask::Snapshot snapshot = view->last_snapshot();
     entry.rounds = snapshot.rounds;
+    entry.input_tokens = snapshot.input_tokens;
+    entry.output_tokens = snapshot.output_tokens;
+    entry.tool_tokens = snapshot.tool_tokens;
+    entry.usage_measured = snapshot.usage_measured;
+    // Published by the chat loop from the reply's own budget. A memory pass
+    // reports 0, so its card shows the produced total without a fraction.
+    entry.output_budget = snapshot.output_budget;
     entry.elapsed_ms = snapshot.elapsed_ms;
     entry.error = from_utf8(snapshot.error);
     entry.state = describe(snapshot.status);
@@ -1117,6 +1124,10 @@ void MainWindow::update_task_indicator() {
 
     const lnb::GenerationTask::Snapshot snapshot = assistant->snapshot();
     entry.rounds = snapshot.rounds;
+    entry.input_tokens = snapshot.input_tokens;
+    entry.output_tokens = snapshot.output_tokens;
+    entry.tool_tokens = snapshot.tool_tokens;
+    entry.usage_measured = snapshot.usage_measured;
     entry.elapsed_ms = snapshot.elapsed_ms;
     entry.error = from_utf8(snapshot.error);
     entry.state = describe(snapshot.status);

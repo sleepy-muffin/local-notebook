@@ -42,6 +42,15 @@ public:
     // "Running", "Completed", "Failed" or "Cancelled".
     QString state;
     std::size_t rounds = 0;
+    // What the turn billed so far. `output_tokens` is only what the model
+    // generated; `tool_tokens` is the cost of the tool results it read back and
+    // is charged against the same `output_budget`.
+    std::size_t input_tokens = 0;
+    std::size_t output_tokens = 0;
+    std::size_t tool_tokens = 0;
+    std::size_t output_budget = 0;
+    // False when a request reported no usage and the figures are local estimates.
+    bool usage_measured = true;
     std::int64_t elapsed_ms = 0;
     // The failure reason; empty unless the task failed.
     QString error;
@@ -69,6 +78,8 @@ private:
   struct Row {
     QWidget* widget = nullptr;
     QLabel* title = nullptr;
+    QLabel* id = nullptr;
+    QLabel* tokens = nullptr;
     QLabel* detail = nullptr;
     QLabel* error = nullptr;
     QPushButton* cancel = nullptr;

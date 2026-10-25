@@ -64,39 +64,28 @@ struct BudgetPreset {
   int memory_budget;
   int headroom;
   int response;
-  int tool_output;
-  int rounds;
-  int calls;
+  // Cumulative budget for the tool output fed back to the model in one turn.
+  int midway_input;
 };
 
 /**
  * summary_trigger_ summary_keep_ summary_budget_ summary_headroom_
  *
- * response_budget_ tool_output_cap_
- *
- * max_tool_rounds_ max_tool_calls_
+ * response_budget_ midturn_input_budget_
  */
 constexpr BudgetPreset kBudgetPresets[] = {
     // memory: trigger (the input bound), keep (the level it merges down to),
     // memory, reasoning;
     // response;
-    // tool: output, rounds, calls
-    {"Instant",      1000,   250,   250,   500,   500,  1000,  0,   0},
-    {"Very Light",   2000,   500,   500,  1000,  1000,  2000,  2,   6},
-    {"Light",        4000,  1000,  1000,  2000,  2000,  4000, 16,  64},
-    {"Balanced",    12000,  2000,  2000,  4000,  4000,  6000, 24,  96},
-    {"Heavy",       24000,  4000,  2500,  8000,  8000,  8000, 32, 128},
-    {"Very Heavy",  48000,  8000,  3000, 16000, 12000, 12000, 48, 192},
-    {"Ultra",       64000, 16000,  4000, 24000, 16000, 16000, 64, 256},
+    // tool: cumulative input produced midway (tool results fed back)
+    {"Instant",      1000,   250,   250,   500,   500,  1000},
+    {"Very Light",   2000,   500,   500,  1000,  1000,  2000},
+    {"Light",        4000,  1000,  1000,  2000,  2000,  4000},
+    {"Balanced",    12000,  2000,  2000,  4000,  4000,  8000},
+    {"Heavy",       24000,  4000,  2500,  8000,  8000, 16000},
+    {"Very Heavy",  48000,  8000,  3000, 16000, 12000, 32000},
+    {"Ultra",       64000, 16000,  4000, 24000, 16000, 64000},
 };
-
-// constexpr BudgetPreset kBudgetPresets[] = {
-//     {"Light", 8000, 2000, 4000, 2000, 4000, 16, 64},
-//     {"Balanced", 16000, 4000, 12000, 8000, 8000, 24, 96},
-//     {"Heavy", 48000, 6000, 24000, 16000, 12000, 24, 96},
-//     {"Very Heavy", 96000, 8000, 32000, 16000, 16000, 32, 128},
-//     {"Ultra", 96000, 8000, 32000, 16000, 16000, 64, 256},
-// };
 
 // Two fields per row, so a section reads as a small group of related numbers
 // instead of one long budget wall.
@@ -639,10 +628,7 @@ QWidget* SessionEditor::build_tools_tab() {
           return;
         }
 
-        const BudgetPreset& budget_preset = kBudgetPresets[index - 1];
-        tool_output_cap_->setValue(budget_preset.tool_output);
-        max_tool_rounds_->setValue(budget_preset.rounds);
-        max_tool_calls_->setValue(budget_preset.calls);
+        midturn_input_budget_->setValue(kBudgetPresets[index - 1].midway_input);
       }
   );
 
@@ -650,20 +636,24 @@ QWidget* SessionEditor::build_tools_tab() {
     const lnb::Session defaults;
     auto* grid = make_budget_grid();
 
-    tool_output_cap_ = add_budget_spin(
-        content, grid, 0, 0, trs("Tool output cap"),
-        static_cast<int>(defaults.tool_output_max_tokens_), 128, 2'000'000'000, 256
+    midturn_input_budget_ = add_budget_spin(
+        content, grid, 0, 0,
+        trs("Input token produced midway"),
+        static_cast<int>(defaults.input_token_produced_midway_), 0,
+        2'000'000'000, 1000
     );
-    max_tool_rounds_ = add_budget_spin(
-        content, grid, 0, 1, trs("Max tool rounds"),
-        static_cast<int>(defaults.max_tool_rounds_), 1, 1000, 1
-    );
-    max_tool_calls_ = add_budget_spin(
-        content, grid, 1, 0, trs("Max tool calls"),
-        static_cast<int>(defaults.max_tool_calls_), 1, 10000, 1
-    );
-
     layout->addLayout(grid);
+
+    auto* description = field_label(
+        content,
+        trs(
+            "Total tokens of tool output this session may feed back to the "
+            "model in one turn, counted across every tool call in that turn. "
+            "Once the budget is spent, the remaining answer is produced without "
+            "tools. 0 disables the limit."
+        )
+    );
+    layout->addWidget(description);
   }
 
   layout->addStretch(1);
@@ -718,9 +708,9 @@ void SessionEditor::load_session() {
   summary_budget_->setValue(static_cast<int>(session_.summary_token_budget_));
   summary_headroom_->setValue(static_cast<int>(session_.summary_reasoning_headroom_tokens_));
   response_budget_->setValue(static_cast<int>(session_.response_token_budget_));
-  tool_output_cap_->setValue(static_cast<int>(session_.tool_output_max_tokens_));
-  max_tool_rounds_->setValue(static_cast<int>(session_.max_tool_rounds_));
-  max_tool_calls_->setValue(static_cast<int>(session_.max_tool_calls_));
+  midturn_input_budget_->setValue(
+      static_cast<int>(session_.input_token_produced_midway_)
+  );
 
   // Only a saved session has stored messages to merge.
   summarize_button_->setEnabled(session_id_ != 0);
@@ -820,9 +810,8 @@ void SessionEditor::save_session() {
   session.summary_reasoning_headroom_tokens_ =
       static_cast<std::size_t>(summary_headroom_->value());
   session.response_token_budget_ = static_cast<std::size_t>(response_budget_->value());
-  session.tool_output_max_tokens_ = static_cast<std::size_t>(tool_output_cap_->value());
-  session.max_tool_rounds_ = static_cast<std::size_t>(max_tool_rounds_->value());
-  session.max_tool_calls_ = static_cast<std::size_t>(max_tool_calls_->value());
+  session.input_token_produced_midway_ =
+      static_cast<std::size_t>(midturn_input_budget_->value());
   session.reasoning_effort_ = reasoning_->currentText().toStdString();
 
   session.tools_enabled_ = tools_enabled_->isChecked();

@@ -138,6 +138,9 @@ boost::json::object build_chat_request(const Request& request) {
   payload["model"] = request.model;
   payload["messages"] = std::move(messages);
   payload["stream"] = true;
+  // Ask for the usage chunk the tasks window reports against. Without it the
+  // readout could only be a character-based estimate.
+  payload["stream_options"] = boost::json::object{{"include_usage", true}};
 
   if (request.include_tools) {
     payload["tools"] = tool_definitions(request.tool_permissions);
