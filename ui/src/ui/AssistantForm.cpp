@@ -29,25 +29,24 @@ namespace {
 struct SummaryPreset {
   const char* name;
   int memory_budget;
-  int headroom;
   int trigger;
   int session_pool;
 };
 
 constexpr SummaryPreset kSummaryPresets[] = {
-    // memory, reasoning headroom, trigger, session pool
-    {"Instant",             250,  1000,  3000,   500},
-    {"Very Light",          500,  2000,  6000,  1000},
-    {"Light",              1000,  2000, 12000,  2000},
-    {"Balanced",           2000,  4000, 24000,  4000},
-    {"Heavy",              4000,  8000, 48000,  8000},
-    {"Very Heavy",         8000, 16000, 96000, 16000},
+    // memory, trigger, session pool
+    {"Instant",             250,  3000,   500},
+    {"Very Light",          500,  6000,  1000},
+    {"Light",              1000, 12000,  2000},
+    {"Balanced",           2000, 24000,  4000},
+    {"Heavy",              4000, 48000,  8000},
+    {"Very Heavy",         8000, 96000, 16000},
 };
 
 // constexpr SummaryPreset kSummaryPresets[] = {
-//     {"Light", 2000, 4000, 40000, 8000},
-//     {"Balanced (default)", 4000, 12000, 80000, 16000},
-//     {"Deep memory", 8000, 24000, 160000, 32000},
+//     {"Light", 2000, 40000, 8000},
+//     {"Balanced (default)", 4000, 80000, 16000},
+//     {"Deep memory", 8000, 160000, 32000},
 // };
 
 } // namespace
@@ -249,22 +248,12 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
     auto* form = form_layout(this);
 
     summary_token_budget_ = make_spin(this, 0);
-    summary_reasoning_headroom_ = make_spin(this, 0);
 
     summary_token_budget_->setToolTip(
-        trs("Target size of the generated assistant memory.")
-    );
-    summary_reasoning_headroom_->setToolTip(
-        trs(
-            "Extra completion budget for a reasoning model's hidden thinking, so the "
-            "visible memory is not starved."
-        )
+        trs("Completion cap for the generated assistant memory.")
     );
 
     form->addRow(field_label(this, trs("Memory budget")), summary_token_budget_);
-    form->addRow(
-        field_label(this, trs("Reasoning headroom")), summary_reasoning_headroom_
-    );
     content->addLayout(form);
   }
 
@@ -275,7 +264,6 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
 
     const SummaryPreset& summary_preset = kSummaryPresets[index - 1];
     summary_token_budget_->setValue(summary_preset.memory_budget);
-    summary_reasoning_headroom_->setValue(summary_preset.headroom);
     summary_trigger_->setValue(summary_preset.trigger);
     summary_session_budget_->setValue(summary_preset.session_pool);
   });
@@ -308,9 +296,6 @@ void AssistantForm::set_assistant(const lnb::Assistant& assistant) {
   instructions_->setPlainText(to_qstring(assistant.custom_instructions_));
 
   summary_token_budget_->setValue(static_cast<int>(assistant.summary_token_budget_));
-  summary_reasoning_headroom_->setValue(
-      static_cast<int>(assistant.summary_reasoning_headroom_tokens_)
-  );
   summary_trigger_->setValue(static_cast<int>(assistant.summary_trigger_tokens_));
   summary_session_budget_->setValue(
       static_cast<int>(assistant.summary_token_budget_for_session_summarization_)
@@ -354,8 +339,6 @@ void AssistantForm::write_into(lnb::Assistant& assistant) const {
 
   assistant.summary_token_budget_ =
       static_cast<std::size_t>(summary_token_budget_->value());
-  assistant.summary_reasoning_headroom_tokens_ =
-      static_cast<std::size_t>(summary_reasoning_headroom_->value());
   assistant.summary_trigger_tokens_ =
       static_cast<std::size_t>(summary_trigger_->value());
   assistant.summary_token_budget_for_session_summarization_ =

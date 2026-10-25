@@ -121,7 +121,6 @@ private:
   QSpinBox* summary_keep_ = nullptr;
   QSpinBox* summary_trigger_ = nullptr;
   QSpinBox* summary_budget_ = nullptr;
-  QSpinBox* summary_headroom_ = nullptr;
   QSpinBox* midturn_input_budget_ = nullptr;
   QSpinBox* response_budget_ = nullptr;
 

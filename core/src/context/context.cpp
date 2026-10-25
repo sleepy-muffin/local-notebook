@@ -57,6 +57,16 @@ std::size_t prompt_tokens(const std::string& text) {
   return estimate_tokens(text);
 }
 
+std::size_t request_tokens(const net::Request& request) {
+  std::size_t total = prompt_tokens(request.instructions);
+
+  for (const net::OutgoingMessage& message: request.messages) {
+    total += prompt_tokens(message.content) + kMessageOverhead;
+  }
+
+  return total;
+}
+
 Window plan_window(const std::vector<Message>& messages, std::size_t window_tokens) {
   Window window;
   window.start = messages.size();

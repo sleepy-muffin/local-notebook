@@ -112,13 +112,11 @@ void seed_design_session(lnb::api::interface& api, std::uint32_t session_id) {
   );
   api.append_message(
       session_id, lnb::Role::Assistant,
-      "Because the completion budget is shared with hidden reasoning. If the "
-      "reasoning headroom is too small, the visible answer is cut off.\n\n"
-      "```cpp\nconst std::size_t max_tokens =\n"
-      "    session.summary_token_budget_ +\n"
-      "    session.summary_reasoning_headroom_tokens_;\n```\n\n"
-      "The fix is to raise `summary_reasoning_headroom_tokens`, not the answer "
-      "budget."
+      "Because the completion budget covers both hidden reasoning and the visible "
+      "answer. If the memory budget is too small, the visible answer can be cut "
+      "off.\n\n"
+      "```cpp\nconst std::size_t max_tokens = session.summary_token_budget_;\n```\n\n"
+      "The fix is to raise the memory budget, not the answer budget."
   );
   api.append_message(
       session_id, lnb::Role::User,

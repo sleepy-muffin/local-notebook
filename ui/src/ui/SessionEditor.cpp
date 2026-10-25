@@ -62,29 +62,28 @@ struct BudgetPreset {
   int trigger;
   int keep;
   int memory_budget;
-  int headroom;
   int response;
   // Cumulative budget for the tool output fed back to the model in one turn.
   int midway_input;
 };
 
 /**
- * summary_trigger_ summary_keep_ summary_budget_ summary_headroom_
+ * summary_trigger_ summary_keep_ summary_budget_
  *
  * response_budget_ midturn_input_budget_
  */
 constexpr BudgetPreset kBudgetPresets[] = {
     // memory: trigger (the input bound), keep (the level it merges down to),
-    // memory, reasoning;
+    // memory;
     // response;
     // tool: cumulative input produced midway (tool results fed back)
-    {"Instant",      1000,   250,   250,   500,   500,  1000},
-    {"Very Light",   2000,   500,   500,  1000,  1000,  2000},
-    {"Light",        4000,  1000,  1000,  2000,  2000,  4000},
-    {"Balanced",    12000,  2000,  2000,  4000,  4000,  8000},
-    {"Heavy",       24000,  4000,  2500,  8000,  8000, 16000},
-    {"Very Heavy",  48000,  8000,  3000, 16000, 12000, 32000},
-    {"Ultra",       64000, 16000,  4000, 24000, 16000, 64000},
+    {"Instant",      1000,   250,   250,   500,  1000},
+    {"Very Light",   2000,   500,   500,  1000,  2000},
+    {"Light",        4000,  1000,  1000,  2000,  4000},
+    {"Balanced",    12000,  2000,  2000,  4000,  8000},
+    {"Heavy",       24000,  4000,  2500,  8000, 16000},
+    {"Very Heavy",  48000,  8000,  3000, 12000, 32000},
+    {"Ultra",       64000, 16000,  4000, 16000, 64000},
 };
 
 // Two fields per row, so a section reads as a small group of related numbers
@@ -460,7 +459,6 @@ QWidget* SessionEditor::build_memory_tab() {
         summary_trigger_->setValue(budget_preset.trigger);
         summary_keep_->setValue(budget_preset.keep);
         summary_budget_->setValue(budget_preset.memory_budget);
-        summary_headroom_->setValue(budget_preset.headroom);
         response_budget_->setValue(budget_preset.response);
       }
   );
@@ -482,11 +480,6 @@ QWidget* SessionEditor::build_memory_tab() {
     summary_budget_ = add_budget_spin(
         content, grid, 1, 0, trs("Memory budget"),
         static_cast<int>(defaults.summary_token_budget_), 128, 2'000'000'000, 256
-    );
-    summary_headroom_ = add_budget_spin(
-        content, grid, 1, 1, trs("Reasoning headroom"),
-        static_cast<int>(defaults.summary_reasoning_headroom_tokens_), 0,
-        2'000'000'000, 256
     );
 
     layout->addLayout(grid);
@@ -706,7 +699,6 @@ void SessionEditor::load_session() {
   summary_keep_->setValue(static_cast<int>(session_.summary_keep_tokens_));
   summary_trigger_->setValue(static_cast<int>(session_.memory_trigger_tokens_));
   summary_budget_->setValue(static_cast<int>(session_.summary_token_budget_));
-  summary_headroom_->setValue(static_cast<int>(session_.summary_reasoning_headroom_tokens_));
   response_budget_->setValue(static_cast<int>(session_.response_token_budget_));
   midturn_input_budget_->setValue(
       static_cast<int>(session_.input_token_produced_midway_)
@@ -807,8 +799,6 @@ void SessionEditor::save_session() {
   session.summary_keep_tokens_ = static_cast<std::size_t>(summary_keep_->value());
   session.memory_trigger_tokens_ = static_cast<std::size_t>(summary_trigger_->value());
   session.summary_token_budget_ = static_cast<std::size_t>(summary_budget_->value());
-  session.summary_reasoning_headroom_tokens_ =
-      static_cast<std::size_t>(summary_headroom_->value());
   session.response_token_budget_ = static_cast<std::size_t>(response_budget_->value());
   session.input_token_produced_midway_ =
       static_cast<std::size_t>(midturn_input_budget_->value());

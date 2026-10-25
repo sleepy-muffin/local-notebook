@@ -85,8 +85,9 @@ public:
   // summary_trigger_tokens_, or the collapse re-triggers straight away.
   std::size_t summary_keep_tokens_ = 4000;
 
+  // Completion cap for the generated memory. This is an upper bound on the
+  // summariser's output, not a target written into its prompt.
   std::size_t summary_token_budget_ = 4000;
-  std::size_t summary_reasoning_headroom_tokens_ = 12000;
 
   // Token budget for the tool results fed back to the model as input during one
   // turn. The tool loop's round and call counts are fixed in the core (they are
@@ -125,11 +126,9 @@ public:
   // It is not what normal chat turns use.
   std::string reasoning_effort_;
 
-  // Target size of the generated assistant memory_.
+  // Completion cap for the generated assistant memory_. This is an upper bound
+  // on the summariser's output, not a target written into its prompt.
   std::size_t summary_token_budget_ = 4000;
-
-  // Completion headroom for the summariser's hidden reasoning.
-  std::size_t summary_reasoning_headroom_tokens_ = 12000;
 
   // Trigger: new unsummarised tokens across ALL sessions. Also the cap for the
   // recent-message pool gathered for the summarisation.

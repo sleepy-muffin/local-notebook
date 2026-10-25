@@ -1,8 +1,9 @@
 // Regression tests for session shared-directory and tool-permission persistence.
 //
 // Version 5 stores the directory list as a JSON array and renames the old
-// single-path column; version 6 adds the tool permissions. A database written by
-// an older version must still read correctly, with writing off and the other
+// single-path column; version 6 adds the tool permissions; version 9 drops the
+// summariser's reasoning headroom column. A database written by an older
+// version must still read correctly, with writing off and the other
 // permissions on.
 #include "store/database.hpp"
 #include "shark/sqlite3.hpp"
@@ -193,6 +194,10 @@ void test_legacy_migration(const fs::path& path) {
   expect(
       table_has_column(path, "input_token_produced_midway"),
       "migration: the midway input budget column exists"
+  );
+  expect(
+      !table_has_column(path, "summary_reasoning_headroom_tokens"),
+      "migration: summary reasoning headroom column was dropped"
   );
 }
 

@@ -420,6 +420,21 @@ SummaryReviewDialog::SummaryReviewDialog(
   subtitle->setObjectName(QStringLiteral("FormSubtitle"));
   subtitle->setWordWrap(true);
   outer->addWidget(subtitle);
+
+  auto* estimate = new QLabel(
+      trs("Estimated input: %1 tokens")
+          .arg(static_cast<qulonglong>(plan.estimated_input_tokens)),
+      background
+  );
+  estimate->setObjectName(QStringLiteral("Muted"));
+  estimate->setToolTip(
+      trs("Approximate model-facing size of the request, using the app's "
+          "character-based token estimate.")
+  );
+  estimate->setWordWrap(true);
+  outer->addSpacing(10);
+  outer->addWidget(estimate);
+
   outer->addSpacing(14);
 
   const QString readable = render_request(plan.request);

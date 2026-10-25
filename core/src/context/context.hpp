@@ -21,6 +21,11 @@ std::size_t message_tokens(const Message& message);
 // Estimated cost of a system prompt.
 std::size_t prompt_tokens(const std::string& text);
 
+// Estimated model-facing cost of one request: the instructions plus each
+// outgoing message's text and per-message overhead. Summariser requests carry
+// no tools, so tool definitions and calls are not counted.
+std::size_t request_tokens(const net::Request& request);
+
 // The verbatim window chosen for a request: the newest suffix of `messages`
 // whose cost fits `window_tokens`. The bound is the **conversation alone** — the
 // system prompt is never counted — so the same number means the same thing for

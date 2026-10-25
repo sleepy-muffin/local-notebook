@@ -14,13 +14,23 @@ namespace {
 // 3 `session.summary_keep_tokens`, version 4 `session.reasoning_effort`, version
 // 5 turned the single `shared_directory` into a JSON array of directories
 // (`shared_directories`), version 6 added the session tool permissions, version
-// 7 added `session.include_in_assistant_memory`, and version 8 dropped the
+// 7 added `session.include_in_assistant_memory`, version 8 dropped the
 // per-session `max_tool_rounds` / `max_tool_calls` guards (now fixed in the
-// core) and renamed `tool_output_max_tokens` to
-// `input_token_produced_midway`; an older file gains each column in the
-// constructor.
+// core) and renamed `tool_output_max_tokens` to `input_token_produced_midway`,
+// and version 9 dropped `summary_reasoning_headroom_tokens` (the memory budget
+// is now the summariser's completion cap); an older file gains each column in
+// the constructor.
+
+/**
+ * Notes
+ *
+ * summary_trigger_tokens: when summarization is triggered.
+ * summary_keep_tokens: summarization involves
+ *  from summary_trigger_tokens to summary_keep_tokens
+ * summary_token_budget: how many tokens can memory have
+ */
 constexpr std::string_view SCHEMA = R"sql(
-PRAGMA user_version = 8;
+PRAGMA user_version = 9;
 
 CREATE TABLE IF NOT EXISTS session (
   id                                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,7 +44,6 @@ CREATE TABLE IF NOT EXISTS session (
   summary_keep_tokens               INTEGER NOT NULL DEFAULT 4000,
   summary_trigger_tokens            INTEGER NOT NULL DEFAULT 16000,
   summary_token_budget              INTEGER NOT NULL DEFAULT 4000,
-  summary_reasoning_headroom_tokens INTEGER NOT NULL DEFAULT 12000,
   input_token_produced_midway       INTEGER NOT NULL DEFAULT 32000,
   response_token_budget             INTEGER NOT NULL DEFAULT 8000,
   reasoning_effort                  TEXT    NOT NULL DEFAULT '',
@@ -60,7 +69,7 @@ CREATE INDEX IF NOT EXISTS idx_message_made_at ON message(made_at);
 constexpr std::string_view SESSION_COLUMNS =
   "id, title, custom_instructions, memory, memory_watermark, "
   "assistant_memory_watermark, shared_directories, pinned, summary_keep_tokens, "
-  "summary_trigger_tokens, summary_token_budget, summary_reasoning_headroom_tokens, "
+  "summary_trigger_tokens, summary_token_budget, "
   "input_token_produced_midway, response_token_budget, "
   "reasoning_effort, tools_enabled, read_tools, write_tools, online_tools, "
   "include_in_assistant_memory";
@@ -118,16 +127,15 @@ Session read_session(const shark::sqlite::statement& stmt) {
   session.summary_keep_tokens_ = static_cast<std::size_t>(stmt.column_int(8));
   session.memory_trigger_tokens_ = static_cast<std::size_t>(stmt.column_int(9));
   session.summary_token_budget_ = static_cast<std::size_t>(stmt.column_int(10));
-  session.summary_reasoning_headroom_tokens_ = static_cast<std::size_t>(stmt.column_int(11));
   session.input_token_produced_midway_ =
-      static_cast<std::size_t>(stmt.column_int(12));
-  session.response_token_budget_ = static_cast<std::size_t>(stmt.column_int(13));
-  session.reasoning_effort_ = stmt.column_text(14);
-  session.tools_enabled_ = stmt.column_int(15) != 0;
-  session.read_tools_enabled_ = stmt.column_int(16) != 0;
-  session.write_tools_enabled_ = stmt.column_int(17) != 0;
-  session.online_tools_enabled_ = stmt.column_int(18) != 0;
-  session.include_in_assistant_memory_ = stmt.column_int(19) != 0;
+      static_cast<std::size_t>(stmt.column_int(11));
+  session.response_token_budget_ = static_cast<std::size_t>(stmt.column_int(12));
+  session.reasoning_effort_ = stmt.column_text(13);
+  session.tools_enabled_ = stmt.column_int(14) != 0;
+  session.read_tools_enabled_ = stmt.column_int(15) != 0;
+  session.write_tools_enabled_ = stmt.column_int(16) != 0;
+  session.online_tools_enabled_ = stmt.column_int(17) != 0;
+  session.include_in_assistant_memory_ = stmt.column_int(18) != 0;
   return session;
 }
 
@@ -254,17 +262,25 @@ database::database(std::string_view path) : connection_(path) {
       );
     }
   }
+
+  // Version 9 removed the summariser's reasoning headroom: the memory budget is
+  // now the completion cap. Drop the stale column from older files.
+  if (has_column(connection_, "session", "summary_reasoning_headroom_tokens")) {
+    connection_.exec(
+      "ALTER TABLE session DROP COLUMN summary_reasoning_headroom_tokens"
+    );
+  }
 }
 
 std::uint32_t database::insert_session(const Session& session) {
   auto stmt = connection_.prepare(
     "INSERT INTO session (title, custom_instructions, memory, memory_watermark, "
     "assistant_memory_watermark, shared_directories, pinned, summary_keep_tokens, "
-    "summary_trigger_tokens, summary_token_budget, summary_reasoning_headroom_tokens, "
+    "summary_trigger_tokens, summary_token_budget, "
     "input_token_produced_midway, response_token_budget, "
     "reasoning_effort, tools_enabled, read_tools, write_tools, online_tools, "
     "include_in_assistant_memory) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   );
   stmt.bind(
     session.title_, session.custom_instructions_, session.memory_,
@@ -273,7 +289,6 @@ std::uint32_t database::insert_session(const Session& session) {
     static_cast<int>(session.summary_keep_tokens_),
     static_cast<int>(session.memory_trigger_tokens_),
     static_cast<int>(session.summary_token_budget_),
-    static_cast<int>(session.summary_reasoning_headroom_tokens_),
     static_cast<int>(session.input_token_produced_midway_),
     static_cast<int>(session.response_token_budget_),
     session.reasoning_effort_,
@@ -291,7 +306,7 @@ void database::update_session(const Session& session) {
     "UPDATE session SET title = ?, custom_instructions = ?, memory = ?, "
     "memory_watermark = ?, assistant_memory_watermark = ?, shared_directories = ?, "
     "pinned = ?, summary_keep_tokens = ?, summary_trigger_tokens = ?, "
-    "summary_token_budget = ?, summary_reasoning_headroom_tokens = ?, "
+    "summary_token_budget = ?, "
     "input_token_produced_midway = ?, response_token_budget = ?, "
     "reasoning_effort = ?, tools_enabled = ?, "
     "read_tools = ?, write_tools = ?, online_tools = ?, "
@@ -305,7 +320,6 @@ void database::update_session(const Session& session) {
     static_cast<int>(session.summary_keep_tokens_),
     static_cast<int>(session.memory_trigger_tokens_),
     static_cast<int>(session.summary_token_budget_),
-    static_cast<int>(session.summary_reasoning_headroom_tokens_),
     static_cast<int>(session.input_token_produced_midway_),
     static_cast<int>(session.response_token_budget_), session.reasoning_effort_,
     session.tools_enabled_ ? 1 : 0,

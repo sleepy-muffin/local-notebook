@@ -2,6 +2,7 @@
 
 #include <boost/json/object.hpp>
 
+#include <cstddef>
 #include <functional>
 #include <string>
 
@@ -16,6 +17,10 @@ struct SummaryPlan {
   boost::json::object request;
   std::string watermark_text;
   bool automatic = false;
+
+  // Approximate model-facing input size of `request`, using the same
+  // character-based estimate as the rest of the app.
+  std::size_t estimated_input_tokens = 0;
 
   // True when the pass continues in further requests after this one (a large
   // overflow is folded in several bounded batches).

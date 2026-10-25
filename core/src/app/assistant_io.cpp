@@ -45,8 +45,6 @@ boost::json::object to_json(const Assistant& assistant) {
 
   object["summary_token_budget"] =
       static_cast<std::uint64_t>(assistant.summary_token_budget_);
-  object["summary_reasoning_headroom_tokens"] =
-      static_cast<std::uint64_t>(assistant.summary_reasoning_headroom_tokens_);
   object["summary_trigger_tokens"] =
       static_cast<std::uint64_t>(assistant.summary_trigger_tokens_);
   object["summary_token_budget_for_session_summarization"] =
@@ -107,10 +105,6 @@ Assistant from_json(const boost::json::object& object) {
   // normalised so the pre-update full-endpoint value migrates to the base.
   assistant.summary_token_budget_ = size_or(
       object, "summary_token_budget", assistant.summary_token_budget_
-  );
-  assistant.summary_reasoning_headroom_tokens_ = size_or(
-      object, "summary_reasoning_headroom_tokens",
-      assistant.summary_reasoning_headroom_tokens_
   );
   assistant.summary_trigger_tokens_ = size_or(
       object, "summary_trigger_tokens", assistant.summary_trigger_tokens_

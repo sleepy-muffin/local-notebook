@@ -1294,9 +1294,8 @@ std::string fold_session_memory(
     return memory;
   }
 
-  // The completion cap reserves room for the summariser's hidden reasoning.
-  const std::size_t max_tokens =
-      session.summary_token_budget_ + session.summary_reasoning_headroom_tokens_;
+  // The memory budget is the summariser's completion cap.
+  const std::size_t max_tokens = session.summary_token_budget_;
 
   // The summariser inherits the session's reasoning level: an unsupported level
   // is refused here with the same message the turn itself would raise, so a
@@ -1313,14 +1312,14 @@ std::string fold_session_memory(
         messages, 0, window.start, session.memory_trigger_tokens_
     );
 
+    const net::Request summary_request = context::session_summary_request(
+        remote.model, memory, first_batch, max_tokens, effort
+    );
+
     SummaryPlan plan;
     plan.kind = "session memory";
-    plan.request = build_request(
-        remote.protocol,
-        context::session_summary_request(
-            remote.model, memory, first_batch, max_tokens, effort
-        )
-    );
+    plan.estimated_input_tokens = context::request_tokens(summary_request);
+    plan.request = build_request(remote.protocol, summary_request);
     plan.automatic = !force;
     plan.more_requests = first_batch.size() < window.start;
     plan.watermark_text =
@@ -1413,7 +1412,7 @@ std::string fold_session_memory(
 
         throw std::runtime_error(
             "The memory update returned no text (finish_reason=" + reason +
-            "). Increase summary_reasoning_headroom_tokens for a reasoning model."
+            "). Increase the memory budget for a reasoning model."
         );
       }
 
@@ -1639,20 +1638,19 @@ std::string fold_assistant_memory(
   const std::string effort =
       resolve_reasoning_effort(remote.model, assistant.reasoning_effort_);
 
-  const boost::json::object request = build_request(
-      remote.protocol,
-      context::assistant_summary_request(
-          remote.model, assistant.memory_, sessions_block,
-          assistant.summary_token_budget_ + assistant.summary_reasoning_headroom_tokens_,
-          effort
-      )
+  const net::Request summary_request = context::assistant_summary_request(
+      remote.model, assistant.memory_, sessions_block,
+      assistant.summary_token_budget_, effort
   );
+  const boost::json::object request =
+      build_request(remote.protocol, summary_request);
 
   // Review the single request before it leaves the machine. Declining returns
   // the memory untouched, because nothing has been sent yet.
   if (approver) {
     SummaryPlan plan;
     plan.kind = "assistant memory";
+    plan.estimated_input_tokens = context::request_tokens(summary_request);
     plan.request = request;
     plan.automatic = !strict;
     plan.more_requests = false;
@@ -1733,7 +1731,7 @@ std::string fold_assistant_memory(
     if (strict) {
       throw std::runtime_error(
           "The memory update returned no text (finish_reason=" + reason +
-          "). Increase summary_reasoning_headroom_tokens for a reasoning model."
+          "). Increase the memory budget for a reasoning model."
       );
     }
 
