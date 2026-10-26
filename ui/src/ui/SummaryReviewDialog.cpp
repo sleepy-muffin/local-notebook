@@ -6,7 +6,6 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QMessageBox>
 #include <QMetaObject>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -519,21 +518,8 @@ bool review_summary(const lnb::SummaryPlan& plan) {
     approved = dialog.exec() == QDialog::Accepted;
   });
 
-  if (!approved && plan.automatic) {
-    // Skipping an automatic pass leaves the messages unmerged, which is not
-    // harmless: say so, and point at the manual action.
-    on_ui_thread([]() {
-      QMessageBox::warning(
-          QApplication::activeWindow(), trs("Memory Update Skipped"),
-          trs(
-              "The automatic memory update was skipped. Some messages may not be "
-              "merged into memory; use Update memory now before sending new messages "
-              "if you want them included."
-          )
-      );
-    });
-  }
-
+  // A declined review is a deliberate no-op: the dialog already made the
+  // consequences clear, and every pass is strict, so nothing is left half-done.
   return approved;
 }
 

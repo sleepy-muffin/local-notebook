@@ -37,11 +37,12 @@ boost::json::object to_json(const Assistant& assistant) {
   object["summary_timeout_seconds"] =
       static_cast<std::uint64_t>(assistant.summary_timeout_seconds_);
 
-  // The wire protocol this assistant talks, and the reasoning level a new
-  // session starts on. Both are written even when defaulted, so the file always
-  // states the choice explicitly.
+  // The wire protocol this assistant talks, and the reasoning levels a new
+  // session starts on and the assistant-wide summariser runs at. All are written
+  // even when defaulted, so the file always states the choice explicitly.
   object["protocol"] = net::protocol_name(assistant.protocol_);
   object["reasoning_effort"] = assistant.reasoning_effort_;
+  object["summary_reasoning_effort"] = assistant.summary_reasoning_effort_;
 
   object["summary_token_budget"] =
       static_cast<std::uint64_t>(assistant.summary_token_budget_);
@@ -116,6 +117,17 @@ Assistant from_json(const boost::json::object& object) {
 
   assistant.protocol_ = net::protocol_from_name(string_or(object, "protocol"));
   assistant.reasoning_effort_ = string_or(object, "reasoning_effort");
+
+  // A missing summary level reads as the shipped default ("none"), not the empty
+  // "model default" that string_or() would return. A present value is kept
+  // verbatim, including an empty one.
+  if (const boost::json::value* summary_effort =
+          object.if_contains("summary_reasoning_effort");
+      summary_effort != nullptr && summary_effort->is_string()) {
+    assistant.summary_reasoning_effort_ =
+        std::string(summary_effort->as_string());
+  }
+
   assistant.api_url_ = net::normalize_base_url(assistant.api_url_);
 
   return assistant;

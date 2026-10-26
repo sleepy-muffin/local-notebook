@@ -17,9 +17,10 @@ namespace {
 // 7 added `session.include_in_assistant_memory`, version 8 dropped the
 // per-session `max_tool_rounds` / `max_tool_calls` guards (now fixed in the
 // core) and renamed `tool_output_max_tokens` to `input_token_produced_midway`,
-// and version 9 dropped `summary_reasoning_headroom_tokens` (the memory budget
-// is now the summariser's completion cap); an older file gains each column in
-// the constructor.
+// version 9 dropped `summary_reasoning_headroom_tokens` (the memory budget is
+// now the summariser's completion cap), and version 10 added
+// `session.summary_reasoning_effort`; an older file gains each column in the
+// constructor.
 
 /**
  * Notes
@@ -30,7 +31,7 @@ namespace {
  * summary_token_budget: how many tokens can memory have
  */
 constexpr std::string_view SCHEMA = R"sql(
-PRAGMA user_version = 9;
+PRAGMA user_version = 10;
 
 CREATE TABLE IF NOT EXISTS session (
   id                                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,7 +52,8 @@ CREATE TABLE IF NOT EXISTS session (
   read_tools                        INTEGER NOT NULL DEFAULT 1,
   write_tools                       INTEGER NOT NULL DEFAULT 0,
   online_tools                      INTEGER NOT NULL DEFAULT 1,
-  include_in_assistant_memory       INTEGER NOT NULL DEFAULT 1
+  include_in_assistant_memory       INTEGER NOT NULL DEFAULT 1,
+  summary_reasoning_effort          TEXT    NOT NULL DEFAULT 'none'
 );
 
 CREATE TABLE IF NOT EXISTS message (
@@ -72,7 +74,7 @@ constexpr std::string_view SESSION_COLUMNS =
   "summary_trigger_tokens, summary_token_budget, "
   "input_token_produced_midway, response_token_budget, "
   "reasoning_effort, tools_enabled, read_tools, write_tools, online_tools, "
-  "include_in_assistant_memory";
+  "include_in_assistant_memory, summary_reasoning_effort";
 
 constexpr std::string_view MESSAGE_COLUMNS = "id, session_id, role, content, made_at";
 
@@ -136,6 +138,7 @@ Session read_session(const shark::sqlite::statement& stmt) {
   session.write_tools_enabled_ = stmt.column_int(16) != 0;
   session.online_tools_enabled_ = stmt.column_int(17) != 0;
   session.include_in_assistant_memory_ = stmt.column_int(18) != 0;
+  session.summary_reasoning_effort_ = stmt.column_text(19);
   return session;
 }
 
@@ -270,6 +273,16 @@ database::database(std::string_view path) : connection_(path) {
       "ALTER TABLE session DROP COLUMN summary_reasoning_headroom_tokens"
     );
   }
+
+  // Version 10 gives each session's summariser its own reasoning level, so a
+  // memory update no longer inherits the chat level. Existing rows keep the
+  // shipped default ("none").
+  if (!has_column(connection_, "session", "summary_reasoning_effort")) {
+    connection_.exec(
+      "ALTER TABLE session ADD COLUMN summary_reasoning_effort TEXT NOT NULL "
+      "DEFAULT 'none'"
+    );
+  }
 }
 
 std::uint32_t database::insert_session(const Session& session) {
@@ -279,8 +292,8 @@ std::uint32_t database::insert_session(const Session& session) {
     "summary_trigger_tokens, summary_token_budget, "
     "input_token_produced_midway, response_token_budget, "
     "reasoning_effort, tools_enabled, read_tools, write_tools, online_tools, "
-    "include_in_assistant_memory) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "include_in_assistant_memory, summary_reasoning_effort) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   );
   stmt.bind(
     session.title_, session.custom_instructions_, session.memory_,
@@ -296,7 +309,8 @@ std::uint32_t database::insert_session(const Session& session) {
     session.read_tools_enabled_ ? 1 : 0,
     session.write_tools_enabled_ ? 1 : 0,
     session.online_tools_enabled_ ? 1 : 0,
-    session.include_in_assistant_memory_ ? 1 : 0
+    session.include_in_assistant_memory_ ? 1 : 0,
+    session.summary_reasoning_effort_
   );
   return stmt.execute_with_last_row_id();
 }
@@ -310,7 +324,7 @@ void database::update_session(const Session& session) {
     "input_token_produced_midway = ?, response_token_budget = ?, "
     "reasoning_effort = ?, tools_enabled = ?, "
     "read_tools = ?, write_tools = ?, online_tools = ?, "
-    "include_in_assistant_memory = ? "
+    "include_in_assistant_memory = ?, summary_reasoning_effort = ? "
     "WHERE id = ?"
   );
   stmt.bind(
@@ -327,6 +341,7 @@ void database::update_session(const Session& session) {
     session.write_tools_enabled_ ? 1 : 0,
     session.online_tools_enabled_ ? 1 : 0,
     session.include_in_assistant_memory_ ? 1 : 0,
+    session.summary_reasoning_effort_,
     session.id_
   );
   stmt.execute();

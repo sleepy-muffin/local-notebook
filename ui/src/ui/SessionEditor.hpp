@@ -69,9 +69,9 @@ private:
   void load_session();
   void save_session();
 
-  // Rebuilds the reasoning list for the assistant's current model, keeping
+  // Rebuilds `combo`'s reasoning list for the assistant's current model, keeping
   // `preferred` visible even when the model no longer offers it.
-  void populate_reasoning(const std::string& preferred);
+  void populate_reasoning(QComboBox* combo, const std::string& preferred);
 
   // Merges the whole transcript into the memory box on demand, regardless of the
   // automatic trigger. Runs as the session's own background task (through the
@@ -101,6 +101,10 @@ private:
   // The reasoning level this session asks for. The list is model-specific; a
   // stale level stays selectable so it can be corrected rather than dropped.
   QComboBox* reasoning_ = nullptr;
+
+  // The reasoning level this session's summariser runs at, independent of the
+  // chat level above.
+  QComboBox* summary_reasoning_ = nullptr;
 
   PlainTextEdit* memory_ = nullptr;
   QSpinBox* watermark_ = nullptr;

@@ -37,11 +37,18 @@ public:
   std::string custom_instructions_;  // user-authored; kept separate from memory_
   std::string memory_;               // generated session summarisation
 
-  // Which reasoning level this session asks for. Empty means "use the model's
-  // own default", which is how a row written before the selector existed reads.
-  // A concrete level the current model does not support is refused at send time
-  // rather than silently reset (see net::reasoning_effort_supported).
+  // Which reasoning level this session asks for on chat turns. Empty means "use
+  // the model's own default", which is how a row written before the selector
+  // existed reads. A concrete level the current model does not support is refused
+  // at send time rather than silently reset (see net::reasoning_effort_supported).
   std::string reasoning_effort_;
+
+  // Which reasoning level this session's summariser runs at. Kept separate from
+  // reasoning_effort_ so a memory update can run without reasoning while chat
+  // turns reason (or the other way round). Defaults to "none"; a level the
+  // current model does not support is refused at summarisation time rather than
+  // silently replaced.
+  std::string summary_reasoning_effort_ = "none";
 
   // Trigger bookkeeping only: the highest message id already folded. See
   // design-1.md §7 — they are never used to select what a summariser reads.
@@ -121,10 +128,14 @@ public:
   // the only endpoint that supports tool calling for the GPT-6 family.
   net::ApiProtocol protocol_ = net::ApiProtocol::Responses;
 
-  // Assistant::reasoning_effort_ is the level a new session starts on
-  // and the level the assistant-level summariser runs at.
-  // It is not what normal chat turns use.
+  // The level a new session of this assistant starts on. It is not what normal
+  // chat turns use, and not what the summarisers run at.
   std::string reasoning_effort_;
+
+  // The level the assistant-wide summariser runs at. Separate from
+  // reasoning_effort_ so the shared memory can be folded at a different level
+  // than a new session starts on. Defaults to "none".
+  std::string summary_reasoning_effort_ = "none";
 
   // Completion cap for the generated assistant memory_. This is an upper bound
   // on the summariser's output, not a target written into its prompt.

@@ -206,3 +206,17 @@ I will try to make this list ordered by time.
   GitHub Dark, One Dark, Nord, Solarized Light and Solarized Dark, all with the
   complete colour key set and no transparency, so they behave like the plain
   Catppuccin themes.
+
+- (Refinement) Disable and remove `max_tool_rounds`, `max_tool_calls` from settings, as they usually don't help limiting budgets.
+- (Refinement) Rename `tool_output_max_tokens` to `input_token_produced_midway`
+- (Refinement) Disable and remove `summary_reasoning_headroom_tokens`.
+- (Refinement) Make summarizer reviewer show the estimated tokens.
+- (Refinement) Make separate reasoning effort switches (2 switches, one in assistant settings, one in session memory settings) for both assistant and session memory. Default for them: `none`.
+  `Assistant::summary_reasoning_effort_` (settings.json, snake_case key
+  `summary_reasoning_effort`) and `session.summary_reasoning_effort` (schema
+  version 10, migrated with ALTER TABLE) both default to `none`. The assistant
+  settings page and the session editor's Memory page each gained a *Memory
+  reasoning* selector, independent of the chat level, and both summarisers read
+  those fields instead of the chat level. A legacy settings file without the key
+  loads as `none`; an unsupported level is still refused at summarisation time
+  rather than silently replaced.

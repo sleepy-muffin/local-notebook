@@ -12,11 +12,12 @@ namespace lnb {
 // transmitted so the UI can show the user exactly what will leave the machine.
 // `request` is the exact body; `kind` names the pass; `automatic` is true when
 // the token threshold triggered the pass rather than the user asking for it.
+//
+// Always strict.
 struct SummaryPlan {
   std::string kind;
   boost::json::object request;
   std::string watermark_text;
-  bool automatic = false;
 
   // Approximate model-facing input size of `request`, using the same
   // character-based estimate as the rest of the app.

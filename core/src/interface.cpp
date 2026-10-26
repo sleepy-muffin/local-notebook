@@ -726,10 +726,17 @@ std::shared_ptr<GenerationTask> interface::start_generation(
             snapshot, *session, message_mgr->all()
         );
 
-        const net::ChatCompletionResult result = net::generate_reply(
+        const auto outcome = net::generate_reply(
             std::move(request), remote, task, stop,
             session->shared_directories_, *session
         );
+
+        if (!outcome) {
+          task.fail(outcome.error().reason);
+          return;
+        }
+
+        const net::ChatCompletionResult& result = *outcome;
 
         // A cancelled turn keeps nothing; a completed one stores the reply.
         if (!stop.stop_requested() && !result.text.empty()) {

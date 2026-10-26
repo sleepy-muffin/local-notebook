@@ -65,6 +65,19 @@ boost::json::array responses_tools(const ToolPermissions& permissions) {
   return tools;
 }
 
+// Responses output items carry `status`; the input schema does not accept it.
+// Drop that bookkeeping while keeping the pairing fields (`id` for reasoning,
+// `call_id` for function calls).
+boost::json::object replay_item(const boost::json::object& item) {
+  boost::json::object copy = item;
+
+  if (copy.contains("status")) {
+    copy.erase("status");
+  }
+
+  return copy;
+}
+
 } // namespace
 
 boost::json::object build_request(ApiProtocol protocol, const Request& request) {
@@ -206,7 +219,7 @@ boost::json::object build_responses_request(const Request& request) {
   // they were produced. Reasoning items must keep their position ahead of the
   // call they belong to or the model loses the thread.
   for (const boost::json::object& item: request.raw_items) {
-    input.emplace_back(item);
+    input.emplace_back(replay_item(item));
   }
 
   boost::json::object payload;

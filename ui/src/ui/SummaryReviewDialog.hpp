@@ -19,8 +19,7 @@ public:
 
 // Shows the review dialog and returns true when the user approves the pass.
 // Safe to call from a worker thread: the dialog is shown on the interface
-// thread and the caller blocks until it is dismissed. Declining an automatic
-// pass additionally warns that messages may not be folded into memory.
+// thread and the caller blocks until it is dismissed.
 bool review_summary(const lnb::SummaryPlan& plan);
 
 } // namespace ui

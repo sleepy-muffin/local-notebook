@@ -39,6 +39,20 @@ target_link_libraries(
 add_test(NAME http-generation COMMAND http-generation-test)
 
 add_executable(
+  length-truncation-test
+  length_truncation_test.cpp
+)
+
+target_link_libraries(
+  length-truncation-test
+  PRIVATE
+    local-notebook-core
+    Threads::Threads
+)
+
+add_test(NAME length-truncation COMMAND length-truncation-test)
+
+add_executable(
   http-timeout-test
   http_timeout_test.cpp
 )

@@ -36,10 +36,10 @@ struct SummaryPreset {
 constexpr SummaryPreset kSummaryPresets[] = {
     // memory, trigger, session pool
     {"Instant",             250,  3000,   500},
-    {"Very Light",          500,  6000,  1000},
-    {"Light",              1000, 12000,  2000},
-    {"Balanced",           2000, 24000,  4000},
-    {"Heavy",              4000, 48000,  8000},
+    {"Very Light",         1000,  6000,  1000},
+    {"Light",              2000, 12000,  2000},
+    {"Balanced",           4000, 24000,  4000},
+    {"Heavy",              6000, 48000,  8000},
     {"Very Heavy",         8000, 96000, 16000},
 };
 
@@ -104,24 +104,32 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
     form->addRow(field_label(this, trs("Reasoning")), reasoning_);
 
     // A description indented under the control, so it reads as part of the
-    // Reasoning row: the level applies to new sessions and to assistant-wide
-    // memory updates, while a turn and a session memory update use the session's
-    // level.
+    // Reasoning row: the level applies only to a new session's starting level;
+    // chat turns and memory updates have their own levels.
     form->addRow(
         QString(), field_label(this, trs(
-                       "Applies to a new session's starting level and to assistant-wide "
-                       "memory updates, the shared memory across sessions. Chat turns "
-                       "and session memory updates use the session's own level instead."
+                       "Applies to a new session's starting level. Chat turns use the "
+                       "session's own level, and the shared assistant memory has its "
+                       "own level under Memory triggers."
                    ))
     );
 
     form->addRow(field_label(this, trs("API protocol")), protocol_);
     content->addLayout(form);
 
-    // A model change re-derives the reasoning list; a stored level the new model
-    // does not offer stays visible so it can be corrected, never silently reset.
+    // A model change re-derives both reasoning lists; a stored level the new
+    // model does not offer stays visible so it can be corrected, never silently
+    // reset.
     connect(model_, &QLineEdit::textChanged, this, [this](const QString&) {
-      rebuild_reasoning(reasoning_->currentText());
+      rebuild_reasoning(reasoning_, reasoning_->currentText());
+
+      // This connection is registered before the summary selector exists; the
+      // guard keeps a signal during construction safe.
+      if (summary_reasoning_ != nullptr) {
+        rebuild_reasoning(
+            summary_reasoning_, summary_reasoning_->currentText()
+        );
+      }
     });
   }
 
@@ -234,6 +242,18 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
         )
     );
 
+    // The assistant-wide summariser's own reasoning level. Kept here with the
+    // memory settings rather than the chat level above, and independent of it.
+    summary_reasoning_ = new ComboBox(this);
+    summary_reasoning_->setObjectName(
+        QStringLiteral("AssistantSummaryReasoning")
+    );
+    summary_reasoning_->setToolTip(
+        trs("The reasoning level used when the shared assistant memory is "
+            "updated. Chat turns and a new session's level are unaffected.")
+    );
+
+    form->addRow(field_label(this, trs("Memory reasoning")), summary_reasoning_);
     form->addRow(field_label(this, trs("Trigger tokens")), summary_trigger_);
     form->addRow(field_label(this, trs("Session pool")), summary_session_budget_);
     content->addLayout(form);
@@ -276,8 +296,12 @@ void AssistantForm::set_assistant(const lnb::Assistant& assistant) {
   model_->setText(to_qstring(assistant.model_));
 
   // Settings the model above first fired textChanged, which rebuilt the reasoning
-  // list; re-derive it once more with the stored level so the value survives.
-  rebuild_reasoning(to_qstring(assistant.reasoning_effort_));
+  // lists; re-derive both once more with their stored levels so the values
+  // survive.
+  rebuild_reasoning(reasoning_, to_qstring(assistant.reasoning_effort_));
+  rebuild_reasoning(
+      summary_reasoning_, to_qstring(assistant.summary_reasoning_effort_)
+  );
 
   const int protocol_index = protocol_->findData(
       static_cast<int>(assistant.protocol_)
@@ -324,6 +348,8 @@ void AssistantForm::write_into(lnb::Assistant& assistant) const {
       protocol_->currentData().toInt()
   );
   assistant.reasoning_effort_ = reasoning_->currentText().toStdString();
+  assistant.summary_reasoning_effort_ =
+      summary_reasoning_->currentText().toStdString();
 
   const QString proxy = proxy_->text().trimmed();
   assistant.proxy_ = proxy.isEmpty()
@@ -361,7 +387,13 @@ bool AssistantForm::validate_base_url(QString& error) const {
   return true;
 }
 
-void AssistantForm::rebuild_reasoning(const QString& preferred) {
+void AssistantForm::rebuild_reasoning(
+    QComboBox* combo, const QString& preferred
+) {
+  if (combo == nullptr) {
+    return;
+  }
+
   const std::string model = model_->text().trimmed().toStdString();
   const std::string wanted = preferred.trimmed().toStdString();
 
@@ -373,19 +405,19 @@ void AssistantForm::rebuild_reasoning(const QString& preferred) {
       lnb::api::reasoning_levels_for(model, target);
 
   // Rebuilding the list would otherwise emit spurious change signals.
-  const QSignalBlocker blocker(reasoning_);
-  reasoning_->clear();
+  const QSignalBlocker blocker(combo);
+  combo->clear();
 
   int selected = 0;
   for (std::size_t i = 0; i < efforts.size(); ++i) {
-    reasoning_->addItem(to_qstring(efforts[i]));
+    combo->addItem(to_qstring(efforts[i]));
 
     if (QString::compare(to_qstring(efforts[i]), to_qstring(target), Qt::CaseInsensitive) == 0) {
       selected = static_cast<int>(i);
     }
   }
 
-  reasoning_->setCurrentIndex(selected);
+  combo->setCurrentIndex(selected);
 }
 
 bool AssistantForm::eventFilter(QObject* watched, QEvent* event) {

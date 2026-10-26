@@ -40,10 +40,10 @@ public:
   [[nodiscard]] bool validate_base_url(QString& error) const;
 
 private:
-  // Rebuilds the reasoning list for the current model, appending `preferred`
-  // when the model no longer offers it (so a stale level stays visible and
-  // correctable instead of being silently dropped).
-  void rebuild_reasoning(const QString& preferred);
+  // Rebuilds `combo`'s reasoning list for the current model, appending
+  // `preferred` when the model no longer offers it (so a stale level stays
+  // visible and correctable instead of being silently dropped).
+  void rebuild_reasoning(QComboBox* combo, const QString& preferred);
 
   // Completes the URL scheme when the field loses focus.
   bool eventFilter(QObject* watched, QEvent* event) override;
@@ -58,6 +58,7 @@ private:
   PlainTextEdit* instructions_ = nullptr;
   QComboBox* protocol_ = nullptr;
   QComboBox* reasoning_ = nullptr;
+  QComboBox* summary_reasoning_ = nullptr;
   QComboBox* preset_ = nullptr;
   QSpinBox* summary_token_budget_ = nullptr;
   QSpinBox* summary_trigger_ = nullptr;

@@ -2,9 +2,9 @@
 //
 // Version 5 stores the directory list as a JSON array and renames the old
 // single-path column; version 6 adds the tool permissions; version 9 drops the
-// summariser's reasoning headroom column. A database written by an older
-// version must still read correctly, with writing off and the other
-// permissions on.
+// summariser's reasoning headroom column; version 10 adds the session
+// summariser's own reasoning level. A database written by an older version must
+// still read correctly, with writing off and the other permissions on.
 #include "store/database.hpp"
 #include "shark/sqlite3.hpp"
 
@@ -96,6 +96,7 @@ void test_round_trip(const fs::path& path) {
   session.write_tools_enabled_ = true;
   session.online_tools_enabled_ = false;
   session.input_token_produced_midway_ = 12345;
+  session.summary_reasoning_effort_ = "high";
 
   const std::uint32_t id = db.insert_session(session);
   const std::optional<lnb::Session> loaded = db.session(id);
@@ -111,6 +112,10 @@ void test_round_trip(const fs::path& path) {
         loaded->input_token_produced_midway_ == 12345,
         "round trip: midway input budget preserved"
     );
+    expect(
+        loaded->summary_reasoning_effort_ == "high",
+        "round trip: summary reasoning level preserved"
+    );
   }
 
   lnb::Session cleared = loaded.value_or(session);
@@ -119,6 +124,7 @@ void test_round_trip(const fs::path& path) {
   cleared.read_tools_enabled_ = true;
   cleared.write_tools_enabled_ = false;
   cleared.online_tools_enabled_ = true;
+  cleared.summary_reasoning_effort_ = "low";
   db.update_session(cleared);
 
   const std::optional<lnb::Session> empty = db.session(id);
@@ -128,6 +134,10 @@ void test_round_trip(const fs::path& path) {
     expect(empty->shared_directories_.empty(), "round trip: empty list preserved");
     expect_permissions(
         *empty, true, true, false, true, "round trip: updated permissions preserved"
+    );
+    expect(
+        empty->summary_reasoning_effort_ == "low",
+        "round trip: updated summary reasoning level preserved"
     );
   }
 }
@@ -175,6 +185,10 @@ void test_legacy_migration(const fs::path& path) {
           session->response_token_budget_ == 8000,
           "migration: the stored response budget is preserved"
       );
+      expect(
+          session->summary_reasoning_effort_ == "none",
+          "migration: existing sessions default the summary reasoning level to none"
+      );
     }
   }
 
@@ -198,6 +212,10 @@ void test_legacy_migration(const fs::path& path) {
   expect(
       !table_has_column(path, "summary_reasoning_headroom_tokens"),
       "migration: summary reasoning headroom column was dropped"
+  );
+  expect(
+      table_has_column(path, "summary_reasoning_effort"),
+      "migration: the summary reasoning column exists"
   );
 }
 

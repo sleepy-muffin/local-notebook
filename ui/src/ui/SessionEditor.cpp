@@ -73,17 +73,18 @@ struct BudgetPreset {
  * response_budget_ midturn_input_budget_
  */
 constexpr BudgetPreset kBudgetPresets[] = {
-    // memory: trigger (the input bound), keep (the level it merges down to),
-    // memory;
-    // response;
+    // memory:
+    // trigger (the input bound), keep (the level it merges down to), memory;
+    // response; TODO, response is extremely tight for a reasoning model with thinking mode on
+    //           A usable value for them is usually above 16000, much larger than a non-reasoning model.
     // tool: cumulative input produced midway (tool results fed back)
     {"Instant",      1000,   250,   250,   500,  1000},
-    {"Very Light",   2000,   500,   500,  1000,  2000},
-    {"Light",        4000,  1000,  1000,  2000,  4000},
-    {"Balanced",    12000,  2000,  2000,  4000,  8000},
-    {"Heavy",       24000,  4000,  2500,  8000, 16000},
-    {"Very Heavy",  48000,  8000,  3000, 12000, 32000},
-    {"Ultra",       64000, 16000,  4000, 16000, 64000},
+    {"Very Light",   2000,   500,  1000,  1000,  2000},
+    {"Light",        4000,  1000,  1200,  2000,  4000},
+    {"Balanced",    12000,  2000,  4000,  4000,  8000},
+    {"Heavy",       24000,  4000,  6000,  8000, 16000},
+    {"Very Heavy",  48000,  8000,  8000, 12000, 32000},
+    {"Ultra",       64000, 16000, 16000, 16000, 64000},
 };
 
 // Two fields per row, so a section reads as a small group of related numbers
@@ -315,8 +316,7 @@ QWidget* SessionEditor::build_general_tab() {
     reasoning_ = new ComboBox(content);
     reasoning_->setObjectName(QStringLiteral("SessionReasoning"));
     reasoning_->setToolTip(
-        trs("The reasoning level this session requests. Memory updates use the "
-            "same level.")
+        trs("The reasoning level this session requests for chat turns.")
     );
 
     form->addRow(field_label(content, trs("Title")), title_);
@@ -348,6 +348,10 @@ QWidget* SessionEditor::build_general_tab() {
         content, grid, 0, 0, trs("Response budget"),
         static_cast<int>(defaults.response_token_budget_), 128, 2'000'000'000, 256
     );
+
+    // TODO
+    // Add a row of description under `response_budget_`
+    // It should tell the user that it involves the output caused by thinking
 
     layout->addLayout(grid);
   }
@@ -462,6 +466,25 @@ QWidget* SessionEditor::build_memory_tab() {
         response_budget_->setValue(budget_preset.response);
       }
   );
+
+  {
+    auto* form = form_layout(content);
+
+    // The summariser's own level, independent of the chat level on the General
+    // page. A memory update can therefore run without reasoning while turns
+    // reason (or the other way round).
+    summary_reasoning_ = new ComboBox(content);
+    summary_reasoning_->setObjectName(QStringLiteral("SessionMemoryReasoning"));
+    summary_reasoning_->setToolTip(
+        trs("The reasoning level used when this session's memory is updated. "
+            "Chat turns are unaffected.")
+    );
+
+    form->addRow(
+        field_label(content, trs("Memory reasoning")), summary_reasoning_
+    );
+    layout->addLayout(form);
+  }
 
   {
     const lnb::Session defaults;
@@ -673,7 +696,11 @@ void SessionEditor::load_session() {
   const std::string preferred = session_id_ == 0
       ? api_.assistant().reasoning_effort_
       : session_.reasoning_effort_;
-  populate_reasoning(preferred);
+  populate_reasoning(reasoning_, preferred);
+
+  // The summariser has its own level (default none), independent of the chat
+  // level above. A new session uses the Session default.
+  populate_reasoning(summary_reasoning_, session_.summary_reasoning_effort_);
 
   QStringList directories;
 
@@ -708,8 +735,10 @@ void SessionEditor::load_session() {
   summarize_button_->setEnabled(session_id_ != 0);
 }
 
-void SessionEditor::populate_reasoning(const std::string& preferred) {
-  if (reasoning_ == nullptr) {
+void SessionEditor::populate_reasoning(
+    QComboBox* combo, const std::string& preferred
+) {
+  if (combo == nullptr) {
     return;
   }
 
@@ -721,19 +750,19 @@ void SessionEditor::populate_reasoning(const std::string& preferred) {
   const std::vector<std::string> efforts =
       lnb::api::reasoning_levels_for(model, target);
 
-  const QSignalBlocker blocker(reasoning_);
-  reasoning_->clear();
+  const QSignalBlocker blocker(combo);
+  combo->clear();
 
   int selected = 0;
   for (std::size_t i = 0; i < efforts.size(); ++i) {
-    reasoning_->addItem(to_qstring(efforts[i]));
+    combo->addItem(to_qstring(efforts[i]));
 
     if (QString::compare(to_qstring(efforts[i]), to_qstring(target), Qt::CaseInsensitive) == 0) {
       selected = static_cast<int>(i);
     }
   }
 
-  reasoning_->setCurrentIndex(selected);
+  combo->setCurrentIndex(selected);
 }
 
 void SessionEditor::save_session() {
@@ -745,17 +774,17 @@ void SessionEditor::save_session() {
   const std::size_t keep = static_cast<std::size_t>(summary_keep_->value());
   const std::size_t response = static_cast<std::size_t>(response_budget_->value());
 
-  if (response > trigger) {
-    QMessageBox::warning(
-        this, trs("Invalid Budget"),
-        trs(
-            "The response budget must not be greater than the memory "
-            "trigger. A reply could otherwise never complete before the "
-            "conversation is merged again."
-        )
-    );
-    return;
-  }
+  // if (response > trigger) {
+  //   QMessageBox::warning(
+  //       this, trs("Invalid Budget"),
+  //       trs(
+  //           "The response budget must not be greater than the memory "
+  //           "trigger. A reply could otherwise never complete before the "
+  //           "conversation is merged again."
+  //       )
+  //   );
+  //   return;
+  // }
 
   if (keep >= trigger) {
     QMessageBox::warning(
@@ -803,6 +832,8 @@ void SessionEditor::save_session() {
   session.input_token_produced_midway_ =
       static_cast<std::size_t>(midturn_input_budget_->value());
   session.reasoning_effort_ = reasoning_->currentText().toStdString();
+  session.summary_reasoning_effort_ =
+      summary_reasoning_->currentText().toStdString();
 
   session.tools_enabled_ = tools_enabled_->isChecked();
   session.read_tools_enabled_ = read_tools_->isChecked();

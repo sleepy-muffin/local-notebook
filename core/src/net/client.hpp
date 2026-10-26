@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <expected>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -65,6 +66,19 @@ struct ChatCompletionResult {
   RoundUsage usage;
 };
 
+enum class FailureKind {
+  Cancelled,
+  Transport,
+  HttpStatus,
+  Stream,
+  Truncated,
+};
+
+struct FailedResult {
+  FailureKind kind;
+  std::string reason;
+};
+
 // Assembles the protocol-neutral request for one turn (design-1.md §4): system
 // (assistant + session instructions), assistant memory, session memory, then the
 // verbatim window of `messages` that fits `session.memory_trigger_tokens_`. The
@@ -90,13 +104,16 @@ ContextUsage context_usage(
 );
 
 // Performs one streaming request using `remote`'s protocol. Assistant text is
-// streamed into `task` as it arrives. Throws std::runtime_error on failure; a
-// stop request surfaces as the message "Generation cancelled".
+// streamed into `task` as it arrives. On failure it returns an error and no
+// result: that includes transport/HTTP/stream failures, a stop request, and a
+// response that finished with `finish_reason == "length"`. Because text may
+// already have been streamed, callers must discard or clear it on error.
 //
 // `kind` labels the request in the assistant log ("chat", "session-summary",
 // "assistant-summary"); the exact request body is written there verbatim before
 // it is posted.
-ChatCompletionResult send_message_once(
+
+[[nodiscard]] std::expected<ChatCompletionResult, FailedResult> send_message_once(
     const boost::json::object& payload, const Remote& remote, GenerationTask& task,
     std::stop_token stop_token, std::string_view kind
 );
@@ -108,7 +125,11 @@ ChatCompletionResult send_message_once(
 // `response_token_budget_`, and the tool results alone are additionally bounded
 // by `input_token_produced_midway_`, so the loop can never grow the context
 // without limit.
-ChatCompletionResult generate_reply(
+//
+// On failure it returns an error and no result; a stop request is reported as
+// `FailureKind::Cancelled`. Assistant text is streamed into `task` as it arrives,
+// so callers must discard that streamed text on error.
+[[nodiscard]] std::expected<ChatCompletionResult, FailedResult> generate_reply(
     Request request, const Remote& remote, GenerationTask& task,
     std::stop_token stop_token,
     const std::vector<std::string>& shared_directories, const Session& session

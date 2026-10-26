@@ -170,14 +170,6 @@ ToolPermissions tool_permissions_for(const Session& session) {
   return permissions;
 }
 
-// A completed turn whose reply hit the completion cap is not an error: the text
-// is kept and the user is told why it stops. The literal reason "length" is
-// never surfaced.
-void note_length_warning(const ChatCompletionResult& result, GenerationTask& task) {
-  if (result.finish_reason == "length") {
-    task.set_warning("The reply was cut off because it reached the response limit.");
-  }
-}
 
 // Refuses a reasoning level the model does not offer. The user chose it
 // explicitly (or it is the level a session was created with), so a mismatch —
@@ -814,17 +806,18 @@ ContextUsage context_usage(
   return usage;
 }
 
-ChatCompletionResult send_message_once(
+std::expected<ChatCompletionResult, FailedResult> send_message_once(
     const boost::json::object& payload, const Remote& remote, GenerationTask& task,
     std::stop_token stop_token, std::string_view kind
 ) {
-  auto throw_if_stopped = [&stop_token]() {
-    if (stop_token.stop_requested()) {
-      throw std::runtime_error("Generation cancelled");
-    }
+  auto fail = [](FailureKind kind, std::string reason)
+      -> std::unexpected<FailedResult> {
+    return std::unexpected(FailedResult{kind, std::move(reason)});
   };
 
-  throw_if_stopped();
+  if (stop_token.stop_requested()) {
+    return fail(FailureKind::Cancelled, "Generation cancelled");
+  }
 
   // Record the exact request body: these are byte-for-byte the bytes posted, so
   // a surprising reply (or a failed summary) can always be traced back to what
@@ -916,24 +909,24 @@ ChatCompletionResult send_message_once(
         "POST", remote.url, remote.proxy, headers, body, stop_token, on_response,
         on_body, 60'000, 0, read_timeout_ms
     );
-  } catch (const std::exception&) {
+  } catch (const std::exception& error) {
     flush();
 
     if (stop_token.stop_requested()) {
-      throw std::runtime_error("Generation cancelled");
+      return fail(FailureKind::Cancelled, "Generation cancelled");
     }
 
-    throw;
+    return fail(FailureKind::Transport, error.what());
   }
 
   flush();
 
   if (stop_token.stop_requested()) {
-    throw std::runtime_error("Generation cancelled");
+    return fail(FailureKind::Cancelled, "Generation cancelled");
   }
 
   if (stream_failed()) {
-    throw std::runtime_error(stream_error());
+    return fail(FailureKind::Stream, stream_error());
   }
 
   if (status < 200 || status >= 300) {
@@ -944,7 +937,7 @@ ChatCompletionResult send_message_once(
       message += ": " + captured;
     }
 
-    throw std::runtime_error(message);
+    return fail(FailureKind::HttpStatus, std::move(message));
   }
 
   if (!stream_finished()) {
@@ -959,7 +952,7 @@ ChatCompletionResult send_message_once(
       message += captured.substr(0, 400);
     }
 
-    throw std::runtime_error(message);
+    return fail(FailureKind::Stream, std::move(message));
   }
 
   ChatCompletionResult result;
@@ -1008,10 +1001,19 @@ ChatCompletionResult send_message_once(
       " tool_calls=" + std::to_string(result.tool_calls.size())
   );
 
+  // WARNING
+  // NEVER CHNAGE THE REPORT FOR "length" CASE
+  if (result.finish_reason == "length") {
+    return fail(
+        FailureKind::Truncated,
+        "The reply was cut off because it reached the response limit."
+    );
+  }
+
   return result;
 }
 
-ChatCompletionResult generate_reply(
+std::expected<ChatCompletionResult, FailedResult> generate_reply(
     Request request, const Remote& remote, GenerationTask& task,
     std::stop_token stop_token,
     const std::vector<std::string>& shared_directories, const Session& session
@@ -1053,7 +1055,9 @@ ChatCompletionResult generate_reply(
 
   for (std::size_t round = 0; round < kMaxToolRounds; ++round) {
     if (stop_token.stop_requested()) {
-      throw std::runtime_error("Generation cancelled");
+      return std::unexpected(FailedResult{
+          FailureKind::Cancelled, "Generation cancelled"
+      });
     }
 
     if (response_budget > 0) {
@@ -1068,7 +1072,7 @@ ChatCompletionResult generate_reply(
         task.set_warning(
             "The turn stopped because it reached the response budget."
         );
-        return result;
+        return std::move(result);
       }
 
       request.max_output_tokens = static_cast<int>(
@@ -1102,12 +1106,17 @@ ChatCompletionResult generate_reply(
     // totals. Every request re-sends the accumulated history, so the billed
     // input is the sum over rounds; the output is what each round generated
     // (hidden reasoning, tool-call arguments and visible text alike).
-    result = send_message_once(payload, remote, task, stop_token, "chat");
+    auto outcome = send_message_once(payload, remote, task, stop_token, "chat");
+
+    if (!outcome) {
+      return std::unexpected(std::move(outcome.error()));
+    }
+
+    result = std::move(*outcome);
     produced_used += result.usage.output_tokens;
 
     if (result.tool_calls.empty()) {
-      note_length_warning(result, task);
-      return result;
+      return std::move(result);
     }
 
     // Every round streams its narration onto the same task, so the persisted
@@ -1244,8 +1253,7 @@ ChatCompletionResult generate_reply(
       "generate_reply: reached the tool-call round cap ({})", kMaxToolRounds
   );
 
-  note_length_warning(result, task);
-  return result;
+  return std::move(result);
 }
 
 namespace {
@@ -1297,11 +1305,12 @@ std::string fold_session_memory(
   // The memory budget is the summariser's completion cap.
   const std::size_t max_tokens = session.summary_token_budget_;
 
-  // The summariser inherits the session's reasoning level: an unsupported level
-  // is refused here with the same message the turn itself would raise, so a
-  // manual summarisation cannot quietly pick a different level.
+  // The summariser runs at its own level, so a memory update can stay cheap
+  // while chat turns reason. An unsupported level is refused here with the same
+  // message the turn itself would raise, so a manual summarisation cannot
+  // quietly pick a different level.
   const std::string effort =
-      resolve_reasoning_effort(remote.model, session.reasoning_effort_);
+      resolve_reasoning_effort(remote.model, session.summary_reasoning_effort_);
 
   // Review the pass before anything leaves the machine. The plan describes the
   // first request; a very large overflow continues in further batches, which is
@@ -1320,7 +1329,6 @@ std::string fold_session_memory(
     plan.kind = "session memory";
     plan.estimated_input_tokens = context::request_tokens(summary_request);
     plan.request = build_request(remote.protocol, summary_request);
-    plan.automatic = !force;
     plan.more_requests = first_batch.size() < window.start;
     plan.watermark_text =
         "Session memory watermark: " + std::to_string(session.memory_watermark_) +
@@ -1371,35 +1379,44 @@ std::string fold_session_memory(
     GenerationTask silent_task;
     silent_task.start();
 
-    ChatCompletionResult result;
+    const auto outcome = send_message_once(
+        request, remote, silent_task, stop_token, "session-summary"
+    );
 
-    try {
-      result = send_message_once(
-          request, remote, silent_task, stop_token, "session-summary"
-      );
-    } catch (const std::exception& error) {
-      // Keep the request that was already recorded even when the send fails:
-      // the exact bytes are the most useful part of a failed pass.
-      task.append_log(silent_task.log_text());
-      task.append_log(
-          "[session-summary] request failed: " + std::string(error.what())
-      );
-      throw;
-    }
-
-    // The summariser's own diagnostics (the exact request and response) are
-    // copied onto the visible task, so the tasks window shows what was sent
-    // instead of an empty log. Its input is always billed into the turn's total,
-    // but its generated text is the task's output only for a standalone update:
-    // when the fold merely precedes a reply, the output figure must stay the
-    // reply plus its tool results, because those are what the response budget
-    // bounds.
+    // Keep the request that was already recorded even when the send fails: the
+    // exact bytes are the most useful part of a failed pass. The summariser's
+    // input is always billed into the turn's total, but its generated text is
+    // the task's output only for a standalone update: when the fold merely
+    // precedes a reply, the output figure must stay the reply plus its tool
+    // results, because those are what the response budget bounds.
     task.append_log(silent_task.log_text());
     task.add_usage(
         silent_task.input_tokens(), standalone ? silent_task.output_tokens() : 0,
         silent_task.usage_measured()
     );
 
+    if (!outcome) {
+      task.append_log(
+          "[session-summary] request failed: " + outcome.error().reason
+      );
+
+      if (force) {
+        std::string message = outcome.error().reason;
+
+        if (outcome.error().kind == FailureKind::Truncated) {
+          message += " Increase the memory budget for a reasoning model.";
+        }
+
+        throw std::runtime_error(message);
+      }
+
+      // A partial pass is discarded: the stored memory and its watermark stay
+      // exactly as they were, so the next attempt starts from the same batch.
+      complete = false;
+      break;
+    }
+
+    const ChatCompletionResult& result = *outcome;
     const std::string text = trimmed(result.text);
 
     if (text.empty()) {
@@ -1496,12 +1513,12 @@ std::string build_sessions_block(
 }
 
 // Folds every session's contribution into the assistant memory (design-1.md
-// §6). The two pools are gathered separately and never mixed. `strict` makes an
-// empty summariser completion an error (a manual request); an automatic one
-// keeps the previous memory instead.
+// §6). The two pools are gathered separately and never mixed. The pass is always
+// strict: an empty completion (or a failed request) throws, and the automatic
+// caller catches it and keeps the previous memory.
 std::string fold_assistant_memory(
     store::database& db, const Assistant& assistant, const Remote& remote,
-    GenerationTask& task, std::stop_token stop_token, bool strict,
+    GenerationTask& task, std::stop_token stop_token,
     const SummaryApprover& approver
 ) {
   // Every heavy loop below bails out the moment a stop is requested, so a
@@ -1633,10 +1650,11 @@ std::string fold_assistant_memory(
 
   task.set_status("Updating assistant memory...");
 
-  // The summariser inherits the assistant's reasoning level; an unsupported
-  // level is refused rather than silently replaced (see resolve_reasoning_effort).
+  // The summariser runs at its own level, independent of the level a new session
+  // starts on. An unsupported level is refused rather than silently replaced
+  // (see resolve_reasoning_effort).
   const std::string effort =
-      resolve_reasoning_effort(remote.model, assistant.reasoning_effort_);
+      resolve_reasoning_effort(remote.model, assistant.summary_reasoning_effort_);
 
   const net::Request summary_request = context::assistant_summary_request(
       remote.model, assistant.memory_, sessions_block,
@@ -1652,7 +1670,6 @@ std::string fold_assistant_memory(
     plan.kind = "assistant memory";
     plan.estimated_input_tokens = context::request_tokens(summary_request);
     plan.request = request;
-    plan.automatic = !strict;
     plan.more_requests = false;
 
     std::string watermarks;
@@ -1691,51 +1708,48 @@ std::string fold_assistant_memory(
   GenerationTask silent_task;
   silent_task.start();
 
-  ChatCompletionResult result;
+  const auto outcome = send_message_once(
+      request, remote, silent_task, stop_token, "assistant-summary"
+  );
 
-  try {
-    result = send_message_once(
-        request, remote, silent_task, stop_token, "assistant-summary"
-    );
-  } catch (const std::exception& error) {
-    // Keep the request that was already recorded even when the send fails: the
-    // exact bytes are the most useful part of a failed pass.
-    task.append_log(silent_task.log_text());
-    task.append_log(
-        "[assistant-summary] request failed: " + std::string(error.what())
-    );
-    throw;
-  }
-
-  // The summariser's own diagnostics (the exact request and response) are copied
-  // onto the visible task, so the tasks window shows what was sent instead of an
-  // empty log. This task *is* the memory pass, so its token counts are carried
-  // over for the readout.
+  // Keep the request that was already recorded even when the send fails: the
+  // exact bytes are the most useful part of a failed pass. This task *is* the
+  // memory pass, so its token counts are carried over for the readout.
   task.append_log(silent_task.log_text());
   task.add_usage(
       silent_task.input_tokens(), silent_task.output_tokens(),
       silent_task.usage_measured()
   );
 
-  const std::string memory = trimmed(result.text);
+  if (!outcome) {
+    task.append_log(
+        "[assistant-summary] request failed: " + outcome.error().reason
+    );
+
+    std::string message = outcome.error().reason;
+
+    if (outcome.error().kind == FailureKind::Truncated) {
+      message += " Increase the memory budget for a reasoning model.";
+    }
+
+    throw std::runtime_error(message);
+  }
+
+  const std::string memory = trimmed(outcome->text);
 
   if (memory.empty()) {
     const std::string reason =
-        result.finish_reason.empty() ? "unknown" : result.finish_reason;
+        outcome->finish_reason.empty() ? "unknown" : outcome->finish_reason;
 
     task.append_log(
         "[assistant-summary] memory update returned no text (finish_reason=" +
         reason + ")"
     );
 
-    if (strict) {
-      throw std::runtime_error(
-          "The memory update returned no text (finish_reason=" + reason +
-          "). Increase the memory budget for a reasoning model."
-      );
-    }
-
-    return assistant.memory_;
+    throw std::runtime_error(
+        "The memory update returned no text (finish_reason=" + reason +
+        "). Increase the memory budget for a reasoning model."
+    );
   }
 
   // Advance each contributing session's watermark to its newest gathered id, so
@@ -1823,7 +1837,7 @@ std::string maybe_summarize_assistant(
     }
 
     return fold_assistant_memory(
-        db, assistant, remote, task, stop_token, false, approver
+        db, assistant, remote, task, stop_token, approver
     );
   } catch (const std::exception& error) {
     shark::log::info("maybe_summarize_assistant: skipped: {}", error.what());
@@ -1839,7 +1853,7 @@ std::string summarize_assistant_now(
     GenerationTask& task, std::stop_token stop_token, SummaryApprover approver
 ) {
   return fold_assistant_memory(
-      db, assistant, remote, task, stop_token, true, approver
+      db, assistant, remote, task, stop_token, approver
   );
 }
 
