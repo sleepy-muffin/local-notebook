@@ -57,12 +57,18 @@ QString rgba(const QColor& color) {
 // Presets for the session budgets (design-1.md §8). Selecting one only fills the
 // fields below; it never saves, so the values can still be tweaked before Save.
 // The values are starting points, not limits.
-struct BudgetPreset {
+struct MemoryPreset {
   const char* name;
   int trigger;
   int keep;
   int memory_budget;
+};
+struct BudgetPreset {
+  const char* name;
   int response;
+};
+struct MidwayPreset {
+  const char* name;
   // Cumulative budget for the tool output fed back to the model in one turn.
   int midway_input;
 };
@@ -72,19 +78,47 @@ struct BudgetPreset {
  *
  * response_budget_ midturn_input_budget_
  */
+constexpr MemoryPreset kMemoryPresets[] = {
+    // memory:
+    // trigger (the input bound), keep (the level it merges down to), memory;
+    // response; TODO, response is extremely tight for a reasoning model with thinking mode on
+    //           A usable value for them is usually above 16000, much larger than a non-reasoning model.
+    // tool: cumulative input produced midway (tool results fed back)
+    {"Instant",      1000,   250,   250},
+    {"Very Light",   2000,   500,  1000},
+    {"Light",        4000,  1000,  1200},
+    {"Balanced",    12000,  2000,  4000},
+    {"Heavy",       24000,  4000,  6000},
+    {"Very Heavy",  48000,  8000,  8000},
+    {"Ultra",       64000, 16000, 16000},
+};
 constexpr BudgetPreset kBudgetPresets[] = {
     // memory:
     // trigger (the input bound), keep (the level it merges down to), memory;
     // response; TODO, response is extremely tight for a reasoning model with thinking mode on
     //           A usable value for them is usually above 16000, much larger than a non-reasoning model.
     // tool: cumulative input produced midway (tool results fed back)
-    {"Instant",      1000,   250,   250,   500,  1000},
-    {"Very Light",   2000,   500,  1000,  1000,  2000},
-    {"Light",        4000,  1000,  1200,  2000,  4000},
-    {"Balanced",    12000,  2000,  4000,  4000,  8000},
-    {"Heavy",       24000,  4000,  6000,  8000, 16000},
-    {"Very Heavy",  48000,  8000,  8000, 12000, 32000},
-    {"Ultra",       64000, 16000, 16000, 16000, 64000},
+    {"Instant",                    500},
+    {"Very Light",                1000},
+    {"Light",                     2000},
+    {"Balanced",                  4000},
+    {"Heavy",                     8000},
+    {"Light (Reasoning)",        16000},
+    {"Balanced (Reasoning)",     24000},
+    {"Heavy (Reasoning)",        32000},
+    {"Very Heavy (Reasoning)",   64000},
+};
+constexpr MidwayPreset kMidwayPresets[] = {
+    // memory:
+    // trigger (the input bound), keep (the level it merges down to), memory;
+    // response; TODO, response is extremely tight for a reasoning model with thinking mode on
+    //           A usable value for them is usually above 16000, much larger than a non-reasoning model.
+    // tool: cumulative input produced midway (tool results fed back)
+    {"Very Light",  20000},
+    {"Light",       50000},
+    {"Balanced",    80000},
+    {"Heavy",      120000},
+    {"Very Heavy", 170000},
 };
 
 // Two fields per row, so a section reads as a small group of related numbers
@@ -118,7 +152,7 @@ QSpinBox* add_budget_spin(
 // to them by the caller, which knows which page they belong to.
 QComboBox* add_preset_row(
     QWidget* parent, QVBoxLayout* layout, const QString& object_name,
-    const QString& tooltip
+    const QString& tooltip, const auto& presets
 ) {
   auto* row = new QHBoxLayout();
   row->setSpacing(8);
@@ -126,8 +160,8 @@ QComboBox* add_preset_row(
   auto* combo = new ComboBox(parent);
   combo->setObjectName(object_name);
   combo->addItem(trs("Apply a preset..."));
-  for (const BudgetPreset& budget_preset : kBudgetPresets) {
-    combo->addItem(trs(budget_preset.name));
+  for (const auto& preset : presets) {
+    combo->addItem(trs(preset.name));
   }
   combo->setToolTip(tooltip);
 
@@ -349,6 +383,23 @@ QWidget* SessionEditor::build_general_tab() {
         static_cast<int>(defaults.response_token_budget_), 128, 2'000'000'000, 256
     );
 
+    budget_preset_ = add_preset_row(
+        content, layout, QStringLiteral("SessionToolsPreset"),
+        trs("Fill the tool limits below with a preset. Nothing is saved until you "
+            "press Save."), kBudgetPresets
+    );
+
+    connect(
+        budget_preset_, qOverload<int>(&QComboBox::currentIndexChanged), this,
+        [this](int index) {
+          if (index <= 0) {
+            return;
+          }
+
+          response_budget_->setValue(kBudgetPresets[index - 1].response);
+        }
+    );
+
     // TODO
     // Add a row of description under `response_budget_`
     // It should tell the user that it involves the output caused by thinking
@@ -449,7 +500,7 @@ QWidget* SessionEditor::build_memory_tab() {
       content, layout, QStringLiteral("SessionMemoryPreset"),
       trs("Fill the memory fields below with a preset. It also sets the response "
           "budget on the General page, which must not exceed the memory trigger. "
-          "Nothing is saved until you press Save.")
+          "Nothing is saved until you press Save."), kMemoryPresets
   );
 
   connect(
@@ -459,11 +510,11 @@ QWidget* SessionEditor::build_memory_tab() {
           return;
         }
 
-        const BudgetPreset& budget_preset = kBudgetPresets[index - 1];
-        summary_trigger_->setValue(budget_preset.trigger);
-        summary_keep_->setValue(budget_preset.keep);
-        summary_budget_->setValue(budget_preset.memory_budget);
-        response_budget_->setValue(budget_preset.response);
+        const MemoryPreset& memory_preset = kMemoryPresets[index - 1];
+        summary_trigger_->setValue(memory_preset.trigger);
+        summary_keep_->setValue(memory_preset.keep);
+        summary_budget_->setValue(memory_preset.memory_budget);
+        // response_budget_->setValue(budget_preset.response);
       }
   );
 
@@ -634,7 +685,7 @@ QWidget* SessionEditor::build_tools_tab() {
   tools_preset_ = add_preset_row(
       content, layout, QStringLiteral("SessionToolsPreset"),
       trs("Fill the tool limits below with a preset. Nothing is saved until you "
-          "press Save.")
+          "press Save."), kMidwayPresets
   );
 
   connect(
@@ -644,7 +695,7 @@ QWidget* SessionEditor::build_tools_tab() {
           return;
         }
 
-        midturn_input_budget_->setValue(kBudgetPresets[index - 1].midway_input);
+        midturn_input_budget_->setValue(kMidwayPresets[index - 1].midway_input);
       }
   );
 

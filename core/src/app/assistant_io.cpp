@@ -1,6 +1,6 @@
 #include "app/assistant_io.hpp"
 
-#include "shark/external.hpp"
+#include "shark/net/utils.hpp"
 
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>

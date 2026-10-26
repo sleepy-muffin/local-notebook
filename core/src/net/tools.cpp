@@ -1,6 +1,6 @@
 #include "net/tools.hpp"
 
-#include "net/http.hpp"
+#include "shark/net/http.hpp"
 #include "net/search.hpp"
 #include "net/search_results.hpp"
 
@@ -929,7 +929,7 @@ std::vector<SearchResult> parse_bing_rss(const std::string& xml) {
 // serves its bot-challenge page to the plain `local-notebook` User-Agent that
 // `http_get_body` sends by default. These headers make the request look like an
 // ordinary page load, which is what keeps the HTML result pages readable.
-const std::vector<HttpHeader> kBrowserHeaders{
+const std::vector<shark::net::HttpHeader> kBrowserHeaders{
     {"User-Agent",
      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
      "Chrome/124.0 Safari/537.36"},

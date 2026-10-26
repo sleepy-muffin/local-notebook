@@ -119,6 +119,7 @@ private:
 
   // Fill the fields of their own page with a preset; neither saves by itself.
   QComboBox* memory_preset_ = nullptr;
+  QComboBox* budget_preset_ = nullptr;
   QComboBox* tools_preset_ = nullptr;
 
   // Session-bound memory-update settings and budgets.

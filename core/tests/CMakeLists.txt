@@ -53,26 +53,6 @@ target_link_libraries(
 add_test(NAME length-truncation COMMAND length-truncation-test)
 
 add_executable(
-  http-timeout-test
-  http_timeout_test.cpp
-)
-
-target_include_directories(
-  http-timeout-test
-  PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src
-)
-
-target_link_libraries(
-  http-timeout-test
-  PRIVATE
-    local-notebook-core
-    Threads::Threads
-)
-
-add_test(NAME http-timeout COMMAND http-timeout-test)
-
-add_executable(
   search-parse-test
   search_parse_test.cpp
 )
@@ -149,26 +129,6 @@ target_link_libraries(
 )
 
 add_test(NAME assistant-settings COMMAND assistant-settings-test)
-
-add_executable(
-  http-headers-test
-  http_headers_test.cpp
-)
-
-target_include_directories(
-  http-headers-test
-  PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src
-)
-
-target_link_libraries(
-  http-headers-test
-  PRIVATE
-    local-notebook-core
-    Threads::Threads
-)
-
-add_test(NAME http-headers COMMAND http-headers-test)
 
 add_executable(
   instance-lock-test

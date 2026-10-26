@@ -3,7 +3,7 @@
 #include "net/client.hpp"
 
 #include "context/context.hpp"
-#include "net/http.hpp"
+#include "shark/net/http.hpp"
 #include "store/database.hpp"
 
 #include <boost/json/parse.hpp>
@@ -833,7 +833,7 @@ std::expected<ChatCompletionResult, FailedResult> send_message_once(
       "[request " + std::string(kind) + "] POST " + remote.url + "\n" + body
   );
 
-  std::vector<HttpHeader> headers{
+  std::vector<shark::net::HttpHeader> headers{
       {"Content-Type", "application/json"},
       {"Accept", "text/event-stream"},
   };
@@ -879,10 +879,10 @@ std::expected<ChatCompletionResult, FailedResult> send_message_once(
   std::string captured;
   constexpr std::size_t CAPTURE_LIMIT = 2048;
 
-  const ResponseHandler on_response =
-      [](int, const std::vector<HttpHeader>&) { return true; };
+  const shark::net::ResponseHandler on_response =
+      [](int, const std::vector<shark::net::HttpHeader>&) { return true; };
 
-  const BodyHandler on_body = [&](std::string_view chunk) {
+  const shark::net::BodyHandler on_body = [&](std::string_view chunk) {
     if (captured.size() < CAPTURE_LIMIT) {
       captured.append(chunk.substr(0, CAPTURE_LIMIT - captured.size()));
     }

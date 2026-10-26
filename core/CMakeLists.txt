@@ -75,10 +75,6 @@ add_library(${PROJECT_NAME}
 
         src/net/protocol.hpp
         src/net/protocol.cpp
-        src/net/proxy.hpp
-        src/net/proxy.cpp
-        src/net/http.hpp
-        src/net/http.cpp
         src/net/tools.hpp
         src/net/tools.cpp
         src/net/search_results.hpp
@@ -113,15 +109,11 @@ target_link_libraries(
         # directories available to those consumers; on Windows the headers live
         # in the vcpkg tree rather than the compiler's default include path.
         Boost::json
-        Boost::regex
-        Boost::url
         PRIVATE
         shark::common
-        shark::external
+        shark::net
         shark::sqlite3
         ${SQLite3_LIBRARIES}
-        OpenSSL::SSL
-        OpenSSL::Crypto
         Threads::Threads
 )
 
