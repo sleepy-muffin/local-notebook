@@ -72,6 +72,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang \
+            clang-18 \
+            libstdc++-14-dev \
             libsqlite3-dev \
             libssl-dev \
             libwayland-dev \
@@ -93,12 +95,23 @@ jobs:
             wget \
             file
 
+      - name: Check compiler
+        run: |
+          clang++-18 --version
+          clang++-18 -v
+          clang++-18 -print-file-name=libstdc++.so
+          echo '#include <expected>
+          int main() {
+              std::expected<int, int> x = 42;
+              return x.value();
+          }' | clang++-18 -std=c++23 -x c++ -fsyntax-only -
+
       - name: Configure
         run: >
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_C_COMPILER=clang
-          -DCMAKE_CXX_COMPILER=clang++
+          -DCMAKE_C_COMPILER=clang-18
+          -DCMAKE_CXX_COMPILER=clang++-18
           "-DCMAKE_PREFIX_PATH=$QT_ROOT_DIR"
 
       - name: Build
