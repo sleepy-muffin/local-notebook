@@ -1,7 +1,5 @@
 #pragma once
 
-#include <boost/json/object.hpp>
-
 #include <cstddef>
 #include <optional>
 #include <expected>
@@ -9,6 +7,9 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+
+#include <boost/json/object.hpp>
 
 #include "local-notebook-core/generation_task.hpp"
 #include "local-notebook-core/model.hpp"
