@@ -104,10 +104,6 @@ jobs:
               return x.value();
           }' | clang++-19 -std=c++23 -x c++ -fsyntax-only -
 
-      # external/shark sets CMAKE_CXX_STANDARD 23, so CMake runs clang-scan-deps
-      # for every translation unit. That tool ships in clang-tools-* rather than
-      # clang-*, and no source uses C++20 modules, so turn the scan off as the
-      # Windows job already does.
       - name: Configure
         run: >
           cmake -S . -B build -G Ninja
@@ -115,7 +111,6 @@ jobs:
           -DCMAKE_C_COMPILER=clang-19
           -DCMAKE_CXX_COMPILER=clang++-19
           "-DCMAKE_PREFIX_PATH=$QT_ROOT_DIR"
-          -DCMAKE_CXX_SCAN_FOR_MODULES=OFF
 
       - name: Build
         run: cmake --build build --parallel
@@ -388,7 +383,6 @@ jobs:
             "-DMPG123_LIBRARY=$mpg123" `
             "-DLAME_LIBRARY=$lame" `
             "-DVCPKG_TARGET_TRIPLET=x64-windows-release" `
-            "-DCMAKE_CXX_SCAN_FOR_MODULES=OFF" `
             "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
 
 

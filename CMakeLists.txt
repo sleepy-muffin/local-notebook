@@ -23,6 +23,14 @@ if(MSVC)
     add_compile_options(/bigobj)
 endif()
 
+# No translation unit uses C++20 modules. CMake otherwise scans every source
+# with clang-scan-deps whenever the compiler supports it (clang does), and that
+# tool is packaged separately as clang-tools rather than with the compiler, so
+# builds with only clang installed fail. It also adds a scan step per file for
+# no benefit. Override the cache entry to enable scanning.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF CACHE BOOL
+    "Scan C++ sources for module dependencies")
+
 # Only the standard-library core, the Boost.JSON helpers and the SQLite wrapper
 # are used. Turning the image and audio modules off also stops CMake from
 # probing for OpenGL, JPEG, PNG and the audio codecs. The options are forced so
