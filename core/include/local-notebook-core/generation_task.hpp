@@ -25,6 +25,17 @@ public:
     FAILED,
   };
 
+  // Which configured limit `output_budget` is. A chat turn is bounded by the
+  // session's response budget, a standalone session summary by its summarization
+  // budget, and the shared assistant memory pass by the assistant's memory
+  // budget. The readout names the bound it shows, so the three never read alike.
+  enum class BudgetKind {
+    NONE,
+    RESPONSE,
+    SUMMARIZATION,
+    MEMORY,
+  };
+
   struct Snapshot {
     Status status = Status::PENDING;
     // Assistant text only. This is what gets persisted once the turn completes.
@@ -42,14 +53,18 @@ public:
     // Tokens the turn has billed so far, summed over every request it made
     // (each round re-sends the whole history, so this is the billed total, not
     // the size of the final request). `tool_tokens` is the estimated cost of the
-    // tool results fed back to the model; the readout charges it against the
-    // same response budget, so it is shown added to `output_tokens`.
-    // `usage_measured` is false when any round reported no usage and the figures
-    // are local estimates.
+    // tool results fed back to the model; the readout charges it against the same
+    // output budget, so it is shown added to `output_tokens`.
+    // `output_budget` is the limit those produced tokens are charged against, and
+    // `output_budget_kind` says which configured limit it is (a chat turn's
+    // response budget, a session summary's summarization budget, or the assistant
+    // memory pass's memory budget). `usage_measured` is false when any round
+    // reported no usage and the figures are local estimates.
     std::size_t input_tokens = 0;
     std::size_t output_tokens = 0;
     std::size_t tool_tokens = 0;
     std::size_t output_budget = 0;
+    BudgetKind output_budget_kind = BudgetKind::NONE;
     bool usage_measured = true;
     std::int64_t elapsed_ms = 0;
     // Live estimates for the request currently streaming, so the Tasks window
@@ -99,9 +114,12 @@ public:
     output_tokens_ = 0;
     tool_tokens_ = 0;
     output_budget_ = 0;
+    output_budget_kind_ = BudgetKind::NONE;
     usage_measured_ = true;
     streaming_input_tokens_ = 0;
     streaming_output_tokens_ = 0;
+    mirror_ = nullptr;
+    mirror_output_ = true;
     final_elapsed_ms_ = 0;
     stop_source_ = std::stop_source{};
   }
@@ -164,27 +182,75 @@ public:
   // previous request's projection rather than adding to it; the measured totals
   // above are never touched.
   void set_streaming_input(std::size_t input_tokens) {
-    std::lock_guard lock(mutex_);
+    GenerationTask* mirror = nullptr;
 
-    if (status_ == Status::RUNNING) {
+    {
+      std::lock_guard lock(mutex_);
+
+      if (status_ != Status::RUNNING) {
+        return;
+      }
+
       streaming_input_tokens_ = input_tokens;
+      mirror = mirror_;
+    }
+
+    if (mirror != nullptr) {
+      mirror->set_streaming_input(input_tokens);
     }
   }
 
   void set_streaming_output(std::size_t output_tokens) {
-    std::lock_guard lock(mutex_);
+    GenerationTask* mirror = nullptr;
 
-    if (status_ == Status::RUNNING) {
+    {
+      std::lock_guard lock(mutex_);
+
+      if (status_ != Status::RUNNING) {
+        return;
+      }
+
       streaming_output_tokens_ = output_tokens;
+
+      if (mirror_output_) {
+        mirror = mirror_;
+      }
+    }
+
+    if (mirror != nullptr) {
+      mirror->set_streaming_output(output_tokens);
     }
   }
 
   // Drops the in-flight projection, used when a request ends without reporting
   // usage (a failure, cancellation or a thrown exception).
   void clear_streaming_usage() {
+    GenerationTask* mirror = nullptr;
+
+    {
+      std::lock_guard lock(mutex_);
+      streaming_input_tokens_ = 0;
+      streaming_output_tokens_ = 0;
+      mirror = mirror_;
+    }
+
+    if (mirror != nullptr) {
+      mirror->clear_streaming_usage();
+    }
+  }
+
+  // Forwards this task's live in-flight projection to another task. A session
+  // summary or assistant memory pass runs its request on a throwaway task so its
+  // internal text never reaches the transcript; mirroring keeps the row the
+  // reader watches moving while that request streams. Only the streaming
+  // projections are forwarded: the measured totals are added to the visible task
+  // by the caller once the request ends, so mirroring them would double-count.
+  // `include_output` is false for a fold that merely precedes a reply, whose
+  // generated summary is deliberately kept out of the row's output total.
+  void mirror_streaming_to(GenerationTask* target, bool include_output = true) {
     std::lock_guard lock(mutex_);
-    streaming_input_tokens_ = 0;
-    streaming_output_tokens_ = 0;
+    mirror_ = target == this ? nullptr : target;
+    mirror_output_ = include_output;
   }
 
   // The cumulative cost of the tool results fed back to the model during this
@@ -197,11 +263,16 @@ public:
   }
 
   // The budget the produced tokens (generated text plus tool results) are
-  // charged against, so the readout can show them as a fraction.
-  void set_output_budget(std::size_t output_budget) {
+  // charged against, so the readout can show them as a fraction. `kind` names
+  // which configured limit it is; the default is the response budget a chat turn
+  // publishes from its own request.
+  void set_output_budget(
+      std::size_t output_budget, BudgetKind kind = BudgetKind::RESPONSE
+  ) {
     std::lock_guard lock(mutex_);
 
     output_budget_ = output_budget;
+    output_budget_kind_ = kind;
   }
 
   [[nodiscard]] std::size_t input_tokens() const {
@@ -360,6 +431,7 @@ public:
       output_tokens_,
       tool_tokens_,
       output_budget_,
+      output_budget_kind_,
       usage_measured_,
       elapsed_locked(),
       streaming_input_tokens_,
@@ -415,9 +487,15 @@ private:
   std::size_t output_tokens_ = 0;
   std::size_t tool_tokens_ = 0;
   std::size_t output_budget_ = 0;
+  BudgetKind output_budget_kind_ = BudgetKind::NONE;
   bool usage_measured_ = true;
   std::size_t streaming_input_tokens_ = 0;
   std::size_t streaming_output_tokens_ = 0;
+  // Receives this task's in-flight projections when it runs on behalf of another
+  // (see mirror_streaming_to). Never receives the measured totals.
+  GenerationTask* mirror_ = nullptr;
+  // Whether the output projection is mirrored too (see mirror_streaming_to).
+  bool mirror_output_ = true;
   // The elapsed time frozen when the task reached a terminal state.
   std::int64_t final_elapsed_ms_ = 0;
 };

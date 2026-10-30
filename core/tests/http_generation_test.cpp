@@ -215,6 +215,11 @@ int main() {
       snapshot.output_budget == session.response_token_budget_,
       "the response budget was not published for the readout"
   );
+  expect(
+      snapshot.output_budget_kind ==
+          lnb::GenerationTask::BudgetKind::RESPONSE,
+      "the budget kind should name the response budget"
+  );
 
   if (failures != 0) {
     std::cerr << failures << " expectation(s) failed\n";

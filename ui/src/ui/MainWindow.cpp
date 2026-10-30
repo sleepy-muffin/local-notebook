@@ -1107,9 +1107,11 @@ void MainWindow::update_task_indicator() {
     // A streaming figure is a local estimate until its request reports usage.
     entry.usage_measured = snapshot.usage_measured &&
         snapshot.streaming_input_tokens == 0 && snapshot.streaming_output_tokens == 0;
-    // Published by the chat loop from the reply's own budget. A memory pass
-    // reports 0, so its card shows the produced total without a fraction.
+    // Published by the pass that owns the task: the chat loop sets the response
+    // budget, a standalone session summary sets the summarization budget. Both
+    // arrive with the kind so the card can name the limit it shows.
     entry.output_budget = snapshot.output_budget;
+    entry.output_budget_kind = snapshot.output_budget_kind;
     entry.elapsed_ms = snapshot.elapsed_ms;
     entry.error = from_utf8(snapshot.error);
     entry.state = describe(snapshot.status);
@@ -1138,6 +1140,10 @@ void MainWindow::update_task_indicator() {
     // A streaming figure is a local estimate until its request reports usage.
     entry.usage_measured = snapshot.usage_measured &&
         snapshot.streaming_input_tokens == 0 && snapshot.streaming_output_tokens == 0;
+    // The shared fold publishes its own memory budget, so the card shows the
+    // generated memory against it just as a chat turn shows its response budget.
+    entry.output_budget = snapshot.output_budget;
+    entry.output_budget_kind = snapshot.output_budget_kind;
     entry.elapsed_ms = snapshot.elapsed_ms;
     entry.error = from_utf8(snapshot.error);
     entry.state = describe(snapshot.status);

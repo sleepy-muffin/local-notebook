@@ -265,6 +265,12 @@ int main() {
         snapshot.error.find("cut off") != std::string::npos,
         "the summary error must explain that the reply was cut off"
     );
+    expect(
+        snapshot.output_budget == session.summary_token_budget_ &&
+            snapshot.output_budget_kind ==
+                lnb::GenerationTask::BudgetKind::SUMMARIZATION,
+        "a standalone summary must publish the summarization budget"
+    );
 
     const std::optional<lnb::Session> stored = api.session(session_id);
     expect(stored.has_value(), "the summarized session disappeared");

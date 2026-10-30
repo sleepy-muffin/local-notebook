@@ -1102,7 +1102,9 @@ std::expected<ChatCompletionResult, FailedResult> generate_reply(
   // The response budget is published up front so the readout can show the
   // produced total against it from the first round, before any usage arrives.
   task.set_tool_tokens(0);
-  task.set_output_budget(response_budget);
+  task.set_output_budget(
+      response_budget, GenerationTask::BudgetKind::RESPONSE
+  );
 
   ChatCompletionResult result;
 
@@ -1326,6 +1328,16 @@ std::string fold_session_summary(
     throw std::runtime_error("Generation cancelled");
   }
 
+  // A standalone pass *is* the task's output, so publish the summarization
+  // budget the readout charges it against. An automatic fold shares its task
+  // with the reply that follows, whose response budget generate_reply publishes
+  // instead, so it must not overwrite that bound here.
+  if (standalone) {
+    task.set_output_budget(
+        session.summary_token_budget_, GenerationTask::BudgetKind::SUMMARIZATION
+    );
+  }
+
   const std::vector<Message> messages = db.messages(session.id_);
 
   // Nothing to fold until there is an actual exchange: the newest message is
@@ -1426,6 +1438,12 @@ std::string fold_session_summary(
     // so cancelling the turn also cancels summarisation.
     GenerationTask silent_task;
     silent_task.start();
+
+    // Let the row move while the summariser streams. A fold that merely precedes
+    // a reply keeps its generated text out of the visible output total, so only
+    // the input projection is mirrored there; a standalone update owns the whole
+    // row, so its output is mirrored too.
+    silent_task.mirror_streaming_to(&task, standalone);
 
     const auto outcome = send_message_once(
         request, remote, silent_task, stop_token, "session-summary"
@@ -1581,6 +1599,12 @@ std::string fold_assistant_memory(
   // request (nothing to fold, a declined review, an unreached trigger), and an
   // empty log makes those outcomes indistinguishable from a broken task.
   task.append_log("[assistant-summary] starting");
+
+  // This task *is* the memory pass, so the memory budget it charges the
+  // generated memory against is published for the readout.
+  task.set_output_budget(
+      assistant.summary_token_budget_, GenerationTask::BudgetKind::MEMORY
+  );
 
   std::vector<Session> sessions = db.sessions_by_recent();
 
@@ -1755,6 +1779,10 @@ std::string fold_assistant_memory(
 
   GenerationTask silent_task;
   silent_task.start();
+
+  // Let the row move while the memory pass streams. This task is the visible one,
+  // so the generated memory is part of the output total and is mirrored with it.
+  silent_task.mirror_streaming_to(&task);
 
   const auto outcome = send_message_once(
       request, remote, silent_task, stop_token, "assistant-summary"

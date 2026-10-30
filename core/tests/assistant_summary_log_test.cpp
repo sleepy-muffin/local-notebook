@@ -115,6 +115,19 @@ int main() {
     expect(wait_terminal(task), "not-reached: task did not finish");
     expect_status(task, lnb::GenerationTask::Status::COMPLETED, "not-reached");
 
+    // The worker publishes the memory budget before it decides anything, so a
+    // pass that sends nothing still shows the limit it would have been charged
+    // against.
+    if (task != nullptr) {
+      const lnb::GenerationTask::Snapshot snapshot = task->snapshot();
+      expect(
+          snapshot.output_budget == assistant.summary_token_budget_ &&
+              snapshot.output_budget_kind ==
+                  lnb::GenerationTask::BudgetKind::MEMORY,
+          "not-reached: the memory budget was not published"
+      );
+    }
+
     const std::string log = task != nullptr ? task->log_text() : std::string{};
     expect(!log.empty(), "not-reached: log is empty");
     expect_contains(log, "automatic trigger not reached", "not-reached");

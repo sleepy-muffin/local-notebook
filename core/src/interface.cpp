@@ -813,6 +813,13 @@ std::shared_ptr<GenerationTask> interface::summarize_assistant(
       [this, force, approver = std::move(approver), snapshot](
           GenerationTask& task
       ) {
+        // Publish the memory budget up front, so the row shows it even while
+        // this fold waits for the running session turns below. The fold sets the
+        // same bound again when it actually runs.
+        task.set_output_budget(
+            snapshot.summary_token_budget_, GenerationTask::BudgetKind::MEMORY
+        );
+
         // The fold reads every session's rows, so it must not overlap a session
         // turn. New session tasks are already blocked (the assistant slot is
         // busy); wait for the ones that started first, without holding the task

@@ -169,3 +169,19 @@ target_link_libraries(
 )
 
 add_test(NAME concurrent-sessions COMMAND concurrent-sessions-test)
+
+add_executable(
+  generation-task-mirror-test
+  generation_task_mirror_test.cpp
+)
+
+target_link_libraries(
+  generation-task-mirror-test
+  PRIVATE
+    local-notebook-core
+)
+
+add_test(
+  NAME generation-task-mirror
+  COMMAND generation-task-mirror-test
+)

@@ -50,6 +50,23 @@ QString compact_tokens(std::size_t value) {
   return QStringLiteral("%1k").arg(thousands, 0, 'f', 1);
 }
 
+// The configured limit a task's produced total is charged against, named after
+// the setting it comes from. Empty when the task publishes no bound.
+QString budget_name(lnb::GenerationTask::BudgetKind kind) {
+  switch (kind) {
+    case lnb::GenerationTask::BudgetKind::RESPONSE:
+      return trs("response budget");
+    case lnb::GenerationTask::BudgetKind::SUMMARIZATION:
+      return trs("summarization budget");
+    case lnb::GenerationTask::BudgetKind::MEMORY:
+      return trs("memory budget");
+    default:
+      break;
+  }
+
+  return {};
+}
+
 } // namespace
 
 TasksWindow::TasksWindow(QWidget* parent) : QDialog(parent) {
@@ -321,9 +338,10 @@ void TasksWindow::rebuild_rows(std::size_t count) {
     heading->addStretch(1);
     heading->addWidget(row_id);
 
-    // Row 2: the two token indicators. The output figure is shown against the
-    // session's response budget, because both the reply and the tool results it
-    // was fed are charged against that one bound.
+    // Row 2: the two token indicators. When the task publishes a bound, the
+    // output figure is shown against it — the chat turn's response budget, a
+    // session summary's summarization budget, or the memory pass's memory budget.
+    // The tooltip names the bound so the three never read alike.
     auto* row_tokens = new QLabel(card);
     row_tokens->setObjectName(QStringLiteral("Muted"));
 
@@ -404,7 +422,7 @@ void TasksWindow::set_entries(std::vector<Entry> entries) {
     );
 
     // The produced figure merges what the model generated with the tool results
-    // it was fed, because the session's response budget bounds both. A leading
+    // it was fed, charged against whichever budget the task publishes. A leading
     // tilde marks an estimate: the service did not report usage for at least one
     // request, so the number is locally approximated.
     const std::size_t produced = entry.output_tokens + entry.tool_tokens;
@@ -418,15 +436,27 @@ void TasksWindow::set_entries(std::vector<Entry> entries) {
         trs("Input %1   ·   Output %2")
             .arg(mark + compact_tokens(entry.input_tokens), produced_text)
     );
-    rows_[i].tokens->setToolTip(
-        trs(
-            "Input: prompt tokens billed by every request of this task, summed "
-            "over its tool rounds. Output: tokens generated plus the tool "
-            "results fed back, charged against the response budget. Tool output "
-            "is always counted at an estimated cost; a leading ~ marks a task "
-            "whose request usage was estimated."
-        )
-    );
+
+    const QString budget = budget_name(entry.output_budget_kind);
+    const QString bound = budget.isEmpty()
+        ? QString()
+        : trs(", charged against the %1").arg(budget);
+
+    const QString token_tooltip = trs(
+        "Input: prompt tokens billed by every request of this task, summed "
+        "over its tool rounds. Output: tokens generated plus the tool "
+        "results fed back%1. Tool output is always counted at an estimated "
+        "cost; a leading ~ marks a task whose request usage was estimated."
+    ).arg(bound);
+
+    rows_[i].tokens->setToolTip(token_tooltip);
+
+    // The labels ignore mouse events so a click reaches the card, which also
+    // keeps Qt from delivering their tooltips; the card carries the same text so
+    // the budget a row is charged against can actually be read.
+    if (rows_[i].widget != nullptr) {
+      rows_[i].widget->setToolTip(token_tooltip);
+    }
 
     // The session id has its own row, so this line carries only the state, the
     // round reached and the elapsed time.

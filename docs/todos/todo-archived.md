@@ -260,4 +260,5 @@ I will try to make this list ordered by time.
 - (Bug) Fix the case where the review is not triggered.
   Review every summarization request: each fold batch is previewed and approved, and the automatic pre-reply fold a send may trigger now passes the approver too.
 - (Refinement) Tasks window shows live input/output estimates for the request in flight, added to the measured totals that accumulate across a task's requests.
-- (Refinement) There are limits for both summarization (called summarization budget) and memory (called memory budget), so please make theirs inspect-able in Tasks window as well.
+- (Refinement) There are limits for both summarization (called summarization budget) and memory (called memory budget), make theirs inspect-able in Tasks window as well.
+- (Refinement) The token usage by summarization and memory updates are now dynamically updated in Tasks Window like a general task.

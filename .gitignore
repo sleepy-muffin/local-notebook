@@ -10,6 +10,7 @@ compile_commands.json
 .cache/
 docs/plans/
 docs/deprecated/
+docs/
 
 # Runtime state and local database
 /run/

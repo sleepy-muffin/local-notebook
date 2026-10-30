@@ -254,7 +254,11 @@ constexpr Entry kTranslations[] = {
     {"No tasks yet.", "暂无任务。", "タスクはまだありません。"},
     {"%1   ·   Round %2   ·   %3", "%1   ·   第 %2 轮   ·   %3", "%1   ·   ラウンド %2   ·   %3"},
     {"Input %1   ·   Output %2", "输入 %1   ·   输出 %2", "入力 %1   ·   出力 %2"},
-    {"Input: prompt tokens billed by every request of this task, summed over its tool rounds. Output: tokens generated plus the tool results fed back, charged against the response budget. Tool output is always counted at an estimated cost; a leading ~ marks a task whose request usage was estimated.", "输入：此任务的每次请求所计费的提示词 token，按工具轮次累计。输出：生成的 token 加上回传的工具结果，从回复预算中扣除。开头的 ~ 表示本地估算。", "入力：このタスクの各リクエストで課金されたプロンプトトークン（ツールラウンド分を合計）。出力：生成されたトークンと返されたツール結果を合算し、応答バジェットから差し引いたもの。先頭の ~ はローカル推定値を示します。"},
+    {"response budget", "回复预算", "応答バジェット"},
+    {"summarization budget", "摘要预算", "要約バジェット"},
+    {"memory budget", "记忆预算", "メモリバジェット"},
+    {", charged against the %1", "，计入%1", "（%1に計上）"},
+    {"Input: prompt tokens billed by every request of this task, summed over its tool rounds. Output: tokens generated plus the tool results fed back%1. Tool output is always counted at an estimated cost; a leading ~ marks a task whose request usage was estimated.", "输入：此任务的每次请求所计费的提示词 token，按工具轮次累计。输出：生成的 token 加上回传的工具结果%1。工具输出始终按估算成本计算；开头的 ~ 表示请求用量为本地估算的任务。", "入力：このタスクの各リクエストで課金されたプロンプトトークン（ツールラウンド分を合計）。出力：生成されたトークンと返されたツール結果%1。ツール出力は常に推定コストで計上されます。先頭の ~ はリクエストの使用量が推定されたタスクを示します。"},
     // Summary review dialog.
     {"Review summarization update", "审查摘要更新", "要約更新の確認"},
     {"The following request is about to be sent to the model to update the %1. Review it and choose whether to run the summarization update.", "以下请求即将发送给模型以更新 %1。请审阅，并选择是否运行摘要更新。", "以下のリクエストが %1 を更新するためにモデルへ送信されようとしています。確認して、要約の更新を実行するか選択してください。"},

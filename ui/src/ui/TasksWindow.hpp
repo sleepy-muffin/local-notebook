@@ -8,6 +8,8 @@
 #include <functional>
 #include <vector>
 
+#include "local-notebook-core/generation_task.hpp"
+
 class QEvent;
 class QLabel;
 class QPlainTextEdit;
@@ -49,7 +51,12 @@ public:
     std::size_t input_tokens = 0;
     std::size_t output_tokens = 0;
     std::size_t tool_tokens = 0;
+    // The limit the produced tokens are charged against, and which configured
+    // budget it is: a chat turn's response budget, a session summary's
+    // summarization budget, or the assistant memory pass's memory budget.
     std::size_t output_budget = 0;
+    lnb::GenerationTask::BudgetKind output_budget_kind =
+        lnb::GenerationTask::BudgetKind::NONE;
     // False when a request reported no usage and the figures are local estimates.
     bool usage_measured = true;
     std::int64_t elapsed_ms = 0;
