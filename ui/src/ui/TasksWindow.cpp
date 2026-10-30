@@ -9,10 +9,13 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QShowEvent>
 #include <QStyle>
 #include <QVBoxLayout>
 #include <QVariant>
+
+#include <algorithm>
 
 #include "support/i18n.hpp"
 #include "ui/dialog_style.hpp"
@@ -31,8 +34,8 @@ QString format_elapsed(std::int64_t milliseconds) {
 }
 
 // A compact token count: plain below a thousand, otherwise one decimal of a
-// thousand. The same shorthand the title bar's memory readout uses, so the two
-// numbers read alike.
+// thousand. The same shorthand the title bar's summarization readout uses, so the
+// two numbers read alike.
 QString compact_tokens(std::size_t value) {
   if (value < 1000) {
     return QString::number(static_cast<qulonglong>(value));
@@ -47,60 +50,14 @@ QString compact_tokens(std::size_t value) {
   return QStringLiteral("%1k").arg(thousands, 0, 'f', 1);
 }
 
-// A read-only, scrollable, plain-text dump of one task's log. It deliberately
-// never renders Markdown: the log is raw diagnostic text, and it carries detail
-// the transcript never shows (the exact request body, the tool calls, and the
-// hidden reasoning).
-void show_log(QWidget* parent, const QString& title, const QString& log) {
-  QDialog dialog(parent);
-  dialog.setObjectName(QStringLiteral("TaskLogDialog"));
-  dialog.setWindowTitle(title);
-  dialog.setModal(true);
-  dialog.resize(760, 560);
-  dialog.setMinimumSize(420, 300);
-  dialog.setFont(ui_font());
-
-  auto* root = new QVBoxLayout(&dialog);
-  root->setContentsMargins(16, 16, 16, 16);
-  root->setSpacing(12);
-
-  auto* heading = new QLabel(title, &dialog);
-  heading->setObjectName(QStringLiteral("DialogTitle"));
-  apply_derived_font(heading, 1.0, true);
-  root->addWidget(heading);
-
-  auto* view = new QPlainTextEdit(&dialog);
-  view->setObjectName(QStringLiteral("TaskLog"));
-  view->setReadOnly(true);
-  view->setLineWrapMode(QPlainTextEdit::NoWrap);
-  view->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-  view->setPlainText(log.isEmpty() ? trs("This task produced no log.") : log);
-  root->addWidget(view, 1);
-
-  auto* footer = new QHBoxLayout();
-  footer->addStretch(1);
-
-  auto* close = new QPushButton(trs("Close"), &dialog);
-  close->setObjectName(QStringLiteral("Secondary"));
-  QObject::connect(close, &QPushButton::clicked, &dialog, [&dialog]() { dialog.accept(); });
-  footer->addWidget(close);
-
-  root->addLayout(footer);
-
-  dialog.setStyleSheet(dialog_stylesheet(QStringLiteral("TaskLogDialog")));
-  reapply_derived_fonts(&dialog);
-
-  dialog.exec();
-}
-
 } // namespace
 
 TasksWindow::TasksWindow(QWidget* parent) : QDialog(parent) {
   setObjectName(QStringLiteral("TasksWindow"));
   setWindowTitle(trs("Tasks"));
   setModal(false);
-  resize(460, 360);
-  setMinimumSize(340, 220);
+  resize(920, 560);
+  setMinimumSize(560, 320);
   setFont(ui_font());
 
   auto* root = new QVBoxLayout(this);
@@ -130,6 +87,13 @@ TasksWindow::TasksWindow(QWidget* parent) : QDialog(parent) {
   header_layout->addWidget(subtitle);
   root->addWidget(header);
 
+  // Two columns, like the main window: the task list on the left and the selected
+  // task's log on the right. The log is a pane, never a separate dialog, so the
+  // list stays visible while it is being read.
+  auto* body = new QHBoxLayout();
+  body->setContentsMargins(0, 0, 0, 0);
+  body->setSpacing(0);
+
   auto* scroll = new QScrollArea(this);
   scroll->setWidgetResizable(true);
   scroll->setFrameShape(QFrame::NoFrame);
@@ -148,7 +112,35 @@ TasksWindow::TasksWindow(QWidget* parent) : QDialog(parent) {
   list_layout_->addStretch(1);
 
   scroll->setWidget(list_);
-  root->addWidget(scroll, 1);
+  body->addWidget(scroll, 2);
+
+  body->addWidget(v_separator(this));
+
+  auto* log_pane = new QWidget(this);
+  log_pane->setObjectName(QStringLiteral("TaskLogPane"));
+  auto* log_layout = new QVBoxLayout(log_pane);
+  log_layout->setContentsMargins(16, 0, 16, 16);
+  log_layout->setSpacing(8);
+
+  log_title_ = new QLabel(log_pane);
+  log_title_->setObjectName(QStringLiteral("TaskLogTitle"));
+  apply_derived_font(log_title_, 0.0, true);
+
+  // Raw diagnostic text: never rendered as Markdown. NoWrap keeps the request
+  // bodies readable exactly as they were sent.
+  log_view_ = new QPlainTextEdit(log_pane);
+  log_view_->setObjectName(QStringLiteral("TaskLog"));
+  log_view_->setReadOnly(true);
+  log_view_->setLineWrapMode(QPlainTextEdit::NoWrap);
+  log_view_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+  log_view_->setPlaceholderText(trs("Select a task to read its log."));
+
+  log_layout->addWidget(log_title_);
+  log_layout->addWidget(log_view_, 1);
+
+  body->addWidget(log_pane, 3);
+
+  root->addLayout(body, 1);
 
   apply_style();
 }
@@ -174,7 +166,7 @@ bool TasksWindow::eventFilter(QObject* watched, QEvent* event) {
       const QVariant index = watched->property("lnbRowIndex");
 
       if (index.isValid()) {
-        open_log(static_cast<std::size_t>(index.toInt()));
+        select_row(static_cast<std::size_t>(index.toInt()));
         return true;
       }
     }
@@ -183,20 +175,76 @@ bool TasksWindow::eventFilter(QObject* watched, QEvent* event) {
   return QDialog::eventFilter(watched, event);
 }
 
-void TasksWindow::open_log(std::size_t index) {
+void TasksWindow::select_row(std::size_t index) {
   if (index >= entries_.size()) {
     return;
   }
 
-  const Entry& entry = entries_[index];
-  const QString title = entry.title.isEmpty()
-      ? trs("Session #%1").arg(entry.session_id)
-      : entry.title;
+  selected_ = index;
+  update_selection_style();
+  refresh_log();
+}
+
+void TasksWindow::refresh_log() {
+  if (log_view_ == nullptr) {
+    return;
+  }
+
+  if (selected_ >= entries_.size()) {
+    log_title_->clear();
+    log_view_->clear();
+    return;
+  }
+
+  const Entry& entry = entries_[selected_];
+
+  log_title_->setText(
+      entry.title.isEmpty() ? trs("Session #%1").arg(entry.session_id) : entry.title
+  );
 
   const QString log =
       log_provider_ != nullptr ? log_provider_(entry.id) : QString();
+  const QString text = log.isEmpty() ? trs("This task produced no log.") : log;
 
-  show_log(this, title, log);
+  // The window refreshes on every poll tick, but rewriting identical text would
+  // reset the reader's scroll position for nothing.
+  if (text == log_view_->toPlainText()) {
+    return;
+  }
+
+  // Keep the reader's place: follow the tail only when it was already at the
+  // bottom, otherwise restore the previous offset after the rewrite.
+  QScrollBar* bar = log_view_->verticalScrollBar();
+  const bool at_bottom = bar->value() >= bar->maximum() - 2;
+  const int offset = bar->value();
+
+  log_view_->setPlainText(text);
+
+  if (at_bottom) {
+    bar->setValue(bar->maximum());
+  } else {
+    bar->setValue(std::min(offset, bar->maximum()));
+  }
+}
+
+void TasksWindow::update_selection_style() {
+  for (std::size_t i = 0; i < rows_.size(); ++i) {
+    QWidget* card = rows_[i].widget;
+
+    if (card == nullptr) {
+      continue;
+    }
+
+    const bool selected = i == selected_;
+
+    if (card->property("lnbSelected").toBool() == selected) {
+      continue;
+    }
+
+    card->setProperty("lnbSelected", selected);
+    card->style()->unpolish(card);
+    card->style()->polish(card);
+  }
 }
 
 void TasksWindow::apply_style() {
@@ -210,6 +258,11 @@ void TasksWindow::apply_style() {
   // A clickable card: the border lifts to the accent while the pointer is over it.
   sheet += QStringLiteral("QFrame#Card:hover { border: 1px solid %1; }")
                .arg(colour_hex(c.accent));
+  // The card whose log is shown in the right-hand pane keeps the accent border.
+  sheet += QStringLiteral("QFrame#Card[lnbSelected=\"true\"] { border: 1px solid %1; }")
+               .arg(colour_hex(c.accent));
+  sheet += QStringLiteral("QLabel#TaskLogTitle { color: %1; }")
+               .arg(colour_hex(c.text));
   sheet += QStringLiteral("QLabel#TaskError { color: %1; }").arg(colour_hex(c.danger));
   sheet += QStringLiteral("QLabel#TaskState { color: %1; }").arg(colour_hex(c.accent));
 
@@ -313,14 +366,34 @@ void TasksWindow::rebuild_rows(std::size_t count) {
     list_layout_->insertWidget(static_cast<int>(i), card);
     rows_[i] = Row{card, row_title, row_id, row_tokens, row_detail, row_error, cancel};
   }
+
+  update_selection_style();
 }
 
 void TasksWindow::set_entries(std::vector<Entry> entries) {
+  // Follow the selected task across a refresh: the entries are replaced on every
+  // poll tick, so the reader's selection must survive while the task is listed.
+  const bool had_selection = selected_ < entries_.size();
+  const std::uint64_t keep_id = had_selection ? entries_[selected_].id : 0;
+  const std::uint32_t keep_session =
+      had_selection ? entries_[selected_].session_id : 0;
+
   if (entries.size() != rows_.size()) {
     rebuild_rows(entries.size());
   }
 
   entries_ = std::move(entries);
+
+  selected_ = npos;
+
+  if (had_selection) {
+    for (std::size_t i = 0; i < entries_.size(); ++i) {
+      if (entries_[i].id == keep_id && entries_[i].session_id == keep_session) {
+        selected_ = i;
+        break;
+      }
+    }
+  }
 
   for (std::size_t i = 0; i < entries_.size(); ++i) {
     const Entry& entry = entries_[i];
@@ -385,6 +458,9 @@ void TasksWindow::set_entries(std::vector<Entry> entries) {
   }
 
   empty_->setVisible(entries_.empty());
+
+  update_selection_style();
+  refresh_log();
 }
 
 } // namespace ui

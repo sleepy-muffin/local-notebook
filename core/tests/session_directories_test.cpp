@@ -217,6 +217,16 @@ void test_legacy_migration(const fs::path& path) {
       table_has_column(path, "summary_reasoning_effort"),
       "migration: the summary reasoning column exists"
   );
+  expect(
+      table_has_column(path, "summary") &&
+          table_has_column(path, "summary_watermark"),
+      "migration: the session-level memory columns became summary columns"
+  );
+  expect(
+      !table_has_column(path, "memory") &&
+          !table_has_column(path, "memory_watermark"),
+      "migration: the old session-level memory columns are gone"
+  );
 }
 
 } // namespace

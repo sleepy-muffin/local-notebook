@@ -52,6 +52,11 @@ public:
     std::size_t output_budget = 0;
     bool usage_measured = true;
     std::int64_t elapsed_ms = 0;
+    // Live estimates for the request currently streaming, so the Tasks window
+    // moves while it is in flight. They are zero once that request's usage has
+    // been recorded, and the readout adds them to the measured totals above.
+    std::size_t streaming_input_tokens = 0;
+    std::size_t streaming_output_tokens = 0;
   };
 
   GenerationTask() = default;
@@ -95,6 +100,8 @@ public:
     tool_tokens_ = 0;
     output_budget_ = 0;
     usage_measured_ = true;
+    streaming_input_tokens_ = 0;
+    streaming_output_tokens_ = 0;
     final_elapsed_ms_ = 0;
     stop_source_ = std::stop_source{};
   }
@@ -149,6 +156,35 @@ public:
     input_tokens_ += input_tokens;
     output_tokens_ += output_tokens;
     usage_measured_ = usage_measured_ && measured;
+    streaming_input_tokens_ = 0;
+    streaming_output_tokens_ = 0;
+  }
+
+  // Live projection for the request currently in flight. It replaces the
+  // previous request's projection rather than adding to it; the measured totals
+  // above are never touched.
+  void set_streaming_input(std::size_t input_tokens) {
+    std::lock_guard lock(mutex_);
+
+    if (status_ == Status::RUNNING) {
+      streaming_input_tokens_ = input_tokens;
+    }
+  }
+
+  void set_streaming_output(std::size_t output_tokens) {
+    std::lock_guard lock(mutex_);
+
+    if (status_ == Status::RUNNING) {
+      streaming_output_tokens_ = output_tokens;
+    }
+  }
+
+  // Drops the in-flight projection, used when a request ends without reporting
+  // usage (a failure, cancellation or a thrown exception).
+  void clear_streaming_usage() {
+    std::lock_guard lock(mutex_);
+    streaming_input_tokens_ = 0;
+    streaming_output_tokens_ = 0;
   }
 
   // The cumulative cost of the tool results fed back to the model during this
@@ -277,6 +313,8 @@ public:
       display_.clear();
       error_.clear();
       warning_.clear();
+      streaming_input_tokens_ = 0;
+      streaming_output_tokens_ = 0;
     }
 
     stop_source_.request_stop();
@@ -297,6 +335,8 @@ public:
       display_.clear();
       error_ = std::move(error);
       warning_.clear();
+      streaming_input_tokens_ = 0;
+      streaming_output_tokens_ = 0;
     }
 
     stop_source_.request_stop();
@@ -322,6 +362,8 @@ public:
       output_budget_,
       usage_measured_,
       elapsed_locked(),
+      streaming_input_tokens_,
+      streaming_output_tokens_,
     };
   }
 
@@ -374,6 +416,8 @@ private:
   std::size_t tool_tokens_ = 0;
   std::size_t output_budget_ = 0;
   bool usage_measured_ = true;
+  std::size_t streaming_input_tokens_ = 0;
+  std::size_t streaming_output_tokens_ = 0;
   // The elapsed time frozen when the task reached a terminal state.
   std::int64_t final_elapsed_ms_ = 0;
 };

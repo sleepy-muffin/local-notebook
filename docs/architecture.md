@@ -13,9 +13,9 @@ hand-drawn, native desktop UI.**
 
 Local Notebook is a desktop notebook for talking to a local or self-hosted model.
 It runs one **assistant** per process across many **sessions**, and keeps long
-conversations coherent with a **two-level memory** that you can open, edit and
-regenerate yourself — so the prompt never grows without bound, and nothing about
-your history is hidden from you.
+conversations coherent with a **session summarization plus a shared assistant
+memory** that you can open, edit and regenerate yourself — so the prompt never
+grows without bound, and nothing about your history is hidden from you.
 
 No cloud account. No telemetry. No JavaScript anywhere in the stack.
 
@@ -43,7 +43,7 @@ each release in `SHA256SUMS`.
 
 ---
 
-## Memory you can read and edit
+## Summarization and memory you can read and edit
 
 This is the part that makes Local Notebook different.
 
@@ -51,7 +51,7 @@ Every AI client eventually has to forget. Most do it invisibly, and you find out
 when the model "remembers" something wrong. Local Notebook instead writes its
 memory down as **plain, editable text** and shows it to you:
 
-- **Session memory** — what this one conversation has compressed itself into.
+- **Session summarization** — what this one conversation has compressed itself into.
 - **Assistant memory** — what the assistant has learned about you across *every*
   session.
 
@@ -65,7 +65,7 @@ update:
 Two guarantees fall out of this design:
 
 - **Idempotent.** Summarising twice with no new messages produces the same
-  memory — because the watermarks only *count* what is new; they never decide
+  summary — because the watermarks only *count* what is new; they never decide
   what gets sent.
 - **No derived budgets.** The input bound is the session's own
   `summary_trigger_tokens`; the produced bound is `response_token_budget`, which
@@ -76,8 +76,8 @@ Two guarantees fall out of this design:
 
 ## What you get
 
-- 🧠 **Two-level, editable memory** — session and assistant memory, both visible
-  and both yours to change.
+- 🧠 **Editable summarization and memory** — session summarization and assistant
+  memory, both visible and both yours to change.
 - 🎨 **A native, hand-drawn UI** — a flat, IDE-like shell in the spirit of
   [Zed](https://zed.dev): low contrast, hairlines, no speech bubbles, no centred
   column. Ships with **Catppuccin Mocha and Macchiato**, plus a theme system you
@@ -107,8 +107,8 @@ Two guarantees fall out of this design:
 ## How it works
 
 The short version: a request is assembled as **system instructions → assistant
-memory → session memory → the newest messages that fit → tools**. Everything older
-than the verbatim window is folded into memory, in reviewable batches.
+memory → session summarization → the newest messages that fit → tools**. Everything
+older than the verbatim window is folded into the summary, in reviewable batches.
 
 The long version — the full architecture, the on-disk layout and SQLite schema,
 the three levels of configuration, the summarisation rules, and the interface

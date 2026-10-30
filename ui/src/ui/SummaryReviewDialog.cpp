@@ -385,7 +385,7 @@ SummaryReviewDialog::SummaryReviewDialog(
 )
     : QDialog(parent) {
   setObjectName(QStringLiteral("SummaryReview"));
-  setWindowTitle(trs("Review memory update"));
+  setWindowTitle(trs("Review summarization update"));
   setModal(true);
   resize(680, 640);
   setMinimumSize(480, 400);
@@ -402,7 +402,7 @@ SummaryReviewDialog::SummaryReviewDialog(
   outer->setContentsMargins(24, 20, 24, 16);
   outer->setSpacing(0);
 
-  auto* heading = new QLabel(trs("Review memory update"), background);
+  auto* heading = new QLabel(trs("Review summarization update"), background);
   heading->setObjectName(QStringLiteral("FormTitle"));
   heading->setFont(scaled_font(4.0, true));
   outer->addWidget(heading);
@@ -411,7 +411,7 @@ SummaryReviewDialog::SummaryReviewDialog(
   auto* subtitle = new QLabel(
       trs(
           "The following request is about to be sent to the model to update the %1. "
-          "Review it and choose whether to run the memory update."
+          "Review it and choose whether to run the summarization update."
       )
           .arg(to_qstring(plan.kind)),
       background
@@ -475,8 +475,8 @@ SummaryReviewDialog::SummaryReviewDialog(
 
     auto* note = new QLabel(
         trs(
-            "This is the first of several requests: the remaining messages are merged "
-            "in further batches after this one."
+            "This is one of several requests: the remaining messages are merged in "
+            "further batches, and each batch is shown here for review before it is sent."
         ),
         background
     );

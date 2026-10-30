@@ -2,7 +2,7 @@
 //
 // `send_message_once` must not hand back a usable result when the provider
 // reports `finish_reason == "length"`. A chat turn therefore fails and persists
-// nothing, and a forced session summary fails without advancing the memory
+// nothing, and a forced session summary fails without advancing the summary
 // watermark.
 #include "local-notebook-core/interface.hpp"
 
@@ -223,7 +223,7 @@ int main() {
   }
 
   // 2. A forced session summary cut off at the limit fails and leaves both the
-  //    stored memory and its watermark untouched.
+  //    stored summary and its watermark untouched.
   {
     TruncatingServer server;
     expect(
@@ -236,7 +236,7 @@ int main() {
     // Keep only the newest message verbatim, and make every message a candidate
     // for the first batch.
     session.summary_keep_tokens_ = 1;
-    session.memory_trigger_tokens_ = 1;
+    session.summary_trigger_tokens_ = 1;
     session.summary_token_budget_ = 32;
 
     const std::uint32_t session_id = api.create_session(session);
@@ -269,11 +269,11 @@ int main() {
     const std::optional<lnb::Session> stored = api.session(session_id);
     expect(stored.has_value(), "the summarized session disappeared");
     expect(
-        stored.has_value() && stored->memory_.empty(),
-        "a truncated summary must not store memory"
+        stored.has_value() && stored->summary_.empty(),
+        "a truncated summary must not store a summary"
     );
     expect(
-        stored.has_value() && stored->memory_watermark_ == 0,
+        stored.has_value() && stored->summary_watermark_ == 0,
         "a truncated summary must not advance the watermark"
     );
     expect(

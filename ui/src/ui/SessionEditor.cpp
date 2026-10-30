@@ -57,11 +57,11 @@ QString rgba(const QColor& color) {
 // Presets for the session budgets (design-1.md §8). Selecting one only fills the
 // fields below; it never saves, so the values can still be tweaked before Save.
 // The values are starting points, not limits.
-struct MemoryPreset {
+struct SummaryPreset {
   const char* name;
   int trigger;
   int keep;
-  int memory_budget;
+  int summary_budget;
 };
 struct BudgetPreset {
   const char* name;
@@ -78,9 +78,9 @@ struct MidwayPreset {
  *
  * response_budget_ midturn_input_budget_
  */
-constexpr MemoryPreset kMemoryPresets[] = {
-    // memory:
-    // trigger (the input bound), keep (the level it merges down to), memory;
+constexpr SummaryPreset kSummaryPresets[] = {
+    // summary:
+    // trigger (the input bound), keep (the level it merges down to), summary;
     // response; TODO, response is extremely tight for a reasoning model with thinking mode on
     //           A usable value for them is usually above 16000, much larger than a non-reasoning model.
     // tool: cumulative input produced midway (tool results fed back)
@@ -93,8 +93,8 @@ constexpr MemoryPreset kMemoryPresets[] = {
     {"Ultra",       64000, 16000, 16000},
 };
 constexpr BudgetPreset kBudgetPresets[] = {
-    // memory:
-    // trigger (the input bound), keep (the level it merges down to), memory;
+    // summary:
+    // trigger (the input bound), keep (the level it merges down to), summary;
     // response; TODO, response is extremely tight for a reasoning model with thinking mode on
     //           A usable value for them is usually above 16000, much larger than a non-reasoning model.
     // tool: cumulative input produced midway (tool results fed back)
@@ -109,8 +109,8 @@ constexpr BudgetPreset kBudgetPresets[] = {
     {"Very Heavy (Reasoning)",   64000},
 };
 constexpr MidwayPreset kMidwayPresets[] = {
-    // memory:
-    // trigger (the input bound), keep (the level it merges down to), memory;
+    // summary:
+    // trigger (the input bound), keep (the level it merges down to), summary;
     // response; TODO, response is extremely tight for a reasoning model with thinking mode on
     //           A usable value for them is usually above 16000, much larger than a non-reasoning model.
     // tool: cumulative input produced midway (tool results fed back)
@@ -258,7 +258,7 @@ QWidget* SessionEditor::build_body() {
   nav_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
   nav_->setFocusPolicy(Qt::NoFocus);
   nav_->addItem(trs("General"));
-  nav_->addItem(trs("Memory"));
+  nav_->addItem(trs("Summarization"));
   nav_->addItem(trs("Tools"));
 
   auto* nav_wrap = new QWidget(body);
@@ -273,7 +273,7 @@ QWidget* SessionEditor::build_body() {
   stack_->setFrameShape(QFrame::NoFrame);
 
   stack_->addWidget(scrolled_tab(build_general_tab()));
-  stack_->addWidget(scrolled_tab(build_memory_tab()));
+  stack_->addWidget(scrolled_tab(build_summary_tab()));
   stack_->addWidget(scrolled_tab(build_tools_tab()));
 
   layout->addWidget(nav_wrap);
@@ -366,7 +366,7 @@ QWidget* SessionEditor::build_general_tab() {
   instructions_->setTabChangesFocus(true);
   instructions_->setMinimumHeight(96);
   instructions_->setPlaceholderText(
-      trs("Kept separate from the generated memory; never overwritten by it.")
+      trs("Kept separate from the generated summary; never overwritten by it.")
   );
   layout->addWidget(instructions_);
 
@@ -412,56 +412,56 @@ QWidget* SessionEditor::build_general_tab() {
   return content;
 }
 
-QWidget* SessionEditor::build_memory_tab() {
+QWidget* SessionEditor::build_summary_tab() {
   auto* content = new QWidget();
   auto* layout = new QVBoxLayout(content);
   layout->setContentsMargins(0, 10, 12, 10);
   layout->setSpacing(12);
 
-  // ---- Conversation memory ----
-  auto* memory_header = new QHBoxLayout();
-  memory_header->setSpacing(8);
-  memory_header->addWidget(section_label(content, trs("Conversation memory")));
-  memory_header->addStretch(1);
+  // ---- Conversation summarization ----
+  auto* summary_header = new QHBoxLayout();
+  summary_header->setSpacing(8);
+  summary_header->addWidget(section_label(content, trs("Summarization")));
+  summary_header->addStretch(1);
 
-  summarize_button_ = new QPushButton(trs("Update memory now"), content);
+  summarize_button_ = new QPushButton(trs("Update summarization now"), content);
   summarize_button_->setObjectName(QStringLiteral("Secondary"));
   summarize_button_->setToolTip(
       trs(
-          "Merge the conversation into the memory below, ignoring the automatic "
-          "memory trigger. Idempotent: pressing it again with no new messages "
+          "Merge the conversation into the summary below, ignoring the automatic "
+          "summarization trigger. Idempotent: pressing it again with no new messages "
           "changes nothing."
       )
   );
-  memory_header->addWidget(summarize_button_);
-  layout->addLayout(memory_header);
+  summary_header->addWidget(summarize_button_);
+  layout->addLayout(summary_header);
 
   // The assistant memory is shared by every session; this one can opt out
-  // without losing its own conversation memory.
+  // without losing its own conversation summarization.
   include_in_assistant_memory_ = new QCheckBox(
       trs("Include in assistant memory"), content
   );
   include_in_assistant_memory_->setToolTip(
       trs(
-          "When off, this session's messages and memory are left out of the "
-          "shared assistant memory. This session's own conversation memory is "
+          "When off, this session's messages and summarization are left out of the "
+          "shared assistant memory. This session's own summarization is "
           "unaffected."
       )
   );
   layout->addWidget(include_in_assistant_memory_);
 
-  memory_ = new PlainTextEdit(content);
-  memory_->setTabChangesFocus(true);
-  memory_->setMinimumHeight(140);
-  memory_->setPlaceholderText(
+  summary_ = new PlainTextEdit(content);
+  summary_->setTabChangesFocus(true);
+  summary_->setMinimumHeight(140);
+  summary_->setPlaceholderText(
       trs(
           "Automatically maintained record of older turns. Edit to correct it, "
           "or clear it to rebuild it from the whole transcript."
       )
   );
-  layout->addWidget(memory_);
+  layout->addWidget(summary_);
 
-  // The watermark sits under the memory: the highest message id already merged.
+  // The watermark sits under the summary: the highest message id already merged.
   {
     auto* form = form_layout(content);
 
@@ -469,9 +469,9 @@ QWidget* SessionEditor::build_memory_tab() {
     watermark_->setRange(0, 2'000'000'000);
     watermark_->setToolTip(
         trs(
-            "Conversation memory position: the highest message id already merged "
-            "into the memory above. Used only to decide when the automatic memory "
-            "update fires."
+            "Conversation summary position: the highest message id already merged "
+            "into the summary above. Used only to decide when the automatic "
+            "summarization update fires."
         )
     );
 
@@ -484,7 +484,7 @@ QWidget* SessionEditor::build_memory_tab() {
         )
     );
 
-    form->addRow(field_label(content, trs("Memory watermark")), watermark_);
+    form->addRow(field_label(content, trs("Summarization watermark")), watermark_);
     form->addRow(
         field_label(content, trs("Assistant watermark")), assistant_watermark_
     );
@@ -493,27 +493,28 @@ QWidget* SessionEditor::build_memory_tab() {
 
   layout->addWidget(h_separator(content));
 
-  // ---- Memory triggers ----
-  layout->addWidget(section_label(content, trs("Memory triggers")));
+  // ---- Summarization triggers ----
+  layout->addWidget(section_label(content, trs("Summarization triggers")));
 
-  memory_preset_ = add_preset_row(
-      content, layout, QStringLiteral("SessionMemoryPreset"),
-      trs("Fill the memory fields below with a preset. It also sets the response "
-          "budget on the General page, which must not exceed the memory trigger. "
-          "Nothing is saved until you press Save."), kMemoryPresets
+  summary_preset_ = add_preset_row(
+      content, layout, QStringLiteral("SessionSummaryPreset"),
+      trs("Fill the summarization fields below with a preset. It also sets the "
+          "response budget on the General page, which must not exceed the "
+          "summarization trigger. Nothing is saved until you press Save."),
+      kSummaryPresets
   );
 
   connect(
-      memory_preset_, qOverload<int>(&QComboBox::currentIndexChanged), this,
+      summary_preset_, qOverload<int>(&QComboBox::currentIndexChanged), this,
       [this](int index) {
         if (index <= 0) {
           return;
         }
 
-        const MemoryPreset& memory_preset = kMemoryPresets[index - 1];
-        summary_trigger_->setValue(memory_preset.trigger);
-        summary_keep_->setValue(memory_preset.keep);
-        summary_budget_->setValue(memory_preset.memory_budget);
+        const SummaryPreset& summary_preset = kSummaryPresets[index - 1];
+        summary_trigger_->setValue(summary_preset.trigger);
+        summary_keep_->setValue(summary_preset.keep);
+        summary_budget_->setValue(summary_preset.summary_budget);
         // response_budget_->setValue(budget_preset.response);
       }
   );
@@ -522,17 +523,17 @@ QWidget* SessionEditor::build_memory_tab() {
     auto* form = form_layout(content);
 
     // The summariser's own level, independent of the chat level on the General
-    // page. A memory update can therefore run without reasoning while turns
-    // reason (or the other way round).
+    // page. A summarization update can therefore run without reasoning while
+    // turns reason (or the other way round).
     summary_reasoning_ = new ComboBox(content);
-    summary_reasoning_->setObjectName(QStringLiteral("SessionMemoryReasoning"));
+    summary_reasoning_->setObjectName(QStringLiteral("SessionSummaryReasoning"));
     summary_reasoning_->setToolTip(
-        trs("The reasoning level used when this session's memory is updated. "
+        trs("The reasoning level used when this session's summarization is updated. "
             "Chat turns are unaffected.")
     );
 
     form->addRow(
-        field_label(content, trs("Memory reasoning")), summary_reasoning_
+        field_label(content, trs("Summarization reasoning")), summary_reasoning_
     );
     layout->addLayout(form);
   }
@@ -541,18 +542,18 @@ QWidget* SessionEditor::build_memory_tab() {
     const lnb::Session defaults;
     auto* grid = make_budget_grid();
 
-    // A memory setting decides *when* the transcript is merged and how much
-    // stays verbatim.
+    // A summarization setting decides *when* the transcript is merged and how
+    // much stays verbatim.
     summary_trigger_ = add_budget_spin(
-        content, grid, 0, 0, trs("Memory trigger"),
-        static_cast<int>(defaults.memory_trigger_tokens_), 256, 2'000'000'000, 256
+        content, grid, 0, 0, trs("Summarization trigger"),
+        static_cast<int>(defaults.summary_trigger_tokens_), 256, 2'000'000'000, 256
     );
     summary_keep_ = add_budget_spin(
         content, grid, 0, 1, trs("Retained tokens"),
         static_cast<int>(defaults.summary_keep_tokens_), 128, 2'000'000'000, 128
     );
     summary_budget_ = add_budget_spin(
-        content, grid, 1, 0, trs("Memory budget"),
+        content, grid, 1, 0, trs("Summarization budget"),
         static_cast<int>(defaults.summary_token_budget_), 128, 2'000'000'000, 256
     );
 
@@ -571,24 +572,25 @@ QWidget* SessionEditor::build_memory_tab() {
   docs_policy.setHeightForWidth(true);
   docs->setSizePolicy(docs_policy);
   docs->setText(trs(
-      "<b>How conversation memory works</b><br>"
-      "Conversation memory is a rolling record of older turns. A request carries the "
-      "system prompt plus the transcript; when that reaches <i>Memory trigger</i>, the "
-      "older messages are merged into the memory, trimming the transcript to the "
-      "newest <i>Retained tokens</i>. Keep the retained level well below the trigger, "
-      "or the merge would run again on the next turn. The message that crosses the "
-      "boundary is kept whole.<br><br>"
-      "The watermarks above are <b>bookkeeping only</b>: they count how much is new so "
-      "the trigger can fire. They never decide what is sent or what is read — a memory "
-      "update always reads by recency, so pressing <b>Update memory now</b> twice with "
-      "no new messages reads the same set and produces the same memory "
-      "(idempotent). Custom instructions are kept separate and are never touched.<br><br>"
-      "The <b>assistant memory</b> is shared across every session: it is merged from "
-      "the recent messages of all sessions (bounded by the assistant's own trigger) "
-      "plus each session's memory (bounded by the session-pool budget). Older "
-      "sessions may therefore be forgotten. This session opts out of that sharing "
-      "when <i>Include in assistant memory</i> is off.<br><br>"
-      "Clearing the memory and saving resets its watermark to 0, re-admitting the "
+      "<b>How conversation summarization works</b><br>"
+      "Conversation summarization is a rolling record of older turns. A request "
+      "carries the system prompt plus the transcript; when that reaches "
+      "<i>Summarization trigger</i>, the older messages are merged into the "
+      "summary, trimming the transcript to the newest <i>Retained tokens</i>. Keep "
+      "the retained level well below the trigger, or the merge would run again on "
+      "the next turn. The message that crosses the boundary is kept whole.<br><br>"
+      "The watermarks above are <b>bookkeeping only</b>: they count how much is new "
+      "so the trigger can fire. They never decide what is sent or what is read — a "
+      "summarization update always reads by recency, so pressing <b>Update "
+      "summarization now</b> twice with no new messages reads the same set and "
+      "produces the same summary (idempotent). Custom instructions are kept "
+      "separate and are never touched.<br><br>"
+      "The <b>assistant memory</b> is shared across every session: it is merged "
+      "from the recent messages of all sessions (bounded by the assistant's own "
+      "trigger) plus each session's summarization (bounded by the session-pool "
+      "budget). Older sessions may therefore be forgotten. This session opts out "
+      "of that sharing when <i>Include in assistant memory</i> is off.<br><br>"
+      "Clearing the summary and saving resets its watermark to 0, re-admitting the "
       "whole transcript."
   ));
   layout->addWidget(docs);
@@ -739,7 +741,7 @@ void SessionEditor::load_session() {
 
   title_->setText(to_qstring(session_.title_));
   instructions_->setPlainText(to_qstring(session_.custom_instructions_));
-  memory_->setPlainText(to_qstring(session_.memory_));
+  summary_->setPlainText(to_qstring(session_.summary_));
 
   // A brand-new session starts on the assistant's level (which itself defaults to
   // the model's first available one); an existing row keeps the level it stores.
@@ -771,11 +773,11 @@ void SessionEditor::load_session() {
 
   include_in_assistant_memory_->setChecked(session_.include_in_assistant_memory_);
 
-  watermark_->setValue(static_cast<int>(session_.memory_watermark_));
+  watermark_->setValue(static_cast<int>(session_.summary_watermark_));
   assistant_watermark_->setValue(static_cast<int>(session_.assistant_memory_watermark_));
 
   summary_keep_->setValue(static_cast<int>(session_.summary_keep_tokens_));
-  summary_trigger_->setValue(static_cast<int>(session_.memory_trigger_tokens_));
+  summary_trigger_->setValue(static_cast<int>(session_.summary_trigger_tokens_));
   summary_budget_->setValue(static_cast<int>(session_.summary_token_budget_));
   response_budget_->setValue(static_cast<int>(session_.response_token_budget_));
   midturn_input_budget_->setValue(
@@ -819,8 +821,9 @@ void SessionEditor::populate_reasoning(
 void SessionEditor::save_session() {
   // Validate before anything is written. The two budgets are related: the reply
   // must fit inside the input bound, and the retained level must sit below the
-  // trigger, or the memory update would fire again the moment it finished. A
-  // violated rule keeps the window open so the values can be corrected.
+  // trigger, or the summarization update would fire again the moment it
+  // finished. A violated rule keeps the window open so the values can be
+  // corrected.
   const std::size_t trigger = static_cast<std::size_t>(summary_trigger_->value());
   const std::size_t keep = static_cast<std::size_t>(summary_keep_->value());
   const std::size_t response = static_cast<std::size_t>(response_budget_->value());
@@ -829,7 +832,7 @@ void SessionEditor::save_session() {
   //   QMessageBox::warning(
   //       this, trs("Invalid Budget"),
   //       trs(
-  //           "The response budget must not be greater than the memory "
+  //           "The response budget must not be greater than the summarization "
   //           "trigger. A reply could otherwise never complete before the "
   //           "conversation is merged again."
   //       )
@@ -841,8 +844,8 @@ void SessionEditor::save_session() {
     QMessageBox::warning(
         this, trs("Invalid Budget"),
         trs(
-            "The retained-token level must be smaller than the memory "
-            "trigger. Otherwise the memory update would be triggered again "
+            "The retained-token level must be smaller than the summarization "
+            "trigger. Otherwise the summarization update would be triggered again "
             "immediately after it runs."
         )
     );
@@ -853,7 +856,7 @@ void SessionEditor::save_session() {
 
   session.title_ = title_->text().trimmed().toStdString();
   session.custom_instructions_ = instructions_->toPlainText().toStdString();
-  session.memory_ = memory_->toPlainText().toStdString();
+  session.summary_ = summary_->toPlainText().toStdString();
 
   session.shared_directories_.clear();
 
@@ -869,15 +872,15 @@ void SessionEditor::save_session() {
     }
   }
 
-  // Clearing the memory re-admits the whole transcript.
-  session.memory_watermark_ = session.memory_.empty()
+  // Clearing the summary re-admits the whole transcript.
+  session.summary_watermark_ = session.summary_.empty()
       ? 0
       : static_cast<std::uint32_t>(watermark_->value());
   session.assistant_memory_watermark_ =
       static_cast<std::uint32_t>(assistant_watermark_->value());
 
   session.summary_keep_tokens_ = static_cast<std::size_t>(summary_keep_->value());
-  session.memory_trigger_tokens_ = static_cast<std::size_t>(summary_trigger_->value());
+  session.summary_trigger_tokens_ = static_cast<std::size_t>(summary_trigger_->value());
   session.summary_token_budget_ = static_cast<std::size_t>(summary_budget_->value());
   session.response_token_budget_ = static_cast<std::size_t>(response_budget_->value());
   session.input_token_produced_midway_ =
@@ -908,16 +911,16 @@ void SessionEditor::summarize_now() {
     return;
   }
 
-  // A manual memory update runs as the session's own task, so it must never be
-  // started while a turn is already in flight: the one-task-per-session model is
-  // what guarantees a generation and a memory update cannot touch the same
-  // session's memory, watermark and messages at once.
+  // A manual summarization update runs as the session's own task, so it must
+  // never be started while a turn is already in flight: the one-task-per-session
+  // model is what guarantees a generation and a summarization update cannot
+  // touch the same session's summary, watermark and messages at once.
   if (conversation_view_->busy() || api_.assistant_busy()) {
     QMessageBox::information(
         this, trs("Session Busy"),
         trs(
             "A task is already running. Wait for it to finish, then update "
-            "the memory."
+            "the summarization."
         )
     );
     return;
@@ -925,7 +928,7 @@ void SessionEditor::summarize_now() {
 
   summarizing_ = true;
   summarize_button_->setEnabled(false);
-  summarize_button_->setText(trs("Updating memory..."));
+  summarize_button_->setText(trs("Updating summarization..."));
   save_button_->setEnabled(false);
   cancel_button_->setEnabled(false);
 
@@ -963,7 +966,7 @@ void SessionEditor::summarize_now() {
 
   summarizing_ = false;
   summarize_button_->setEnabled(true);
-  summarize_button_->setText(trs("Update memory now"));
+  summarize_button_->setText(trs("Update summarization now"));
   save_button_->setEnabled(true);
   cancel_button_->setEnabled(true);
 
@@ -977,38 +980,38 @@ void SessionEditor::summarize_now() {
 
   // A cancelled pass merged nothing and must not be reported as "nothing to
   // update": cancelling is a deliberate no-op, exactly like a declined
-  // review, and the memory is simply left untouched.
+  // review, and the summary is simply left untouched.
   if (snapshot.status == lnb::GenerationTask::Status::CANCELLED) {
     return;
   }
 
   if (snapshot.status == lnb::GenerationTask::Status::FAILED) {
     QMessageBox::warning(
-        this, trs("Memory Update Failed"), to_qstring(snapshot.error)
+        this, trs("Summarization Update Failed"), to_qstring(snapshot.error)
     );
     return;
   }
 
-  // The summariser persists the new memory; reload it so the box shows the result
-  // and a later Save keeps the advanced watermark.
+  // The summariser persists the new summary; reload it so the box shows the
+  // result and a later Save keeps the advanced watermark.
   const auto updated = api_.session(session_id_);
 
   if (!updated.has_value()) {
     return;
   }
 
-  const QString previous = memory_->toPlainText();
-  const QString memory = to_qstring(updated->memory_);
+  const QString previous = summary_->toPlainText();
+  const QString summary = to_qstring(updated->summary_);
 
-  memory_->setPlainText(memory);
-  session_.memory_ = updated->memory_;
-  session_.memory_watermark_ = updated->memory_watermark_;
-  watermark_->setValue(static_cast<int>(updated->memory_watermark_));
+  summary_->setPlainText(summary);
+  session_.summary_ = updated->summary_;
+  session_.summary_watermark_ = updated->summary_watermark_;
+  watermark_->setValue(static_cast<int>(updated->summary_watermark_));
 
-  if (memory.isEmpty() || memory == previous) {
+  if (summary.isEmpty() || summary == previous) {
     QMessageBox::information(
         this, trs("Nothing to Update"),
-        trs("There is no new conversation to merge into memory yet.")
+        trs("There is no new conversation to summarize yet.")
     );
   }
 }

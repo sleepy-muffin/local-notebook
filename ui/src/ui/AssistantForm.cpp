@@ -175,8 +175,8 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
     summary_timeout_->setSingleStep(60);
     summary_timeout_->setSuffix(QStringLiteral(" s"));
     summary_timeout_->setToolTip(
-        trs("Maximum silence, in seconds, while a session or assistant memory "
-            "update runs. Reasoning models often need longer.")
+        trs("Maximum silence, in seconds, while a session summarization or assistant "
+            "memory update runs. Reasoning models often need longer.")
     );
 
     form->addRow(field_label(this, trs("API URL")), api_url_);
@@ -190,9 +190,9 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
         QString(), field_label(this, trs(
                        "Seconds a request may wait for the next response byte "
                        "before it is abandoned. Chat turns use the turn timeout; "
-                       "session and assistant memory updates use the memory update "
-                       "timeout. Connecting and uploading keep a fixed 60-second "
-                       "window."
+                       "session summarization and assistant memory updates use the "
+                       "memory update timeout. Connecting and uploading keep a "
+                       "fixed 60-second window."
                    ))
     );
     content->addLayout(form);
@@ -238,7 +238,8 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
     );
     summary_session_budget_->setToolTip(
         trs(
-            "Token cap on the per-session memories included in the assistant memory."
+            "Token cap on the per-session summarizations included in the assistant "
+            "memory."
         )
     );
 

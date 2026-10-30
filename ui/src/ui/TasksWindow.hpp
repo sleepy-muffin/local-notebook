@@ -10,6 +10,7 @@
 
 class QEvent;
 class QLabel;
+class QPlainTextEdit;
 class QPushButton;
 class QShowEvent;
 class QVBoxLayout;
@@ -20,10 +21,10 @@ namespace ui {
 // A unique, non-modal window listing generation tasks: the ones running now and
 // the last finished one per slot (one per session, plus the shared assistant
 // memory). A failed task is never silently dropped, so its reason stays visible;
-// clicking any row dumps that task's own diagnostic log (the exact request body,
-// the tool calls, and any hidden reasoning the model produced — none of which the
-// transcript shows). A running task carries a Cancel button, the only place a
-// shared assistant fold can be stopped.
+// clicking a row shows that task's own diagnostic log in the right-hand pane (the
+// exact request body, the tool calls, and any hidden reasoning the model produced
+// — none of which the transcript shows). A running task carries a Cancel button,
+// the only place a shared assistant fold can be stopped.
 //
 // The main window owns one and refreshes it from its poll timer, so it never
 // blocks the window it belongs to.
@@ -87,12 +88,28 @@ private:
 
   void apply_style();
   void rebuild_rows(std::size_t count);
-  void open_log(std::size_t index);
+
+  // Shows `index`'s diagnostic log in the right-hand pane. The log is composed
+  // here, on demand, so a task nobody selects costs nothing.
+  void select_row(std::size_t index);
+  void refresh_log();
+
+  // Marks the selected card with the accent border, so the list and the pane
+  // agree on which task is being read.
+  void update_selection_style();
 
   QWidget* list_ = nullptr;
   QVBoxLayout* list_layout_ = nullptr;
   QLabel* empty_ = nullptr;
   std::vector<Row> rows_;
+
+  // The right-hand pane: the selected task's name and its raw log text.
+  QLabel* log_title_ = nullptr;
+  QPlainTextEdit* log_view_ = nullptr;
+
+  // Index into `entries_`, or `npos` while nothing is selected.
+  static constexpr std::size_t npos = static_cast<std::size_t>(-1);
+  std::size_t selected_ = npos;
 
   // The entries currently shown, so a click can map a card back to its task.
   std::vector<Entry> entries_;

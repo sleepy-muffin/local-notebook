@@ -32,8 +32,8 @@ public:
 private:
   // Rebuilds the list from disk and selects the last-opened assistant.
   void refresh();
-  // Updates the right-hand preview from the current selection.
-  void update_preview();
+  // Enables the row actions for the current selection.
+  void update_actions();
   // Opens the selected assistant into the application and accepts the dialog.
   void open_selected();
   // Edits the selected assistant in place, reusing its UUID.
@@ -48,9 +48,6 @@ private:
   lnb::Settings& settings_;
 
   QListWidget* list_ = nullptr;
-  QLabel* preview_name_ = nullptr;
-  QLabel* preview_model_ = nullptr;
-  QLabel* preview_hint_ = nullptr;
   QCheckBox* auto_login_ = nullptr;
   QPushButton* edit_button_ = nullptr;
   QPushButton* open_button_ = nullptr;

@@ -197,6 +197,30 @@ std::string resolve_reasoning_effort(
   return effort;
 }
 
+// Running counterpart of context::prompt_tokens: counts UTF-8 bytes as they
+// arrive so a live output estimate costs O(chunk) instead of rescanning the
+// whole reply. It mirrors estimate_tokens() exactly.
+class TokenCounter {
+public:
+  void add(std::string_view text) {
+    for (const unsigned char c: text) {
+      if (c < 128) {
+        ++ascii_;
+      } else if ((c & 0xC0) != 0x80) {
+        ++non_ascii_; // count each UTF-8 lead byte once
+      }
+    }
+  }
+
+  [[nodiscard]] std::size_t tokens() const {
+    return (ascii_ + 3) / 4 + non_ascii_;
+  }
+
+private:
+  std::size_t ascii_ = 0;
+  std::size_t non_ascii_ = 0;
+};
+
 // Incrementally decodes an OpenAI-compatible Server-Sent Events stream.
 //
 // It never throws: a failure is recorded in `failed_`/`error_` and reported as
@@ -359,6 +383,8 @@ private:
       }
 
       full_reply_.append(token);
+      output_estimate_.add(token);
+      publish_output_estimate();
     }
 
     // Hidden reasoning (a reasoning model's "thinking") is kept out of the reply
@@ -371,8 +397,11 @@ private:
     }
 
     if (reasoning != nullptr && reasoning->is_string()) {
-      task_.append_thinking(reasoning->as_string());
-      thinking_ += std::string(reasoning->as_string());
+      const std::string text = std::string(reasoning->as_string());
+      task_.append_thinking(text);
+      thinking_ += text;
+      output_estimate_.add(text);
+      publish_output_estimate();
     }
 
     // Tool calls arrive split across chunks; merge them per `index`.
@@ -397,13 +426,22 @@ private:
 
         if (const boost::json::object* function = object_at(part, "function");
             function != nullptr) {
-          call.name += string_at(*function, "name");
-          call.arguments += string_at(*function, "arguments");
+          const std::string name_part = string_at(*function, "name");
+          const std::string argument_part = string_at(*function, "arguments");
+          call.name += name_part;
+          call.arguments += argument_part;
+          output_estimate_.add(name_part);
+          output_estimate_.add(argument_part);
+          publish_output_estimate();
         }
       }
     }
 
     return true;
+  }
+
+  void publish_output_estimate() {
+    task_.set_streaming_output(output_estimate_.tokens());
   }
 
   GenerationTask& task_;
@@ -415,6 +453,7 @@ private:
   std::string finish_reason_;
   std::map<int, ToolCall> tool_calls_;
   RoundUsage usage_;
+  TokenCounter output_estimate_;
 
   bool finished_ = false;
   bool failed_ = false;
@@ -558,6 +597,8 @@ private:
       const std::string delta = string_at(root, "delta");
       task_.append_thinking(delta);
       thinking_ += delta;
+      output_estimate_.add(delta);
+      publish_output_estimate();
       return true;
     }
 
@@ -658,6 +699,10 @@ private:
     }
   }
 
+  void publish_output_estimate() {
+    task_.set_streaming_output(output_estimate_.tokens());
+  }
+
   static std::string message_text(const boost::json::object& item) {
     std::string text;
 
@@ -692,6 +737,8 @@ private:
     }
 
     full_reply_.append(delta);
+    output_estimate_.add(delta);
+    publish_output_estimate();
     return true;
   }
 
@@ -712,6 +759,7 @@ private:
   std::string finish_reason_;
   std::map<int, boost::json::object> items_;
   RoundUsage usage_;
+  TokenCounter output_estimate_;
 
   bool finished_ = false;
   bool failed_ = false;
@@ -720,7 +768,7 @@ private:
 
 // Assembles the system prompt (design-1.md §4): the assistant and session
 // instructions first, each under its own header, then the shared assistant
-// memory and the session memory. Used by build_session_request(); the memory it
+// memory and the session summary. Used by build_session_request(); the text it
 // carries is deliberately never part of any conversation-token count.
 std::string build_system_prompt(
     const Assistant& assistant, const Session& session
@@ -744,7 +792,7 @@ std::string build_system_prompt(
   append_block("[ASSISTANT INSTRUCTIONS]", assistant.custom_instructions_);
   append_block("[SESSION INSTRUCTIONS]", session.custom_instructions_);
   append_block("[ASSISTANT MEMORY]", assistant.memory_);
-  append_block("[SESSION MEMORY]", session.memory_);
+  append_block("[SESSION SUMMARY]", session.summary_);
 
   if (prompt.empty()) {
     prompt = "You are a helpful assistant.";
@@ -762,10 +810,10 @@ Request build_session_request(
   const std::string system_prompt = build_system_prompt(assistant, session);
 
   // The request carries at most the session's input bound: the newest messages
-  // that fit `memory_trigger_tokens_`, the boundary message kept whole. The
+  // that fit `summary_trigger_tokens_`, the boundary message kept whole. The
   // bound is the conversation alone, so the system prompt never eats into it.
   const context::Window window =
-      context::plan_window(messages, session.memory_trigger_tokens_);
+      context::plan_window(messages, session.summary_trigger_tokens_);
 
   Request request;
   request.model = assistant.model_;
@@ -800,8 +848,8 @@ ContextUsage context_usage(
   // the trigger. Trimming to the trigger made the readout shrink whenever the
   // trigger was lowered, which contradicts the collapse rule.
   usage.used_tokens =
-      context::transcript_tokens_after(messages, session.memory_watermark_);
-  usage.limit_tokens = session.memory_trigger_tokens_;
+      context::transcript_tokens_after(messages, session.summary_watermark_);
+  usage.limit_tokens = session.summary_trigger_tokens_;
 
   return usage;
 }
@@ -810,8 +858,9 @@ std::expected<ChatCompletionResult, FailedResult> send_message_once(
     const boost::json::object& payload, const Remote& remote, GenerationTask& task,
     std::stop_token stop_token, std::string_view kind
 ) {
-  auto fail = [](FailureKind kind, std::string reason)
+  auto fail = [&task](FailureKind kind, std::string reason)
       -> std::unexpected<FailedResult> {
+    task.clear_streaming_usage();
     return std::unexpected(FailedResult{kind, std::move(reason)});
   };
 
@@ -824,6 +873,10 @@ std::expected<ChatCompletionResult, FailedResult> send_message_once(
   // the model was actually sent.
   const std::string body = boost::json::serialize(payload);
   shark::log::info("request {}: {}", kind, body);
+
+  // Publish the request's projected input cost at once, so the Tasks window
+  // moves when a request starts; the measured count replaces it when it ends.
+  task.set_streaming_input(context::prompt_tokens(body));
 
   // The same body goes into the task's own log, so the tasks window can dump the
   // exact bytes that were posted when a turn is inspected. The endpoint is
@@ -1259,10 +1312,10 @@ std::expected<ChatCompletionResult, FailedResult> generate_reply(
 namespace {
 
 // Folds the session's overflow — everything older than the verbatim window —
-// into `session.memory_` and persists the result. `force` ignores the automatic
-// trigger (a manual "summarise now"). Returns the resulting memory, which is
+// into `session.summary_` and persists the result. `force` ignores the automatic
+// trigger (a manual "summarise now"). Returns the resulting summary, which is
 // the unchanged input when there was nothing to fold.
-std::string fold_session_memory(
+std::string fold_session_summary(
     store::database& db, const Session& session, const Remote& remote,
     GenerationTask& task, std::stop_token stop_token, bool force,
     const SummaryApprover& approver, bool standalone
@@ -1278,71 +1331,44 @@ std::string fold_session_memory(
   // Nothing to fold until there is an actual exchange: the newest message is
   // never a candidate, so a single message has no overflow.
   if (messages.size() < 2) {
-    return session.memory_;
+    return session.summary_;
   }
 
-  std::string memory = session.memory_;
+  std::string summary = session.summary_;
 
   // The collapse retains the newest conversation messages that fit the keep
-  // window; only the conversation is measured, so the memory's own size never
+  // window; only the conversation is measured, so the summary's own size never
   // shrinks the retained transcript. Everything before the window floor is the
   // overflow to fold.
   const context::Window window =
       context::plan_window(messages, session.summary_keep_tokens_);
 
   if (!force &&
-      context::transcript_tokens_after(messages, session.memory_watermark_) <
-          session.memory_trigger_tokens_) {
-    return memory;
+      context::transcript_tokens_after(messages, session.summary_watermark_) <
+          session.summary_trigger_tokens_) {
+    return summary;
   }
 
   // Nothing has overflowed the retained window, so there is nothing to fold and
   // nothing to persist (leaving the stored watermark untouched).
   if (window.start == 0) {
-    return memory;
+    return summary;
   }
 
-  // The memory budget is the summariser's completion cap.
+  // The summary budget is the summariser's completion cap.
   const std::size_t max_tokens = session.summary_token_budget_;
 
-  // The summariser runs at its own level, so a memory update can stay cheap
+  // The summariser runs at its own level, so a summary update can stay cheap
   // while chat turns reason. An unsupported level is refused here with the same
   // message the turn itself would raise, so a manual summarisation cannot
   // quietly pick a different level.
   const std::string effort =
       resolve_reasoning_effort(remote.model, session.summary_reasoning_effort_);
 
-  // Review the pass before anything leaves the machine. The plan describes the
-  // first request; a very large overflow continues in further batches, which is
-  // noted for the user. Declining returns the memory untouched, because nothing
-  // has been sent yet.
-  if (approver && window.start > 0) {
-    const std::vector<const Message*> first_batch = context::summary_candidates(
-        messages, 0, window.start, session.memory_trigger_tokens_
-    );
-
-    const net::Request summary_request = context::session_summary_request(
-        remote.model, memory, first_batch, max_tokens, effort
-    );
-
-    SummaryPlan plan;
-    plan.kind = "session memory";
-    plan.estimated_input_tokens = context::request_tokens(summary_request);
-    plan.request = build_request(remote.protocol, summary_request);
-    plan.more_requests = first_batch.size() < window.start;
-    plan.watermark_text =
-        "Session memory watermark: " + std::to_string(session.memory_watermark_) +
-        " -> " + std::to_string(messages[window.start - 1].id_);
-
-    if (!approver(plan)) {
-      return session.memory_;
-    }
-  }
-
   // The watermark advances only once the whole overflow has been folded; a pass
-  // that stops early leaves the stored memory and its watermark exactly as they
+  // that stops early leaves the stored summary and its watermark exactly as they
   // were, so a failed (or empty) job never regresses the frontier.
-  std::uint32_t watermark = session.memory_watermark_;
+  std::uint32_t watermark = session.summary_watermark_;
   std::size_t first = 0;
   bool complete = true;
 
@@ -1356,7 +1382,7 @@ std::string fold_session_memory(
     }
 
     const std::vector<const Message*> batch = context::summary_candidates(
-        messages, first, window.start, session.memory_trigger_tokens_
+        messages, first, window.start, session.summary_trigger_tokens_
     );
 
     if (batch.empty()) {
@@ -1364,14 +1390,36 @@ std::string fold_session_memory(
       break; // defensive: no progress is possible
     }
 
-    task.set_status("Updating memory...");
+    task.set_status("Updating summarization...");
 
-    const boost::json::object request = build_request(
-        remote.protocol,
-        context::session_summary_request(
-            remote.model, memory, batch, max_tokens, effort
-        )
+    const net::Request summary_request = context::session_summary_request(
+        remote.model, summary, batch, max_tokens, effort
     );
+    const boost::json::object request =
+        build_request(remote.protocol, summary_request);
+
+    // Review this batch before it leaves the machine. Each batch carries the
+    // current summary plus its own messages, so the preview is built per batch
+    // and the user approves every request. Declining discards the whole pass:
+    // no further batch is sent, and the stored summary and watermark stay as
+    // they were.
+    if (approver) {
+      SummaryPlan plan;
+      plan.kind = "session summarization";
+      plan.estimated_input_tokens = context::request_tokens(summary_request);
+      plan.request = request;
+      plan.more_requests = first + batch.size() < window.start;
+      plan.watermark_text =
+          "Session summary watermark: " + std::to_string(watermark) + " -> " +
+          std::to_string(batch.back()->id_);
+
+      if (!approver(plan)) {
+        task.append_log(
+            "[session-summary] review declined; nothing was sent for this batch"
+        );
+        return session.summary_;
+      }
+    }
 
     // A silent, throwaway task: the summariser's text is internal and must not
     // be streamed into the visible transcript. The outer stop token is forwarded
@@ -1404,13 +1452,13 @@ std::string fold_session_memory(
         std::string message = outcome.error().reason;
 
         if (outcome.error().kind == FailureKind::Truncated) {
-          message += " Increase the memory budget for a reasoning model.";
+          message += " Increase the summarization budget for a reasoning model.";
         }
 
         throw std::runtime_error(message);
       }
 
-      // A partial pass is discarded: the stored memory and its watermark stay
+      // A partial pass is discarded: the stored summary and its watermark stay
       // exactly as they were, so the next attempt starts from the same batch.
       complete = false;
       break;
@@ -1421,15 +1469,15 @@ std::string fold_session_memory(
 
     if (text.empty()) {
       // An empty completion almost always means the model spent its whole budget
-      // on hidden reasoning and never emitted the memory. A manual request must
+      // on hidden reasoning and never emitted the summary. A manual request must
       // say so instead of reporting "nothing to merge".
       if (force) {
         const std::string reason =
             result.finish_reason.empty() ? "unknown" : result.finish_reason;
 
         throw std::runtime_error(
-            "The memory update returned no text (finish_reason=" + reason +
-            "). Increase the memory budget for a reasoning model."
+            "The summarization update returned no text (finish_reason=" + reason +
+            "). Increase the summarization budget for a reasoning model."
         );
       }
 
@@ -1437,27 +1485,27 @@ std::string fold_session_memory(
       break;
     }
 
-    memory = text;
+    summary = text;
     watermark = batch.back()->id_;
     first += batch.size();
   }
 
   // Persist only when every batch succeeded. A partial pass is discarded: the
-  // local `memory` is dropped and the caller keeps the stored one, so memory and
-  // watermark can never disagree.
+  // local summary is dropped and the caller keeps the stored one, so the summary
+  // and watermark can never disagree.
   if (!complete) {
-    return session.memory_;
+    return session.summary_;
   }
 
-  db.set_session_memory(session.id_, memory, watermark);
-  return memory;
+  db.set_session_summary(session.id_, summary, watermark);
+  return summary;
 }
 
 // Gathered, newest-first inputs for one assistant summarisation pass.
 struct AssistantGather {
   // Messages across sessions interleaved by made_at_, newest first.
   std::vector<const Message*> recent;
-  // Session ids whose memory_ contributes a compacted block, newest first.
+  // Session ids whose summary_ contributes a compacted block, newest first.
   std::vector<std::uint32_t> compacted;
   // Newest gathered message id per session (for the watermark update).
   std::map<std::uint32_t, std::uint32_t> gathered_ids;
@@ -1478,11 +1526,11 @@ std::string build_sessions_block(
     const std::vector<const Message*>* messages =
         it != recent_by_session.end() ? &it->second : nullptr;
 
-    const bool has_memory =
-        !session.memory_.empty() &&
+    const bool has_summary =
+        !session.summary_.empty() &&
         std::find(compacted.begin(), compacted.end(), session.id_) != compacted.end();
 
-    if (!has_memory && (messages == nullptr || messages->empty())) {
+    if (!has_summary && (messages == nullptr || messages->empty())) {
       continue;
     }
 
@@ -1490,9 +1538,9 @@ std::string build_sessions_block(
     block += session.title_.empty() ? "(untitled)" : session.title_;
     block += '\n';
 
-    if (has_memory) {
+    if (has_summary) {
       block += "\n### Compacted Historical Messages:\n";
-      block += session.memory_;
+      block += session.summary_;
       block += '\n';
     }
 
@@ -1603,18 +1651,18 @@ std::string fold_assistant_memory(
     }
   }
 
-  // Compacted historical messages: the session memories, newest session first,
+  // Compacted historical messages: the session summaries, newest session first,
   // until the separate session-summary cap.
   std::size_t compacted_tokens = 0;
 
   for (const Session& session: sessions) {
     throw_if_stopped();
 
-    if (session.memory_.empty()) {
+    if (session.summary_.empty()) {
       continue;
     }
 
-    const std::size_t cost = context::prompt_tokens(session.memory_);
+    const std::size_t cost = context::prompt_tokens(session.summary_);
 
     if (!gather.compacted.empty() &&
         compacted_tokens + cost >
@@ -1643,7 +1691,7 @@ std::string fold_assistant_memory(
 
   if (sessions_block.empty()) {
     task.append_log(
-        "[assistant-summary] nothing to merge: no session memory or recent messages"
+        "[assistant-summary] nothing to merge: no session summarization or recent messages"
     );
     return assistant.memory_;
   }
@@ -1796,12 +1844,12 @@ std::string maybe_summarize_session(
     GenerationTask& task, std::stop_token stop_token, SummaryApprover approver
 ) {
   try {
-    return fold_session_memory(
+    return fold_session_summary(
         db, session, remote, task, stop_token, false, approver, false
     );
   } catch (const std::exception& error) {
     // Best effort: an automatic summarisation must never fail the user's turn,
-    // so an unchanged memory is returned instead of propagating.
+    // so an unchanged summary is returned instead of propagating.
     shark::log::info(
         "maybe_summarize_session: skipped for session {}: {}", session.id_,
         error.what()
@@ -1809,7 +1857,7 @@ std::string maybe_summarize_session(
     task.append_log(
         "[session-summary] automatic pass skipped: " + std::string(error.what())
     );
-    return session.memory_;
+    return session.summary_;
   }
 }
 
@@ -1817,7 +1865,7 @@ std::string summarize_session_now(
     store::database& db, const Session& session, const Remote& remote,
     GenerationTask& task, std::stop_token stop_token, SummaryApprover approver
 ) {
-  return fold_session_memory(
+  return fold_session_summary(
       db, session, remote, task, stop_token, true, approver, true
   );
 }

@@ -144,9 +144,9 @@ public:
   void mark_assistant_summary_stale();
 
   // SUCCESS when a prompt may be sent; otherwise the first trigger that is due.
-  [[nodiscard]] error_code has_session_memory_trigger_met(std::uint32_t session_id) const;
+  [[nodiscard]] error_code has_session_summary_trigger_met(std::uint32_t session_id) const;
 
-  // Validates the session and both memory triggers, then persists the user
+  // Validates the session and both summary triggers, then persists the user
   // message. The turn itself is started by start_generation().
   [[nodiscard]] error_code session_prompt(std::uint32_t session_id, const std::string &prompt);
 
@@ -159,9 +159,14 @@ public:
   //
   // The returned task is shared with the interface, which keeps it alive while
   // the executor runs; the caller only polls its snapshot.
-  [[nodiscard]] std::shared_ptr<GenerationTask> start_generation(std::uint32_t session_id);
+  //
+  // `approver` reviews the automatic pre-reply fold before it is sent, so a send
+  // that pushes the transcript over the trigger cannot summarise unreviewed. An
+  // empty approver proceeds, which is what headless callers and tests rely on.
+  [[nodiscard]] std::shared_ptr<GenerationTask>
+  start_generation(std::uint32_t session_id, SummaryApprover approver = {});
 
-  // Folds a session's overflow into memory. `force` ignores the automatic
+  // Folds a session's overflow into its summary. `force` ignores the automatic
   // trigger. The task is polled exactly like a turn. Returns nullptr when the
   // session or the assistant fold already owns a task.
   [[nodiscard]] std::shared_ptr<GenerationTask>

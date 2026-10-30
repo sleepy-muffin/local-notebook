@@ -59,7 +59,7 @@ public:
   [[nodiscard]] std::vector<Message> all() const;
   [[nodiscard]] std::size_t count() const;
 
-  [[nodiscard]] std::vector<Message> all_messages_after_session_memory_watermark() const;
+  [[nodiscard]] std::vector<Message> all_messages_after_summary_watermark() const;
 
   // Appends a message, stamping made_at_ with the current UTC time.
   std::uint32_t append(Role role, const std::string& content);

@@ -49,7 +49,7 @@ int main() {
 
   lnb::Session session;
   session.title_ = "Opted out";
-  session.memory_trigger_tokens_ = 2'000'000'000;  // keep the session trigger clear
+  session.summary_trigger_tokens_ = 2'000'000'000;  // keep the session trigger clear
   session.include_in_assistant_memory_ = false;
 
   const std::uint32_t session_id = api.create_session(session);
@@ -67,7 +67,7 @@ int main() {
   // Only the opted-out session has new content, so neither assistant path may
   // see it: the session itself stays below its own trigger.
   expect(
-      api.has_session_memory_trigger_met(session_id) ==
+      api.has_session_summary_trigger_met(session_id) ==
           lnb::api::error_code::SUCCESS,
       "an opted-out session must not reach the assistant trigger"
   );
@@ -82,7 +82,7 @@ int main() {
   api.save_session(opted_in);
 
   expect(
-      api.has_session_memory_trigger_met(session_id) ==
+      api.has_session_summary_trigger_met(session_id) ==
           lnb::api::error_code::ERR_ASSISTANT_MEMORY_TRIGGER_HAS_MET,
       "an opted-in session must reach the assistant trigger"
   );

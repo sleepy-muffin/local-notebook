@@ -940,7 +940,16 @@ const std::vector<shark::net::HttpHeader> kBrowserHeaders{
 std::string http_get(
     const std::string& url, const std::optional<std::string>& proxy, int max_bytes
 ) {
-  return http_get_body(url, proxy, max_bytes, std::stop_token{}, kBrowserHeaders);
+  auto body =
+      http_get_body(url, proxy, max_bytes, std::stop_token{}, kBrowserHeaders);
+
+  if (!body) {
+    throw std::runtime_error(
+        "HTTP request failed (HTTP " + std::to_string(body.error()) + ")"
+    );
+  }
+
+  return std::move(*body);
 }
 
 std::string fetch_url(

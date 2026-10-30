@@ -70,11 +70,12 @@ public:
   // turn in another session can update this composer too.
   void refresh_send_mode();
 
-  // Folds the session's transcript into memory on demand as the session's single
-  // task, forcing the pass even when the automatic trigger has not been reached.
-  // The session editor's "Update memory now" drives this, so the pass shows up
-  // in the tasks window like any other turn and never races a generation on the
-  // same session. `approver` reviews the request; an absent one reviews
+  // Folds the session's transcript into the summary on demand as the session's
+  // single task, forcing the pass even when the automatic trigger has not been
+  // reached. The session editor's "Update summarization now" drives this, so the
+  // pass shows up in the tasks window like any other turn and never races a
+  // generation on the same session. `approver` reviews the request; an absent one
+  // reviews
   // interactively.
   void summarize_session_now(lnb::SummaryApprover approver = {});
 

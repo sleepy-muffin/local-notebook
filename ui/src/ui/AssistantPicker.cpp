@@ -138,15 +138,6 @@ QWidget* h_separator(QWidget* parent) {
   return line;
 }
 
-QWidget* v_separator(QWidget* parent) {
-  auto* line = new QWidget(parent);
-  line->setObjectName(QStringLiteral("Separator"));
-  line->setAttribute(Qt::WA_StyledBackground, true);
-  line->setFixedWidth(1);
-  line->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
-  return line;
-}
-
 // Paints one assistant row: the name in the foreground colour and the model,
 // muted, beneath it. Hover and selection use the shared low-contrast row states
 // so this list reads exactly like the main window's session list.
@@ -244,8 +235,8 @@ public:
     setObjectName(QStringLiteral("AssistantForm"));
     setWindowTitle(title);
     setModal(true);
-    resize(560, 660);
-    setMinimumSize(480, 520);
+    resize(600, 660);
+    setMinimumSize(600, 520);
     setFont(ui_font());
 
     auto* root = new QVBoxLayout(this);
@@ -336,8 +327,8 @@ AssistantPicker::AssistantPicker(
   setObjectName(QStringLiteral("AssistantPicker"));
   setWindowTitle(trs("Assistants"));
   setModal(true);
-  resize(760, 520);
-  setMinimumSize(620, 420);
+  resize(400, 520);
+  setMinimumSize(300, 420);
   setFont(ui_font());
 
   auto* root = new QVBoxLayout(this);
@@ -366,11 +357,7 @@ AssistantPicker::AssistantPicker(
   outer->addWidget(subtitle);
   outer->addSpacing(16);
 
-  // ---- Body: list on the left, preview on the right ----
-  auto* body = new QHBoxLayout();
-  body->setContentsMargins(0, 0, 0, 0);
-  body->setSpacing(0);
-
+  // ---- Body: the assistant list, full width ----
   list_ = new QListWidget(background);
   list_->setObjectName(QStringLiteral("AssistantList"));
   // The list shows the dialog behind it; the rule lives on the list so a style
@@ -387,50 +374,25 @@ AssistantPicker::AssistantPicker(
   list_->setSelectionRectVisible(false);
   list_->setMouseTracking(true);
   list_->viewport()->setMouseTracking(true);
-  list_->setFixedWidth(280);
 
-  auto* preview = new QWidget(background);
-  auto* preview_layout = new QVBoxLayout(preview);
-  preview_layout->setContentsMargins(24, 4, 4, 4);
-  preview_layout->setSpacing(4);
-
-  preview_name_ = new QLabel(preview);
-  preview_name_->setObjectName(QStringLiteral("PreviewName"));
-  preview_name_->setFont(scaled_font(3.0, true));
-  preview_name_->setWordWrap(true);
-
-  preview_model_ = new QLabel(preview);
-  preview_model_->setObjectName(QStringLiteral("PreviewModel"));
-
-  preview_hint_ = new QLabel(preview);
-  preview_hint_->setObjectName(QStringLiteral("PreviewHint"));
-  preview_hint_->setWordWrap(true);
-
-  preview_layout->addWidget(preview_name_);
-  preview_layout->addWidget(preview_model_);
-  preview_layout->addSpacing(8);
-  preview_layout->addWidget(preview_hint_);
-  preview_layout->addStretch(1);
-
-  body->addWidget(list_);
-  body->addWidget(v_separator(background));
-  body->addWidget(preview, 1);
-
-  outer->addLayout(body, 1);
+  outer->addWidget(list_, 1);
   outer->addSpacing(16);
 
   // ---- Footer ----
   outer->addWidget(h_separator(background));
   outer->addSpacing(12);
 
+  // The startup checkbox sits on its own line above the button row.
+  auto_login_ = new QCheckBox(trs("Open automatically at startup"), background);
+  auto_login_->setChecked(settings_.auto_login);
+  outer->addWidget(auto_login_);
+  outer->addSpacing(8);
+
   auto* footer = new QHBoxLayout();
   footer->setSpacing(8);
 
   auto* new_button = new QPushButton(trs("New assistant"), background);
   new_button->setObjectName(QStringLiteral("Secondary"));
-
-  auto_login_ = new QCheckBox(trs("Open automatically at startup"), background);
-  auto_login_->setChecked(settings_.auto_login);
 
   edit_button_ = new QPushButton(trs("Edit"), background);
   edit_button_->setObjectName(QStringLiteral("Secondary"));
@@ -443,7 +405,6 @@ AssistantPicker::AssistantPicker(
   cancel_button->setObjectName(QStringLiteral("Secondary"));
 
   footer->addWidget(new_button);
-  footer->addWidget(auto_login_);
   footer->addStretch(1);
   footer->addWidget(edit_button_);
   footer->addWidget(open_button_);
@@ -454,7 +415,7 @@ AssistantPicker::AssistantPicker(
   setStyleSheet(dialog_stylesheet(QStringLiteral("AssistantPicker")));
 
   connect(list_, &QListWidget::currentRowChanged, this, [this](int) {
-    update_preview();
+    update_actions();
   });
   connect(list_, &QListWidget::itemActivated, this, [this](QListWidgetItem*) {
     open_selected();
@@ -508,39 +469,14 @@ void AssistantPicker::refresh() {
     list_->setFocus();
   }
 
-  update_preview();
+  update_actions();
 }
 
-void AssistantPicker::update_preview() {
-  const QString uuid = selected_uuid();
+void AssistantPicker::update_actions() {
+  const bool has_selection = !selected_uuid().isEmpty();
 
-  if (uuid.isEmpty()) {
-    preview_name_->setText(trs("No assistant selected"));
-    preview_model_->clear();
-    preview_model_->setVisible(false);
-    preview_hint_->setVisible(true);
-    preview_hint_->setText(
-        list_->count() == 0
-            ? trs("There are no assistants yet. Create one to get started.")
-            : trs("Select an assistant on the left to see it here.")
-    );
-    edit_button_->setEnabled(false);
-    open_button_->setEnabled(false);
-    return;
-  }
-
-  const lnb::Assistant assistant = lnb::api::load_assistant(uuid.toStdString());
-
-  const QString name = to_qstring(assistant.name_);
-  const QString model = to_qstring(assistant.model_);
-
-  preview_name_->setText(name.isEmpty() ? trs("Untitled assistant") : name);
-  preview_model_->setText(model);
-  preview_model_->setVisible(!model.isEmpty());
-  preview_hint_->setVisible(false);
-
-  edit_button_->setEnabled(true);
-  open_button_->setEnabled(true);
+  edit_button_->setEnabled(has_selection);
+  open_button_->setEnabled(has_selection);
 }
 
 QString AssistantPicker::selected_uuid() const {
@@ -601,7 +537,7 @@ void AssistantPicker::create_new() {
     );
     refresh();
     select_uuid(to_qstring(uuid));
-    update_preview();
+    update_actions();
     return;
   }
 
@@ -636,7 +572,7 @@ void AssistantPicker::edit_selected() {
 
   refresh();
   select_uuid(uuid);
-  update_preview();
+  update_actions();
 }
 
 } // namespace ui

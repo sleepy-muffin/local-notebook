@@ -97,11 +97,11 @@ lnb::Assistant make_assistant() {
 
 std::uint32_t add_session(
     lnb::api::interface& api, const std::string& title,
-    const std::string& memory
+    const std::string& summary
 ) {
   lnb::Session session;
   session.title_ = title;
-  session.memory_ = memory;
+  session.summary_ = summary;
   return api.create_session(session);
 }
 
@@ -113,10 +113,10 @@ void seed_design_session(lnb::api::interface& api, std::uint32_t session_id) {
   api.append_message(
       session_id, lnb::Role::Assistant,
       "Because the completion budget covers both hidden reasoning and the visible "
-      "answer. If the memory budget is too small, the visible answer can be cut "
-      "off.\n\n"
+      "answer. If the summarization budget is too small, the visible answer can be "
+      "cut off.\n\n"
       "```cpp\nconst std::size_t max_tokens = session.summary_token_budget_;\n```\n\n"
-      "The fix is to raise the memory budget, not the answer budget."
+      "The fix is to raise the summarization budget, not the answer budget."
   );
   api.append_message(
       session_id, lnb::Role::User,
@@ -203,8 +203,8 @@ int main(int argc, char** argv) {
   design.custom_instructions_ =
       "When discussing design, compare the options and recommend the most mature "
       "one.";
-  design.memory_ =
-      "The session is designing a two-level memory: a session memory and a "
+  design.summary_ =
+      "The session is designing a two-level memory: a session summarization and a "
       "shared assistant memory. Watermarks are bookkeeping only.";
   design.summary_keep_tokens_ = 120;
 
@@ -213,7 +213,7 @@ int main(int argc, char** argv) {
 
   // Capture the request the review dialog normally shows, without sending it:
   // the approver runs before the first byte leaves the process, and declining
-  // leaves the memory and its watermark untouched.
+  // leaves the summary and its watermark untouched.
   lnb::SummaryPlan plan;
 
   if (auto task = api.summarize_session(

@@ -27,11 +27,11 @@ class PlainTextEdit;
 
 class ConversationView;
 
-// Edits one session: its title, custom instructions, shared directories, memory
+// Edits one session: its title, custom instructions, shared directories, summary
 // and every session-bound budget (design-1.md §8). Like the settings window, the
-// dialog is a left-hand navigation rail over three stacked pages — General, Memory
-// and Tools — and the memory box is directly editable, with an "Update memory
-// now" action that rebuilds it on demand.
+// dialog is a left-hand navigation rail over three stacked pages — General,
+// Summarization and Tools — and the summary box is directly editable, with an
+// "Update summarization now" action that rebuilds it on demand.
 //
 // Pass a session_id of 0 to create a new session; the accepted id is exposed by
 // session_id().
@@ -45,10 +45,10 @@ public:
   [[nodiscard]] std::uint32_t session_id() const { return session_id_; }
 
   // The conversation view that owns the session's background worker, when one is
-  // available. A manual memory update then runs as the session's own task, so it
-  // appears in the tasks window and can never race a generation on the same
+  // available. A manual summarization update then runs as the session's own task,
+  // so it appears in the tasks window and can never race a generation on the same
   // session. Unset for a brand-new session, whose update action is disabled
-  // because there is nothing stored to merge.
+  // because there is nothing stored to summarize.
   void set_conversation_view(ConversationView* view) { conversation_view_ = view; }
 
 private:
@@ -56,7 +56,7 @@ private:
   // settings window's body.
   QWidget* build_body();
   QWidget* build_general_tab();
-  QWidget* build_memory_tab();
+  QWidget* build_summary_tab();
   QWidget* build_tools_tab();
 
   // Puts one page's content inside a scroll area, matching the window's own
@@ -73,9 +73,9 @@ private:
   // `preferred` visible even when the model no longer offers it.
   void populate_reasoning(QComboBox* combo, const std::string& preferred);
 
-  // Merges the whole transcript into the memory box on demand, regardless of the
-  // automatic trigger. Runs as the session's own background task (through the
-  // conversation view) and reloads the persisted memory when it finishes.
+  // Merges the whole transcript into the summary box on demand, regardless of
+  // the automatic trigger. Runs as the session's own background task (through the
+  // conversation view) and reloads the persisted summary when it finishes.
   void summarize_now();
 
   lnb::api::interface& api_;
@@ -106,7 +106,7 @@ private:
   // chat level above.
   QComboBox* summary_reasoning_ = nullptr;
 
-  PlainTextEdit* memory_ = nullptr;
+  PlainTextEdit* summary_ = nullptr;
   QSpinBox* watermark_ = nullptr;
   QSpinBox* assistant_watermark_ = nullptr;
 
@@ -118,11 +118,11 @@ private:
   QPushButton* cancel_button_ = nullptr;
 
   // Fill the fields of their own page with a preset; neither saves by itself.
-  QComboBox* memory_preset_ = nullptr;
+  QComboBox* summary_preset_ = nullptr;
   QComboBox* budget_preset_ = nullptr;
   QComboBox* tools_preset_ = nullptr;
 
-  // Session-bound memory-update settings and budgets.
+  // Session-bound summarization-update settings and budgets.
   QSpinBox* summary_keep_ = nullptr;
   QSpinBox* summary_trigger_ = nullptr;
   QSpinBox* summary_budget_ = nullptr;
@@ -137,7 +137,7 @@ private:
   // session.
   ConversationView* conversation_view_ = nullptr;
 
-  // True while a manual memory update is running, so the action cannot be
+  // True while a manual summarization update is running, so the action cannot be
   // started twice.
   bool summarizing_ = false;
 };

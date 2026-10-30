@@ -697,7 +697,7 @@ void ConversationView::apply_composer_icons() {
 
   if (send_button_ != nullptr) {
     if (summarize_mode_) {
-      // The action becomes a collapse-into-memory: fold the overflow now rather
+      // The action becomes a collapse-into-summary: fold the overflow now rather
       // than send a message into an over-long request.
       QIcon icon = resource_icon(QStringLiteral("summarize"), colors.accent, colors.text_muted);
 
@@ -706,7 +706,7 @@ void ConversationView::apply_composer_icons() {
       }
 
       send_button_->setIcon(icon);
-      send_button_->setToolTip(trs("Update memory from the conversation"));
+      send_button_->setToolTip(trs("Update summarization from the conversation"));
     } else {
       // The send arrow takes the accent colour; a busy composer mutes it through
       // the icon's disabled pixmap.
@@ -773,7 +773,7 @@ bool ConversationView::summarize_due() const {
   // overflow first, then the shared assistant trigger (or an assistant fold
   // already in flight). Every composer therefore reports the same action, and the
   // send button is banned the moment either trigger is met.
-  return api_.has_session_memory_trigger_met(session_id_) != lnb::api::error_code::SUCCESS;
+  return api_.has_session_summary_trigger_met(session_id_) != lnb::api::error_code::SUCCESS;
 }
 
 void ConversationView::refresh_send_mode() {
@@ -820,7 +820,7 @@ void ConversationView::submit() {
 
   if (summarize_mode_) {
     // The send button has become a summarize button: fold the overflow into
-    // memory, sending nothing. A fresh pass lands at the bottom.
+    // the summary, sending nothing. A fresh pass lands at the bottom.
     transcript_->scroll_to_bottom();
     const lnb::SummaryApprover approver =
         [](const lnb::SummaryPlan& plan) { return review_summary(plan); };
@@ -842,7 +842,13 @@ void ConversationView::submit() {
   // task actually started, so a refused one never wedges the composer.
   transcript_->scroll_to_bottom();
 
-  if (controller_.send(text.toStdString())) {
+  // The new message may itself push the transcript past the trigger, in which
+  // case the turn folds the overflow before replying. That request must be
+  // reviewed like every other summarization request.
+  const lnb::SummaryApprover approver =
+      [](const lnb::SummaryPlan& plan) { return review_summary(plan); };
+
+  if (controller_.send(text.toStdString(), approver)) {
     input_->clear();
   }
 

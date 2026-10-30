@@ -57,7 +57,7 @@ bool ConversationController::track(std::shared_ptr<GenerationTask> task) {
   return true;
 }
 
-bool ConversationController::send(std::string text) {
+bool ConversationController::send(std::string text, lnb::SummaryApprover approver) {
   // One task per session, plus the shared assistant fold which reads every
   // session. A task in another session no longer blocks this send.
   if (busy() || api_.session_busy(session_id_) || api_.assistant_busy() ||
@@ -65,7 +65,7 @@ bool ConversationController::send(std::string text) {
     return false;
   }
 
-  // The interface owns the send policy: it validates the session and both memory
+  // The interface owns the send policy: it validates the session and both summary
   // triggers, and persists the prompt before the turn starts, so a failed
   // generation still leaves the user's message in the transcript.
   const lnb::api::error_code status = api_.session_prompt(session_id_, text);
@@ -80,7 +80,7 @@ bool ConversationController::send(std::string text) {
 
   // The prompt is stored; now start the turn. The interface keeps the task alive
   // and runs the worker, so the controller only polls it.
-  return track(api_.start_generation(session_id_));
+  return track(api_.start_generation(session_id_, std::move(approver)));
 }
 
 void ConversationController::summarize(lnb::SummaryApprover approver) {
@@ -91,9 +91,9 @@ void ConversationController::summarize(lnb::SummaryApprover approver) {
   // The interface resolves the level: this session's own overflow first, then
   // the shared assistant trigger.
   const lnb::api::error_code status =
-      api_.has_session_memory_trigger_met(session_id_);
+      api_.has_session_summary_trigger_met(session_id_);
 
-  if (status == lnb::api::error_code::ERR_SESSION_MEMORY_TRIGGER_HAS_MET) {
+  if (status == lnb::api::error_code::ERR_SESSION_SUMMARY_TRIGGER_HAS_MET) {
     summarize_session_now(std::move(approver));
     return;
   }
@@ -160,8 +160,8 @@ void ConversationController::poll() {
     }
   }
 
-  // The transient operation title ("Searching...", "Updating memory...") is shown
-  // until the first assistant token arrives.
+  // The transient operation title ("Searching...", "Updating summarization...")
+  // is shown until the first assistant token arrives.
   if (snapshot.status == GenerationTask::Status::RUNNING &&
       snapshot.operation_status != last_status_) {
     last_status_ = snapshot.operation_status;

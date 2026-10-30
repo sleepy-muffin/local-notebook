@@ -56,8 +56,8 @@ std::size_t MessageManager::count() const {
   return db_.message_count(session_id_);
 }
 
-std::vector<Message> MessageManager::all_messages_after_session_memory_watermark() const {
-  return db_.messages_after_memory_watermark(session_id_);
+std::vector<Message> MessageManager::all_messages_after_summary_watermark() const {
+  return db_.messages_after_summary_watermark(session_id_);
 }
 
 std::uint32_t MessageManager::append(Role role, const std::string& content) {

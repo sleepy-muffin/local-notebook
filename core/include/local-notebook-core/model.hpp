@@ -9,7 +9,8 @@
 #include "local-notebook-core/api_protocol.hpp"
 
 // The reconstructed domain model (design-1.md §2). One Assistant per process;
-// many Sessions per assistant; all sessions of an assistant share one memory.
+// many Sessions per assistant; all sessions of an assistant share one assistant
+// memory, and each session has its own summarization.
 //
 // These are plain data. The lazily-loading managers (store/managers.hpp) live
 // outside the structs so the model stays copyable and cheap to pass around.
@@ -34,8 +35,8 @@ class Session {
 public:
   std::uint32_t id_ = 0;
   std::string title_;
-  std::string custom_instructions_;  // user-authored; kept separate from memory_
-  std::string memory_;               // generated session summarisation
+  std::string custom_instructions_;  // user-authored; kept separate from summary_
+  std::string summary_;              // generated session summarization
 
   // Which reasoning level this session asks for on chat turns. Empty means "use
   // the model's own default", which is how a row written before the selector
@@ -44,15 +45,15 @@ public:
   std::string reasoning_effort_;
 
   // Which reasoning level this session's summariser runs at. Kept separate from
-  // reasoning_effort_ so a memory update can run without reasoning while chat
-  // turns reason (or the other way round). Defaults to "none"; a level the
+  // reasoning_effort_ so a summarization update can run without reasoning while
+  // chat turns reason (or the other way round). Defaults to "none"; a level the
   // current model does not support is refused at summarisation time rather than
   // silently replaced.
   std::string summary_reasoning_effort_ = "none";
 
   // Trigger bookkeeping only: the highest message id already folded. See
   // design-1.md §7 — they are never used to select what a summariser reads.
-  std::uint32_t memory_watermark_ = 0;
+  std::uint32_t summary_watermark_ = 0;
   std::uint32_t assistant_memory_watermark_ = 0;
 
   // Directories the filesystem tools may access. The model never sees these
@@ -62,8 +63,8 @@ public:
   std::vector<std::string> shared_directories_;
 
   // Whether this session contributes to the shared assistant memory. Turning it
-  // off keeps the session's own memory and transcript intact but leaves it out of
-  // both the assistant trigger and the assistant fold. It is stored per session
+  // off keeps the session's own summarization and transcript intact but leaves it
+  // out of both the assistant trigger and the assistant fold. It is stored per session
   // (schema version 7) so a restart preserves the choice.
   bool include_in_assistant_memory_ = true;
 
@@ -84,15 +85,15 @@ public:
 
   // The input bound, and the collapse trigger: a request carries the system
   // prompt plus the transcript, and once that reaches this many tokens the
-  // older messages are folded into memory_.
-  std::size_t memory_trigger_tokens_ = 16000;
+  // older messages are folded into summary_.
+  std::size_t summary_trigger_tokens_ = 16000;
 
   // The level the transcript collapses to when the trigger fires: the newest
   // messages kept verbatim, everything older folded. Keep it well below
   // summary_trigger_tokens_, or the collapse re-triggers straight away.
   std::size_t summary_keep_tokens_ = 4000;
 
-  // Completion cap for the generated memory. This is an upper bound on the
+  // Completion cap for the generated summary. This is an upper bound on the
   // summariser's output, not a target written into its prompt.
   std::size_t summary_token_budget_ = 4000;
 

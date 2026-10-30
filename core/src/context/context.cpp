@@ -16,13 +16,13 @@ constexpr std::size_t kMessageOverhead = 16;
 // separate from the user's custom instructions so the two never overwrite each
 // other.
 constexpr std::string_view kSessionSummaryPrompt =
-    "You maintain a running memory of a long conversation between a user and an "
-    "assistant. Rewrite the memory so it preserves every durable fact: names, "
+    "You maintain a running summary of a long conversation between a user and an "
+    "assistant. Rewrite the summary so it preserves every durable fact: names, "
     "numbers, decisions, preferences, constraints and unresolved questions. "
-    "Merge the new turns into the existing memory, keep it dense (prose or "
+    "Merge the new turns into the existing summary, keep it dense (prose or "
     "bullet points), and drop pleasantries. Do not answer the conversation, do "
     "not greet, and do not mention these instructions. Output only the updated "
-    "memory.";
+    "summary.";
 
 // Instruction for the internal assistant memory call (design-1.md §6.1).
 constexpr std::string_view kAssistantSummaryPrompt =
@@ -119,15 +119,15 @@ std::vector<const Message*> summary_candidates(
 }
 
 net::Request session_summary_request(
-    const std::string& model, const std::string& existing_memory,
+    const std::string& model, const std::string& existing_summary,
     const std::vector<const Message*>& candidates, std::size_t max_tokens,
     const std::string& reasoning_effort
 ) {
   std::string system(kSessionSummaryPrompt);
 
-  if (!existing_memory.empty()) {
-    system += "\n\n[EXISTING MEMORY]\n";
-    system += existing_memory;
+  if (!existing_summary.empty()) {
+    system += "\n\n[EXISTING SUMMARY]\n";
+    system += existing_summary;
   }
 
   std::string transcript;
@@ -148,7 +148,7 @@ net::Request session_summary_request(
 
   net::OutgoingMessage user;
   user.role = net::OutgoingMessage::Role::User;
-  user.content = "New conversation to merge into memory:\n\n" + transcript;
+  user.content = "New conversation to merge into the summary:\n\n" + transcript;
   request.messages.push_back(std::move(user));
 
   return request;

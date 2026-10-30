@@ -53,15 +53,18 @@ public:
 
   // Persists the user message through the interface, then starts the turn. The
   // send is refused (nothing is appended) when the session is busy or the
-  // interface rejects the prompt (for example, a memory trigger has been met).
-  [[nodiscard]] bool send(std::string text);
+  // interface rejects the prompt (for example, a summary trigger has been met).
+  //
+  // `approver` reviews the automatic fold the new message may trigger before it
+  // is sent; an empty approver proceeds.
+  [[nodiscard]] bool send(std::string text, lnb::SummaryApprover approver = {});
 
   // Resolves one summarisation level per press, the session first. `approver`
   // reviews the proposed pass before it is sent.
   void summarize(lnb::SummaryApprover approver = {});
 
-  // Folds the session's overflow into memory on demand, forcing the pass even
-  // when the automatic trigger has not been reached.
+  // Folds the session's overflow into the summary on demand, forcing the pass
+  // even when the automatic trigger has not been reached.
   //
   // `approver` reviews the request before it is sent; the editor supplies its own
   // so a declined review is a silent no-op. An absent approver proceeds.

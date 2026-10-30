@@ -1098,10 +1098,15 @@ void MainWindow::update_task_indicator() {
 
     const lnb::GenerationTask::Snapshot snapshot = view->last_snapshot();
     entry.rounds = snapshot.rounds;
-    entry.input_tokens = snapshot.input_tokens;
-    entry.output_tokens = snapshot.output_tokens;
+    // Measured totals are summed over every request the task has completed; the
+    // in-flight request's live projection is added on top, so the readout moves
+    // while it streams and keeps accumulating across requests.
+    entry.input_tokens = snapshot.input_tokens + snapshot.streaming_input_tokens;
+    entry.output_tokens = snapshot.output_tokens + snapshot.streaming_output_tokens;
     entry.tool_tokens = snapshot.tool_tokens;
-    entry.usage_measured = snapshot.usage_measured;
+    // A streaming figure is a local estimate until its request reports usage.
+    entry.usage_measured = snapshot.usage_measured &&
+        snapshot.streaming_input_tokens == 0 && snapshot.streaming_output_tokens == 0;
     // Published by the chat loop from the reply's own budget. A memory pass
     // reports 0, so its card shows the produced total without a fraction.
     entry.output_budget = snapshot.output_budget;
@@ -1124,10 +1129,15 @@ void MainWindow::update_task_indicator() {
 
     const lnb::GenerationTask::Snapshot snapshot = assistant->snapshot();
     entry.rounds = snapshot.rounds;
-    entry.input_tokens = snapshot.input_tokens;
-    entry.output_tokens = snapshot.output_tokens;
+    // Measured totals are summed over every request the task has completed; the
+    // in-flight request's live projection is added on top, so the readout moves
+    // while it streams and keeps accumulating across requests.
+    entry.input_tokens = snapshot.input_tokens + snapshot.streaming_input_tokens;
+    entry.output_tokens = snapshot.output_tokens + snapshot.streaming_output_tokens;
     entry.tool_tokens = snapshot.tool_tokens;
-    entry.usage_measured = snapshot.usage_measured;
+    // A streaming figure is a local estimate until its request reports usage.
+    entry.usage_measured = snapshot.usage_measured &&
+        snapshot.streaming_input_tokens == 0 && snapshot.streaming_output_tokens == 0;
     entry.elapsed_ms = snapshot.elapsed_ms;
     entry.error = from_utf8(snapshot.error);
     entry.state = describe(snapshot.status);
@@ -1207,10 +1217,11 @@ void MainWindow::edit_session(std::uint32_t session_id) {
 
   SessionEditor editor(api_, session_id, this);
 
-  // A manual "Update memory now" runs as the session's own background task, so it
-  // shows up in the tasks window like any other turn and can never race a
-  // generation on the same session. The editor drives the view that owns that
-  // task; it is created on first use here, without switching the visible pane.
+  // A manual "Update summarization now" runs as the session's own background
+  // task, so it shows up in the tasks window like any other turn and can never
+  // race a generation on the same session. The editor drives the view that owns
+  // that task; it is created on first use here, without switching the visible
+  // pane.
   if (ConversationView* view = ensure_conversation_view(session_id)) {
     editor.set_conversation_view(view);
   }
@@ -1271,10 +1282,10 @@ void MainWindow::update_header() {
   const lnb::api::ContextUsage usage = api_.context_usage(current_session_);
 
   header_summarization_trigger_->setText(
-      trs("memory trigger: ") + format_tokens(usage.used_tokens, usage.limit_tokens)
+      trs("summarization trigger: ") + format_tokens(usage.used_tokens, usage.limit_tokens)
   );
   header_summarization_trigger_->setToolTip(
-      trs("%1 / %2 conversation tokens (system prompt excluded; the memory "
+      trs("%1 / %2 conversation tokens (system prompt excluded; the summarization "
           "update fires at the limit)")
           .arg(usage.used_tokens)
           .arg(usage.limit_tokens)

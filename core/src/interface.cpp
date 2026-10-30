@@ -537,7 +537,7 @@ std::vector<std::string> interface::reasoning_efforts_with_stored(
   return net::reasoning_efforts_with_stored(current.model_, stored);
 }
 
-error_code interface::has_session_memory_trigger_met(
+error_code interface::has_session_summary_trigger_met(
     std::uint32_t session_id
 ) const {
   if (impl_->sessions == nullptr) {
@@ -556,12 +556,12 @@ error_code interface::has_session_memory_trigger_met(
 
   // The trigger is measured on the unsummarised conversation alone, never on the
   // system prompt or the memories.
-  const auto pieces = message_mgr->all_messages_after_session_memory_watermark();
+  const auto pieces = message_mgr->all_messages_after_summary_watermark();
 
   // Reject if the summarisation has reached the limit but the function is still
-  // called. The caller must fold the session memory first.
-  if (context::transcript_tokens(pieces) >= session->memory_trigger_tokens_) {
-    return error_code::ERR_SESSION_MEMORY_TRIGGER_HAS_MET;
+  // called. The caller must fold the session summary first.
+  if (context::transcript_tokens(pieces) >= session->summary_trigger_tokens_) {
+    return error_code::ERR_SESSION_SUMMARY_TRIGGER_HAS_MET;
   }
 
   // The assistant trigger is measured across every session, against the
@@ -605,7 +605,7 @@ error_code interface::session_prompt(
     }
   }
 
-  const error_code met = has_session_memory_trigger_met(session_id);
+  const error_code met = has_session_summary_trigger_met(session_id);
   if (met != error_code::SUCCESS) {
     return met;
   }
@@ -675,7 +675,7 @@ void interface::mark_assistant_summary_stale() {
 }
 
 std::shared_ptr<GenerationTask> interface::start_generation(
-    std::uint32_t session_id
+    std::uint32_t session_id, SummaryApprover approver
 ) {
   if (impl_->sessions == nullptr) {
     return nullptr;
@@ -697,7 +697,9 @@ std::shared_ptr<GenerationTask> interface::start_generation(
 
   return impl_->spawn_task(
       impl_->session_tasks[session_id],
-      [this, session_id, snapshot](GenerationTask& task) {
+      [this, session_id, snapshot, approver = std::move(approver)](
+          GenerationTask& task
+      ) {
         auto session = impl_->sessions->get(session_id);
         if (!session.has_value()) {
           task.fail("Invalid Session ID");
@@ -715,11 +717,11 @@ std::shared_ptr<GenerationTask> interface::start_generation(
 
         // Best effort: a failed fold must not block the reply.
         const std::string folded = net::maybe_summarize_session(
-            impl_->sessions->db(), *session, remote, task, stop
+            impl_->sessions->db(), *session, remote, task, stop, approver
         );
 
         if (!folded.empty()) {
-          session->memory_ = folded;
+          session->summary_ = folded;
         }
 
         net::Request request = net::build_session_request(

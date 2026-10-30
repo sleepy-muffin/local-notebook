@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
-  <!-- Summarise: a downward arrow folding the conversation into a memory bar. Shown
+  <!-- Summarise: a downward arrow folding the conversation into a summary bar. Shown
        as the composer's primary action once the transcript reaches the trigger.
        Straight lines only. Monochrome; recoloured at runtime. -->
   <path d="M10 3 L14 3 L14 11 L18 11 L12 17 L6 11 L10 11 Z M4 19 L20 19 L20 21.5 L4 21.5 Z" fill="#000000"/>

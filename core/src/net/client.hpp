@@ -81,8 +81,8 @@ struct FailedResult {
 };
 
 // Assembles the protocol-neutral request for one turn (design-1.md §4): system
-// (assistant + session instructions), assistant memory, session memory, then the
-// verbatim window of `messages` that fits `session.memory_trigger_tokens_`. The
+// (assistant + session instructions), assistant memory, session summary, then the
+// verbatim window of `messages` that fits `session.summary_trigger_tokens_`. The
 // system prompt becomes `instructions` (Responses) or the leading system message
 // (Chat) when the caller serialises it.
 Request build_session_request(
@@ -93,7 +93,7 @@ Request build_session_request(
 // The conversation-token readout the title bar reports against. `used_tokens` is
 // the estimated cost of the unsummarised conversation alone (the messages above
 // the session watermark) — never the system prompt — reported without trimming;
-// `limit_tokens` is `session.memory_trigger_tokens_`. `used_tokens` is exactly
+// `limit_tokens` is `session.summary_trigger_tokens_`. `used_tokens` is exactly
 // the quantity the automatic collapse compares against the trigger.
 struct ContextUsage {
   std::size_t used_tokens = 0;
@@ -137,10 +137,10 @@ ContextUsage context_usage(
 );
 
 // Session summarisation (design-1.md §5). `maybe_*` is a no-op (returns the
-// unchanged memory) while the automatic trigger is not reached and swallows
+// unchanged summary) while the automatic trigger is not reached and swallows
 // failures (best effort); the `*_now` variant ignores the trigger, folds the
 // whole overflow and propagates failures. Both return the resulting session
-// memory (which is also persisted to the database). `approver`, when set, is
+// summary (which is also persisted to the database). `approver`, when set, is
 // consulted before the request is sent and may cancel the pass.
 std::string maybe_summarize_session(
     store::database& db, const Session& session, const Remote& remote,

@@ -9,8 +9,8 @@
 #include "net/protocol.hpp"
 
 // A pure, side-effect-free layer (design-1.md §3). It decides what fits in a
-// request and what should be folded into memory; it never touches the network
-// or the database, which keeps the rules testable and reusable by the
+// request and what should be folded into the summarization; it never touches the
+// network or the database, which keeps the rules testable and reusable by the
 // summarisation passes.
 namespace lnb::context {
 
@@ -41,7 +41,8 @@ Window plan_window(const std::vector<Message>& messages, std::size_t window_toke
 
 // Automatic-collapse test: the unsummarised conversation (the messages with an
 // id above `watermark`) reaches `trigger_tokens`. Only the conversation is
-// counted; the system prompt (instructions and memory) is deliberately excluded
+// counted; the system prompt (instructions and summarization) is deliberately
+// excluded
 // (see architecture.md), so the trigger and the title-bar readout are the same
 // quantity. The watermark is bookkeeping only (design §7) and never decides what
 // is sent.
@@ -90,7 +91,7 @@ std::vector<const Message*> summary_candidates(
 // A self-contained, tool-free request for the internal summariser. `include_tools`
 // stays false, so neither protocol advertises any tool.
 net::Request session_summary_request(
-    const std::string& model, const std::string& existing_memory,
+    const std::string& model, const std::string& existing_summary,
     const std::vector<const Message*>& candidates, std::size_t max_tokens,
     const std::string& reasoning_effort
 );

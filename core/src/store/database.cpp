@@ -17,10 +17,11 @@ namespace {
 // 7 added `session.include_in_assistant_memory`, version 8 dropped the
 // per-session `max_tool_rounds` / `max_tool_calls` guards (now fixed in the
 // core) and renamed `tool_output_max_tokens` to `input_token_produced_midway`,
-// version 9 dropped `summary_reasoning_headroom_tokens` (the memory budget is
-// now the summariser's completion cap), and version 10 added
-// `session.summary_reasoning_effort`; an older file gains each column in the
-// constructor.
+// version 9 dropped `summary_reasoning_headroom_tokens` (the summary budget is
+// now the summariser's completion cap), version 10 added
+// `session.summary_reasoning_effort`, and version 11 renamed the session-level
+// `memory` / `memory_watermark` columns to `summary` / `summary_watermark`; an
+// older file gains each column in the constructor.
 
 /**
  * Notes
@@ -28,17 +29,17 @@ namespace {
  * summary_trigger_tokens: when summarization is triggered.
  * summary_keep_tokens: summarization involves
  *  from summary_trigger_tokens to summary_keep_tokens
- * summary_token_budget: how many tokens can memory have
+ * summary_token_budget: how many tokens can the summary have
  */
 constexpr std::string_view SCHEMA = R"sql(
-PRAGMA user_version = 10;
+PRAGMA user_version = 11;
 
 CREATE TABLE IF NOT EXISTS session (
   id                                INTEGER PRIMARY KEY AUTOINCREMENT,
   title                             TEXT    NOT NULL DEFAULT '',
   custom_instructions               TEXT    NOT NULL DEFAULT '',
-  memory                            TEXT    NOT NULL DEFAULT '',
-  memory_watermark                  INTEGER NOT NULL DEFAULT 0,
+  summary                           TEXT    NOT NULL DEFAULT '',
+  summary_watermark                 INTEGER NOT NULL DEFAULT 0,
   assistant_memory_watermark        INTEGER NOT NULL DEFAULT 0,
   shared_directories                TEXT    NOT NULL DEFAULT '[]',
   pinned                            INTEGER NOT NULL DEFAULT 0,
@@ -69,7 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_message_made_at ON message(made_at);
 )sql";
 
 constexpr std::string_view SESSION_COLUMNS =
-  "id, title, custom_instructions, memory, memory_watermark, "
+  "id, title, custom_instructions, summary, summary_watermark, "
   "assistant_memory_watermark, shared_directories, pinned, summary_keep_tokens, "
   "summary_trigger_tokens, summary_token_budget, "
   "input_token_produced_midway, response_token_budget, "
@@ -121,13 +122,13 @@ Session read_session(const shark::sqlite::statement& stmt) {
   session.id_ = stmt.column_uint32(0);
   session.title_ = stmt.column_text(1);
   session.custom_instructions_ = stmt.column_text(2);
-  session.memory_ = stmt.column_text(3);
-  session.memory_watermark_ = stmt.column_uint32(4);
+  session.summary_ = stmt.column_text(3);
+  session.summary_watermark_ = stmt.column_uint32(4);
   session.assistant_memory_watermark_ = stmt.column_uint32(5);
   session.shared_directories_ = decode_shared_directories(stmt.column_text_opt(6));
   session.pinned_ = stmt.column_int(7) != 0;
   session.summary_keep_tokens_ = static_cast<std::size_t>(stmt.column_int(8));
-  session.memory_trigger_tokens_ = static_cast<std::size_t>(stmt.column_int(9));
+  session.summary_trigger_tokens_ = static_cast<std::size_t>(stmt.column_int(9));
   session.summary_token_budget_ = static_cast<std::size_t>(stmt.column_int(10));
   session.input_token_produced_midway_ =
       static_cast<std::size_t>(stmt.column_int(11));
@@ -266,8 +267,8 @@ database::database(std::string_view path) : connection_(path) {
     }
   }
 
-  // Version 9 removed the summariser's reasoning headroom: the memory budget is
-  // now the completion cap. Drop the stale column from older files.
+  // Version 9 removed the summariser's reasoning headroom: the summarization
+  // budget is now the completion cap. Drop the stale column from older files.
   if (has_column(connection_, "session", "summary_reasoning_headroom_tokens")) {
     connection_.exec(
       "ALTER TABLE session DROP COLUMN summary_reasoning_headroom_tokens"
@@ -275,19 +276,31 @@ database::database(std::string_view path) : connection_(path) {
   }
 
   // Version 10 gives each session's summariser its own reasoning level, so a
-  // memory update no longer inherits the chat level. Existing rows keep the
-  // shipped default ("none").
+  // summarization update no longer inherits the chat level. Existing rows keep
+  // the shipped default ("none").
   if (!has_column(connection_, "session", "summary_reasoning_effort")) {
     connection_.exec(
       "ALTER TABLE session ADD COLUMN summary_reasoning_effort TEXT NOT NULL "
       "DEFAULT 'none'"
     );
   }
+  // Version 11 renamed the session-level memory columns. The assistant memory
+  // stays under its own columns (`assistant_memory_watermark`). A fresh database
+  // already has the new names, so this only touches an older file.
+  if (!has_column(connection_, "session", "summary")) {
+    connection_.exec("ALTER TABLE session RENAME COLUMN memory TO summary");
+  }
+
+  if (!has_column(connection_, "session", "summary_watermark")) {
+    connection_.exec(
+      "ALTER TABLE session RENAME COLUMN memory_watermark TO summary_watermark"
+    );
+  }
 }
 
 std::uint32_t database::insert_session(const Session& session) {
   auto stmt = connection_.prepare(
-    "INSERT INTO session (title, custom_instructions, memory, memory_watermark, "
+    "INSERT INTO session (title, custom_instructions, summary, summary_watermark, "
     "assistant_memory_watermark, shared_directories, pinned, summary_keep_tokens, "
     "summary_trigger_tokens, summary_token_budget, "
     "input_token_produced_midway, response_token_budget, "
@@ -296,11 +309,11 @@ std::uint32_t database::insert_session(const Session& session) {
     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   );
   stmt.bind(
-    session.title_, session.custom_instructions_, session.memory_,
-    session.memory_watermark_, session.assistant_memory_watermark_,
+    session.title_, session.custom_instructions_, session.summary_,
+    session.summary_watermark_, session.assistant_memory_watermark_,
     encode_shared_directories(session.shared_directories_), session.pinned_ ? 1 : 0,
     static_cast<int>(session.summary_keep_tokens_),
-    static_cast<int>(session.memory_trigger_tokens_),
+    static_cast<int>(session.summary_trigger_tokens_),
     static_cast<int>(session.summary_token_budget_),
     static_cast<int>(session.input_token_produced_midway_),
     static_cast<int>(session.response_token_budget_),
@@ -317,8 +330,8 @@ std::uint32_t database::insert_session(const Session& session) {
 
 void database::update_session(const Session& session) {
   auto stmt = connection_.prepare(
-    "UPDATE session SET title = ?, custom_instructions = ?, memory = ?, "
-    "memory_watermark = ?, assistant_memory_watermark = ?, shared_directories = ?, "
+    "UPDATE session SET title = ?, custom_instructions = ?, summary = ?, "
+    "summary_watermark = ?, assistant_memory_watermark = ?, shared_directories = ?, "
     "pinned = ?, summary_keep_tokens = ?, summary_trigger_tokens = ?, "
     "summary_token_budget = ?, "
     "input_token_produced_midway = ?, response_token_budget = ?, "
@@ -328,11 +341,11 @@ void database::update_session(const Session& session) {
     "WHERE id = ?"
   );
   stmt.bind(
-    session.title_, session.custom_instructions_, session.memory_,
-    session.memory_watermark_, session.assistant_memory_watermark_,
+    session.title_, session.custom_instructions_, session.summary_,
+    session.summary_watermark_, session.assistant_memory_watermark_,
     encode_shared_directories(session.shared_directories_), session.pinned_ ? 1 : 0,
     static_cast<int>(session.summary_keep_tokens_),
-    static_cast<int>(session.memory_trigger_tokens_),
+    static_cast<int>(session.summary_trigger_tokens_),
     static_cast<int>(session.summary_token_budget_),
     static_cast<int>(session.input_token_produced_midway_),
     static_cast<int>(session.response_token_budget_), session.reasoning_effort_,
@@ -393,13 +406,13 @@ std::vector<Session> database::sessions_by_recent(
   return sessions;
 }
 
-void database::set_session_memory(
-  std::uint32_t session_id, const std::string& memory, std::uint32_t watermark
+void database::set_session_summary(
+  std::uint32_t session_id, const std::string& summary, std::uint32_t watermark
 ) {
   auto stmt = connection_.prepare(
-    "UPDATE session SET memory = ?, memory_watermark = ? WHERE id = ?"
+    "UPDATE session SET summary = ?, summary_watermark = ? WHERE id = ?"
   );
-  stmt.bind(memory, watermark, session_id);
+  stmt.bind(summary, watermark, session_id);
   stmt.execute();
 }
 
@@ -461,13 +474,13 @@ std::vector<Message> database::messages(std::uint32_t session_id) const {
   return messages;
 }
 
-std::vector<Message> database::messages_after_memory_watermark(
+std::vector<Message> database::messages_after_summary_watermark(
   std::uint32_t session_id
 ) const {
   auto stmt = connection_.prepare(
     "SELECT " + std::string(MESSAGE_COLUMNS) +
     " FROM message WHERE session_id = ? AND id > "
-    "(SELECT memory_watermark FROM session WHERE id = ?) ORDER BY id ASC"
+    "(SELECT summary_watermark FROM session WHERE id = ?) ORDER BY id ASC"
   );
   stmt.bind(session_id, session_id);
 

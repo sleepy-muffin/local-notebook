@@ -23,8 +23,8 @@ An AI client optimized to be high-performance and comfortable to be used.
 
 Local Notebook is a desktop notebook for talking to a local or self-hosted model.
 It runs one **assistant** per process across many **sessions**, and keeps long
-conversations coherent with a **two-level memory** that you can open, edit and
-regenerate yourself.
+conversations coherent with a **session summarization plus a shared assistant
+memory** that you can open, edit and regenerate yourself.
 
 Supports OpenAI-compatible endpoint local or remote, with optional SOCKS5
 HTTP-CONNECT proxy support.
@@ -43,7 +43,7 @@ Two guarantees fall out of this design:
 
 Remarks:
 Summarizing twice with no new messages produces the same 
-memory — because the watermarks only *count* what is new; they never decide 
+summary — because the watermarks only *count* what is new; they never decide 
 what gets sent.
 
 ---

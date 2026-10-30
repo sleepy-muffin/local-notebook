@@ -199,8 +199,8 @@ I will try to make this list ordered by time.
   TABLE) defaults to on. The Session Editor has an *Include in assistant memory*
   switch. An opted-out session is skipped by the cross-session watermark query,
   by `assistant_trigger_reached()` and by the assistant fold itself; its own
-  conversation memory is untouched, and opting back in reads only messages newer
-  than its unchanged watermark.
+  conversation summarization is untouched, and opting back in reads only messages
+  newer than its unchanged watermark.
 - (Refinement) Add more default themes (Ordinary).
   `themes/theme.json` now also ships Plain Light, Plain Dark, GitHub Light,
   GitHub Dark, One Dark, Nord, Solarized Light and Solarized Dark, all with the
@@ -211,12 +211,53 @@ I will try to make this list ordered by time.
 - (Refinement) Rename `tool_output_max_tokens` to `input_token_produced_midway`
 - (Refinement) Disable and remove `summary_reasoning_headroom_tokens`.
 - (Refinement) Make summarizer reviewer show the estimated tokens.
-- (Refinement) Make separate reasoning effort switches (2 switches, one in assistant settings, one in session memory settings) for both assistant and session memory. Default for them: `none`.
+- (Refinement) Make separate reasoning effort switches (2 switches, one in assistant settings, one in session summarization settings) for both assistant and session summarization. Default for them: `none`.
   `Assistant::summary_reasoning_effort_` (settings.json, snake_case key
   `summary_reasoning_effort`) and `session.summary_reasoning_effort` (schema
   version 10, migrated with ALTER TABLE) both default to `none`. The assistant
-  settings page and the session editor's Memory page each gained a *Memory
-  reasoning* selector, independent of the chat level, and both summarisers read
-  those fields instead of the chat level. A legacy settings file without the key
-  loads as `none`; an unsupported level is still refused at summarisation time
-  rather than silently replaced.
+  settings page and the session editor's Summarization page each gained a
+  *Summarization reasoning* selector, independent of the chat level, and both
+  summarisers read those fields instead of the chat level. A legacy settings file
+  without the key loads as `none`; an unsupported level is still refused at
+  summarisation time rather than silently replaced.
+
+- (Refinement) Refactor: rename session-level memory to summarization
+
+  Rename the per-session "memory" concept to "summarization" across the core,
+  UI and docs. Assistant-level memory is deliberately left untouched.
+  
+  The two concepts were easy to confuse: session summarization compresses one
+  conversation, while assistant memory is shared across every session. The name
+  now says what the feature actually does.
+  
+  Core / DB:
+  - Session::summary_, summary_watermark_ and summary_trigger_tokens_, plus the
+    set_session_summary / messages_after_summary_watermark /
+    has_session_summary_trigger_met APIs.
+  - ERR_SESSION_SUMMARY_TRIGGER_HAS_MET, fold_session_summary,
+    maybe_summarize_session / summarize_session_now.
+  - Prompts and logs now use "[SESSION SUMMARY]" / "[EXISTING SUMMARY]",
+    "session summarization" and "Updating summarization...".
+  - Schema version 11 renames session.memory -> summary and
+    session.memory_watermark -> summary_watermark. Older databases are migrated
+    in the constructor, so existing data stays in place.
+  
+  UI:
+  - SessionEditor, ConversationView/Controller, MainWindow, SummaryReviewDialog
+    and TasksWindow now talk about summarization; summarize.svg replaces the old
+    icon and the screenshots follow.
+  - i18n keys renamed in every locale with no duplicate entries.
+  
+  Docs:
+  - README.md, docs/architecture.md and docs/todos/todo-archived.md updated.
+  
+  Assistant-level memory keeps all of its names: Assistant::memory_,
+  [ASSISTANT MEMORY], assistant_memory_watermark_,
+  include_in_assistant_memory_, fold_assistant_memory, set_assistant_memory.
+
+- (Refinement) Tasks window is now 2 column.
+- (Refinement) Remove the right pane of Assistant Picker.
+- (Bug) Fix the case where the review is not triggered.
+  Review every summarization request: each fold batch is previewed and approved, and the automatic pre-reply fold a send may trigger now passes the approver too.
+- (Refinement) Tasks window shows live input/output estimates for the request in flight, added to the measured totals that accumulate across a task's requests.
+- (Refinement) There are limits for both summarization (called summarization budget) and memory (called memory budget), so please make theirs inspect-able in Tasks window as well.

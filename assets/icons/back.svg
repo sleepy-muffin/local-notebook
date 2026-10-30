@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- Chevron pointing left: "return to the list". The same shape as `collapse`
+       turned a quarter, on the shared 24x24 grid. Monochrome; recoloured at
+       runtime. -->
+  <path d="M15.4 4 L17.8 6.4 L11.2 13 L17.8 19.6 L15.4 22 L6.4 13 Z" fill="#000000"/>
+</svg>

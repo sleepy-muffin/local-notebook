@@ -33,9 +33,10 @@ public:
     std::optional<std::size_t> limit = std::nullopt
   ) const;
 
-  // Memory bookkeeping: write a summarisation result and advance its watermark.
-  void set_session_memory(
-    std::uint32_t session_id, const std::string& memory, std::uint32_t watermark
+  // Summarization bookkeeping: write a summarisation result and advance its
+  // watermark.
+  void set_session_summary(
+    std::uint32_t session_id, const std::string& summary, std::uint32_t watermark
   );
   void set_assistant_memory_watermark(
     std::uint32_t session_id, std::uint32_t watermark
@@ -54,9 +55,9 @@ public:
   [[nodiscard]] std::vector<Message> messages(std::uint32_t session_id) const;
 
   // The unsummarised conversation: every message of the session whose id is
-  // above the session's memory watermark, oldest first. This is the quantity the
+  // above the session's summary watermark, oldest first. This is the quantity the
   // summarisation trigger measures.
-  [[nodiscard]] std::vector<Message> messages_after_memory_watermark(
+  [[nodiscard]] std::vector<Message> messages_after_summary_watermark(
     std::uint32_t session_id
   ) const;
 
