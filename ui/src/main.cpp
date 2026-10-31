@@ -9,8 +9,8 @@
 #include <vector>
 
 #include "local_notebook/core/interface.hpp"
-#include "shark/log.hpp"
 #include "settings/settings.hpp"
+#include "shark/log.hpp"
 #include "support/i18n.hpp"
 #include "ui/AssistantPicker.hpp"
 #include "ui/MainWindow.hpp"
@@ -22,9 +22,9 @@ namespace {
 // The per-user application data directory, or the --user-data override. This is
 // resolved in the UI because it is the only place that knows about Qt's
 // platform-specific locations; the core only receives the resulting root.
-std::filesystem::path resolve_data_root(const QStringList& arguments) {
+std::filesystem::path resolve_data_root(const QStringList &arguments) {
   for (int i = 1; i < arguments.size(); ++i) {
-    const QString& argument = arguments.at(i);
+    const QString &argument = arguments.at(i);
 
     if (argument == QStringLiteral("--user-data") && i + 1 < arguments.size()) {
       return arguments.at(i + 1).toStdString();
@@ -35,8 +35,7 @@ std::filesystem::path resolve_data_root(const QStringList& arguments) {
     }
   }
 
-  const QString location =
-      QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+  const QString location = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
 
   return location.isEmpty() ? std::filesystem::path{"data"}
                             : std::filesystem::path{location.toStdString()};
@@ -44,7 +43,7 @@ std::filesystem::path resolve_data_root(const QStringList& arguments) {
 
 } // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
   // The theme and the icons live in assets/local-notebook.qrc, which is compiled
   // into the local-notebook-ui-core static library. The linker drops a resource
   // object that nothing references, so without this call ":/themes/theme.json"
@@ -69,21 +68,20 @@ int main(int argc, char** argv) {
 
   // Point the whole on-disk tree at the per-user application data directory, or at
   // the --user-data override. This must run before the settings are read.
-  lnb::api::set_data_root(resolve_data_root(app.arguments()));
+  const std::filesystem::path data_root = resolve_data_root(app.arguments());
+  lnb::api::set_data_root(data_root);
   shark::log::info("data root: {}", lnb::api::data_root().string());
 
   lnb::Settings settings = lnb::load_settings();
 
   // Select the stored UI language before any window is created, so every string
   // is looked up in the right language the first time it is built.
-  lnb::i18n::set_language(
-      lnb::i18n::language_from_code(settings.language)
-  );
+  lnb::i18n::set_language(lnb::i18n::language_from_code(settings.language));
 
   // Install the theme before any window is created.
   ui::apply_theme(app, settings);
 
-  lnb::api::interface api;
+  auto api = std::make_unique<lnb::api::interface>(data_root);
 
   // Reopen the last assistant when auto-login is on and it is still on disk;
   // otherwise ask.
@@ -94,29 +92,25 @@ int main(int argc, char** argv) {
     const std::vector<std::string> uuids = lnb::api::scan_assistants();
 
     if (std::find(uuids.begin(), uuids.end(), last) != uuids.end()) {
-      opened = api.open_assistant(last, lnb::api::load_assistant(last));
-
-      if (!opened) {
-        shark::log::error("cannot auto-open assistant: {}", api.last_error());
-      }
+      opened = api->open_assistant(last, lnb::api::load_assistant(last));
     }
   }
 
   if (!opened) {
-    ui::AssistantPicker picker(api, settings);
+    ui::AssistantPicker picker(*api, settings);
 
     if (picker.exec() != QDialog::Accepted) {
       return 0;
     }
   }
 
-  ui::MainWindow window(api, settings);
+  ui::MainWindow window(*api, settings);
   window.show();
 
   const int code = app.exec();
 
   lnb::save_settings(settings);
-  api.wait_for_generation();
+  api->wait_for_generation();
   shark::log::debug("local-notebook exited with code {}", code);
   return code;
 }

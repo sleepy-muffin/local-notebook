@@ -14,7 +14,7 @@
 #include <unistd.h>
 #endif
 
-#include "utils/util.hpp"
+#include "local_notebook/core/utils.hpp"
 
 namespace lnb::store {
 
@@ -72,7 +72,7 @@ std::string lock_contents() {
   const long pid = static_cast<long>(::getpid());
 #endif
 
-  return "pid " + std::to_string(pid) + "\nstarted " + now_iso8601_utc() + "\n";
+  return "pid " + std::to_string(pid) + "\nstarted " + utils::now_iso8601_utc() + "\n";
 }
 
 void write_contents(

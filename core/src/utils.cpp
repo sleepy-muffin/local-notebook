@@ -1,26 +1,27 @@
-#include "app/assistant_io.hpp"
-
-#include "shark/net/utils.hpp"
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <ctime>
+#include <random>
+#include <utility>
+#include <fstream>
 
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <boost/json/value.hpp>
 #include <boost/system/error_code.hpp>
 
-#include <filesystem>
-#include <fstream>
-#include <iterator>
-#include <string>
-#include <string_view>
-
 #include "shark/log.hpp"
-#include "net/protocol.hpp"
-#include "utils/util.hpp"
+#include "shark/net/utils.hpp"
 
-namespace lnb {
+#include "local_notebook/core/utils.hpp"
+#include "local_notebook/core/model.hpp"
+
+#include "net/protocol.hpp"
+
 namespace {
 
-boost::json::object to_json(const Assistant& assistant) {
+boost::json::object to_json(const lnb::Assistant& assistant) {
   boost::json::object object;
   object["name"] = assistant.name_;
   object["custom_instructions"] = assistant.custom_instructions_;
@@ -40,7 +41,7 @@ boost::json::object to_json(const Assistant& assistant) {
   // The wire protocol this assistant talks, and the reasoning levels a new
   // session starts on and the assistant-wide summariser runs at. All are written
   // even when defaulted, so the file always states the choice explicitly.
-  object["protocol"] = net::protocol_name(assistant.protocol_);
+  object["protocol"] = lnb::net::protocol_name(assistant.protocol_);
   object["reasoning_effort"] = assistant.reasoning_effort_;
   object["summary_reasoning_effort"] = assistant.summary_reasoning_effort_;
 
@@ -78,8 +79,8 @@ std::size_t size_or(
   return static_cast<std::size_t>(value->to_number<double>());
 }
 
-Assistant from_json(const boost::json::object& object) {
-  Assistant assistant;
+lnb::Assistant from_json(const boost::json::object& object) {
+  lnb::Assistant assistant;
 
   assistant.name_ = string_or(object, "name");
   assistant.custom_instructions_ = string_or(object, "custom_instructions");
@@ -115,7 +116,7 @@ Assistant from_json(const boost::json::object& object) {
       assistant.summary_token_budget_for_session_summarization_
   );
 
-  assistant.protocol_ = net::protocol_from_name(string_or(object, "protocol"));
+  assistant.protocol_ = lnb::net::protocol_from_name(string_or(object, "protocol"));
   assistant.reasoning_effort_ = string_or(object, "reasoning_effort");
 
   // A missing summary level reads as the shipped default ("none"), not the empty
@@ -128,20 +129,24 @@ Assistant from_json(const boost::json::object& object) {
         std::string(summary_effort->as_string());
   }
 
-  assistant.api_url_ = net::normalize_base_url(assistant.api_url_);
+  assistant.api_url_ = lnb::net::normalize_base_url(assistant.api_url_);
 
   return assistant;
 }
 
 } // namespace
 
-Assistant load_assistant(const std::string& uuid) {
-  const auto path = store::paths::assistant_settings(uuid);
+/*
+ * `uuid` must be valid or this function will throw exceptions
+ */
+lnb::Assistant lnb::utils::store::load_assistant(const std::string& uuid) {
+  const auto path = this->assistant_settings(uuid);
 
   std::ifstream in(path, std::ios::binary);
 
   if (!in) {
-    return Assistant{};
+    // return Assistant{};
+    shark::raise("std::ifstream failed to open {}", path.string());
   }
 
   const std::string text{
@@ -152,19 +157,19 @@ Assistant load_assistant(const std::string& uuid) {
   const boost::json::value parsed = boost::json::parse(text, error);
 
   if (error || !parsed.is_object()) {
-    shark::log::error("{} is not a JSON object", path.string());
-    return Assistant{};
+    // shark::log::error("{} is not a JSON object", path.string());
+    shark::raise("{} is not a JSON object", path.string());
   }
 
   return from_json(parsed.as_object());
 }
 
-void save_assistant(const std::string& uuid, const Assistant& assistant) {
-  const auto directory = store::paths::assistant_dir(uuid);
+void lnb::utils::store::save_assistant(const std::string& uuid, const Assistant& assistant) {
+  const auto directory = this->assistant_dir(uuid);
   std::error_code error;
   std::filesystem::create_directories(directory, error);
 
-  const auto path = store::paths::assistant_settings(uuid);
+  const auto path = this->assistant_settings(uuid);
 
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
 
@@ -176,4 +181,97 @@ void save_assistant(const std::string& uuid, const Assistant& assistant) {
   out << boost::json::serialize(to_json(assistant)) << '\n';
 }
 
-} // namespace lnb
+std::filesystem::path lnb::utils::store::data_root() const {
+  return this->g_data_root;
+}
+
+std::filesystem::path lnb::utils::store::global_settings_path() const {
+  return this->data_root() / "settings.json";
+}
+
+
+std::vector<std::string> lnb::utils::store::scan_assistants() {
+  std::vector<std::string> result;
+
+  std::error_code error;
+  const std::filesystem::path root = this->data_root();
+  if (!std::filesystem::is_directory(root, error)) {
+    return result;
+  }
+
+  for (const auto& entry : std::filesystem::directory_iterator(root, error)) {
+    if (error) {
+      break;
+    }
+    if (!entry.is_directory()) {
+      continue;
+    }
+    if (std::filesystem::exists(entry.path() / "settings.json", error)) {
+      result.push_back(entry.path().filename().string());
+    }
+  }
+
+  std::sort(result.begin(), result.end());
+  return result;
+}
+
+
+std::filesystem::path lnb::utils::store::assistant_dir(std::string_view uuid) const {
+  return data_root() / std::string(uuid);
+}
+
+std::filesystem::path lnb::utils::store::assistant_settings(std::string_view uuid) const {
+  return assistant_dir(uuid) / "settings.json";
+}
+
+std::filesystem::path lnb::utils::store::assistant_db(std::string_view uuid) {
+  return assistant_dir(uuid) / "data.db";
+}
+
+std::filesystem::path lnb::utils::store::assistant_log(std::string_view uuid) {
+  return assistant_dir(uuid) / "local-notebook.log";
+}
+
+std::filesystem::path lnb::utils::store::assistant_lock(std::string_view uuid) {
+  return assistant_dir(uuid) / "lock";
+}
+
+std::string lnb::utils::make_uuid() {
+  static thread_local std::mt19937_64 engine(std::random_device{}());
+  std::uniform_int_distribution<std::uint32_t> distribution(0, 0xFFFFFFFFu);
+
+  std::uint32_t parts[4];
+  for (auto& part : parts) {
+    part = distribution(engine);
+  }
+
+  // Set the version (4) and variant (RFC 4122) bits so this is a valid v4 UUID.
+  parts[1] = (parts[1] & 0xFFFF0FFFu) | 0x00004000u;
+  parts[2] = (parts[2] & 0x3FFFFFFFu) | 0x80000000u;
+
+  char buffer[37];
+  std::snprintf(
+    buffer, sizeof(buffer), "%08x-%04x-%04x-%04x-%04x%08x", parts[0],
+    (parts[1] >> 16) & 0xFFFFu, parts[1] & 0xFFFFu, (parts[2] >> 16) & 0xFFFFu,
+    parts[2] & 0xFFFFu, parts[3]
+  );
+  return buffer;
+}
+
+
+std::string lnb::utils::now_iso8601_utc() {
+  const auto now = std::chrono::system_clock::now();
+  const std::time_t seconds = std::chrono::system_clock::to_time_t(now);
+
+  std::tm broken_down{};
+#if defined(_WIN32)
+  gmtime_s(&broken_down, &seconds);
+#else
+  gmtime_r(&seconds, &broken_down);
+#endif
+
+  char buffer[32];
+  const std::size_t written =
+    std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &broken_down);
+  return std::string(buffer, written);
+}

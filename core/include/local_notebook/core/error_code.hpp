@@ -13,6 +13,7 @@ enum class error_code {
   // shared assistant fold is running and would read this session's rows.
   ERR_SESSION_BUSY = 202,
   ERR_ASSISTANT_BUSY = 203,
+  ERR_ASSISTANT_HAS_NOT_LOADED_YET = 204,
 
 
 };

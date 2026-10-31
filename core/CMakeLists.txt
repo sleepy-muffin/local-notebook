@@ -51,18 +51,20 @@ find_package(Threads REQUIRED)
 # executor type.
 add_library(${PROJECT_NAME}
         STATIC
-        include/local-notebook-core/api_protocol.hpp
-        include/local-notebook-core/error_code.hpp
-        include/local-notebook-core/generation_task.hpp
-        include/local-notebook-core/interface.hpp
-        include/local-notebook-core/model.hpp
-        include/local-notebook-core/summary.hpp
-        include/local-notebook-core/context.hpp
+        include/local_notebook/core/api_protocol.hpp
+        include/local_notebook/core/error_code.hpp
+        include/local_notebook/core/generation_task.hpp
+        include/local_notebook/core/interface.hpp
+        include/local_notebook/core/utils.hpp
+        include/local_notebook/core/model.hpp
+        include/local_notebook/core/summary.hpp
+        include/local_notebook/core/context.hpp
 
         src/interface.cpp
+        src/application.cpp
+        src/utils.cpp
 
-        src/utils/util.hpp
-        src/utils/util.cpp
+
         src/utils/lock.hpp
         src/utils/lock.cpp
         src/utils/context.cpp
@@ -82,8 +84,7 @@ add_library(${PROJECT_NAME}
         src/net/client.hpp
         src/net/client.cpp
 
-        src/app/assistant_io.hpp
-        src/app/assistant_io.cpp
+
 )
 
 
