@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "local-notebook-core/api_protocol.hpp"
+#include "local_notebook/core/api_protocol.hpp"
 
 // The reconstructed domain model (design-1.md §2). One Assistant per process;
 // many Sessions per assistant; all sessions of an assistant share one assistant
@@ -83,14 +83,18 @@ public:
   bool write_tools_enabled_ = false;
   bool online_tools_enabled_ = true;
 
-  // The input bound, and the collapse trigger: a request carries the system
+  // The input bound and the collapse trigger: a request carries the system
   // prompt plus the transcript, and once that reaches this many tokens the
-  // older messages are folded into summary_.
+  // older messages are folded into summary_. It is also the verbatim window:
+  // the newest messages that fit are always sent unchanged.
   std::size_t summary_trigger_tokens_ = 16000;
 
-  // The level the transcript collapses to when the trigger fires: the newest
-  // messages kept verbatim, everything older folded. Keep it well below
-  // summary_trigger_tokens_, or the collapse re-triggers straight away.
+  // Where the summarisation input ends. The summariser reads from the message
+  // that just crossed summary_trigger_tokens_ up to the point where walking the
+  // transcript newest→oldest has accumulated this many tokens; that point and
+  // everything newer stay verbatim. summary_watermark_ is never read to pick this
+  // range. It must stay below summary_trigger_tokens_, or the two boundaries
+  // cross and nothing folds.
   std::size_t summary_keep_tokens_ = 4000;
 
   // Completion cap for the generated summary. This is an upper bound on the
@@ -142,12 +146,13 @@ public:
   // on the summariser's output, not a target written into its prompt.
   std::size_t summary_token_budget_ = 4000;
 
-  // Trigger: new unsummarised tokens across ALL sessions. Also the cap for the
-  // recent-message pool gathered for the summarisation.
+  // Trigger: new unsummarised tokens across ALL sessions, and the cap for the
+  // per-session recent-message pool gathered for the summarisation.
   std::size_t summary_trigger_tokens_ = 80000;
 
-  // Cap for the session-summary pool in the assistant summarisation. Separate
-  // from summary_trigger_tokens_ — do not mix the two pools.
+  // Where the session-summary pool ends: the summaries are walked newest
+  // session→oldest while they fit this cap. Separate from the trigger window —
+  // do not mix the two pools.
   std::size_t summary_token_budget_for_session_summarization_ = 16000;
 };
 

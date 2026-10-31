@@ -28,7 +28,8 @@
 #include <string>
 #include <vector>
 
-#include "local-notebook-core/interface.hpp"
+#include "local_notebook/core/interface.hpp"
+#include "local_notebook/core/context.hpp"
 #include "settings/settings.hpp"
 #include "support/i18n.hpp"
 #include "ui/MessageDocument.hpp"
@@ -497,8 +498,45 @@ void ConversationView::reload() {
 render::Document ConversationView::build_document() const {
   render::Document document;
 
+  // The next request sends every message from the newest one back to where
+  // summary_trigger_tokens_ runs out (plan_window), so each message can report
+  // how much newer material travels with it.
+  const lnb::Session session = controller_.session();
+  const std::size_t trigger = session.summary_trigger_tokens_;
+
+
+  auto the_window = lnb::context::plan_window(messages_, session.summary_trigger_tokens_);
+//   std::vector<std::size_t> accumulated(messages_.size(), 0);
+//   std::size_t boundary = messages_.size();
+//   std::size_t running = 0;
+//
+//   for (std::size_t i = messages_.size(); i-- > 0;) {
+//     const std::size_t cost = api_.message_tokens(messages_[i]);
+//
+//     // The newest message is always sent, even when it alone exceeds the trigger.
+//     if (running + cost > trigger && boundary < messages_.size()) {
+//       break;
+//     }
+//
+//     running += cost;
+//     boundary = i;
+//     accumulated[i] = running;
+//   }
+
   for (std::size_t i = window_start_; i < messages_.size(); ++i) {
-    append_rendered_message(document, messages_[i]);
+    std::u16string status;
+
+    if (i >= the_window.start) {
+      status = to_u16(
+          trs("verbatim: %1/%2")
+              .arg(static_cast<qulonglong>(the_window.accumulated[i - the_window.start]))
+              .arg(static_cast<qulonglong>(trigger))
+      );
+    } else {
+      status = to_u16(trs("inactive"));
+    }
+
+    append_rendered_message(document, messages_[i], std::move(status));
   }
 
   // A warning from the last finished turn is rendered after the transcript, then
@@ -515,7 +553,7 @@ render::Document ConversationView::build_document() const {
 }
 
 void ConversationView::append_rendered_message(
-    render::Document& document, const lnb::Message& message) const {
+    render::Document& document, const lnb::Message& message, std::u16string status) const {
   const bool from_self = message.role_ == lnb::Role::User;
   const render::Role role = from_self ? render::Role::User : render::Role::Assistant;
 
@@ -524,6 +562,8 @@ void ConversationView::append_rendered_message(
   render::MessageMeta meta = make_message_meta(
       role, message.id_, to_u16(format_message_time(message.made_at_)),
       to_u16(format_token_estimate(api_.message_tokens(message))), from_self, to_u16(raw));
+
+  meta.status = std::move(status);
 
   auto blocks =
       from_self ? make_plain_blocks(message.content_) : make_markdown_blocks(message.content_);

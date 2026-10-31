@@ -3,7 +3,7 @@
 #include <QDialog>
 #include <QWidget>
 
-#include "local-notebook-core/summary.hpp"
+#include "local_notebook/core/summary.hpp"
 
 namespace ui {
 

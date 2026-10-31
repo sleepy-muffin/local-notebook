@@ -9,7 +9,7 @@
 
 #include <filesystem>
 
-#include "local-notebook-core/interface.hpp"
+#include "local_notebook/core/interface.hpp"
 #include "shark/log.hpp"
 
 namespace lnb {

@@ -3,7 +3,7 @@
 // Tasks window reads the visible task, so the throwaway task must mirror its live
 // in-flight projections onto it; before this was fixed the row stayed at zero
 // until the pass ended and only then jumped to the final totals.
-#include "local-notebook-core/generation_task.hpp"
+#include "local_notebook/core/generation_task.hpp"
 
 #include <iostream>
 #include <string>

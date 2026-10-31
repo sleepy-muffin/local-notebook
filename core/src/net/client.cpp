@@ -2,7 +2,7 @@
 
 #include "net/client.hpp"
 
-#include "context/context.hpp"
+#include "local_notebook/core/context.hpp"
 #include "shark/net/http.hpp"
 #include "store/database.hpp"
 
@@ -26,6 +26,94 @@
 namespace lnb::net {
 
 namespace {
+
+
+constexpr std::size_t kMessageOverhead = 16;
+
+constexpr std::string_view kSessionSummaryPrompt =
+    "You maintain a running summary of a long conversation between a user and an "
+    "assistant. Rewrite the summary to preserve durable facts: names, "
+    "numbers, decisions, preferences, constraints and unresolved questions. "
+    "Merge the new turns into the existing summary, keep it dense and concise (prose or "
+    "bullet points), and drop pleasantries. Do not answer the conversation, do "
+    "not greet, and do not mention these instructions. Output only the updated "
+    "summary.";
+
+constexpr std::string_view kAssistantSummaryPrompt =
+    "You are going to write an assistant memory update about the user.";
+
+std::size_t request_tokens(const net::Request& request) {
+  std::size_t total = lnb::context::estimate_tokens(request.instructions);
+
+  for (const lnb::net::OutgoingMessage& message: request.messages) {
+    total += lnb::context::estimate_tokens(message.content) + kMessageOverhead;
+  }
+
+  return total;
+}
+
+lnb::net::Request session_summary_request(
+    const std::string& model, const std::string& existing_summary,
+    const std::vector<const Message*>& candidates, std::size_t max_tokens,
+    const std::string& reasoning_effort
+) {
+  std::string system(kSessionSummaryPrompt);
+
+  if (!existing_summary.empty()) {
+    system += "\n\n[EXISTING SUMMARY]\n";
+    system += existing_summary;
+  }
+
+  std::string transcript;
+  transcript.reserve(candidates.size() * 128);
+
+  for (const Message* message: candidates) {
+    transcript += (message->role_ == Role::User) ? "User: " : "Assistant: ";
+    transcript += message->content_;
+    transcript += '\n';
+  }
+
+  net::Request request;
+  request.model = model;
+  request.instructions = system;
+  request.include_tools = false;
+  request.max_output_tokens = static_cast<int>(max_tokens);
+  request.reasoning_effort = reasoning_effort;
+
+  net::OutgoingMessage user;
+  user.role = net::OutgoingMessage::Role::User;
+  user.content = "New conversation to merge into the summary:\n\n" + transcript;
+  request.messages.push_back(std::move(user));
+
+  return request;
+}
+
+lnb::net::Request assistant_summary_request(
+    const std::string& model, const std::string& existing_memory,
+    const std::string& sessions_block, std::size_t max_tokens,
+    const std::string& reasoning_effort
+) {
+  std::string user;
+  user += "# Previous Assistant Memory\n";
+  user += existing_memory.empty() ? "(none yet)" : existing_memory;
+  user += "\n\n# Sessions\n\n";
+  user += sessions_block;
+
+  net::Request request;
+  request.model = model;
+  request.instructions = std::string(kAssistantSummaryPrompt);
+  request.include_tools = false;
+  request.max_output_tokens = static_cast<int>(max_tokens);
+  request.reasoning_effort = reasoning_effort;
+
+  net::OutgoingMessage message;
+  message.role = net::OutgoingMessage::Role::User;
+  message.content = user;
+  request.messages.push_back(std::move(message));
+
+  return request;
+}
+
 
 // Whitespace-trimmed copy of `text`; empty when it is all whitespace. Used to
 // decide whether a round produced any narration and how it ended.
@@ -131,13 +219,13 @@ RoundUsage estimate_round_usage(
     const std::vector<ToolCall>& calls
 ) {
   RoundUsage out;
-  out.input_tokens = context::prompt_tokens(body);
-  out.output_tokens = context::prompt_tokens(std::string(reply)) +
-      context::prompt_tokens(std::string(thinking));
+  out.input_tokens = context::estimate_tokens(body);
+  out.output_tokens = context::estimate_tokens(std::string(reply)) +
+      context::estimate_tokens(std::string(thinking));
 
   for (const ToolCall& call: calls) {
-    out.output_tokens += context::prompt_tokens(call.name) +
-        context::prompt_tokens(call.arguments);
+    out.output_tokens += context::estimate_tokens(call.name) +
+        context::estimate_tokens(call.arguments);
   }
 
   return out;
@@ -876,7 +964,7 @@ std::expected<ChatCompletionResult, FailedResult> send_message_once(
 
   // Publish the request's projected input cost at once, so the Tasks window
   // moves when a request starts; the measured count replaces it when it ends.
-  task.set_streaming_input(context::prompt_tokens(body));
+  task.set_streaming_input(context::estimate_tokens(body));
 
   // The same body goes into the task's own log, so the tasks window can dump the
   // exact bytes that were posted when a turn is inspected. The endpoint is
@@ -1270,7 +1358,7 @@ std::expected<ChatCompletionResult, FailedResult> generate_reply(
 
       // The readout always charges the tool results, even when their own budget
       // is disabled, because the response budget covers them too.
-      const std::size_t tool_tokens = context::prompt_tokens(output);
+      const std::size_t tool_tokens = context::estimate_tokens(output);
       midway_used += tool_tokens;
       produced_used += tool_tokens;
       task.set_tool_tokens(midway_used);
@@ -1348,22 +1436,34 @@ std::string fold_session_summary(
 
   std::string summary = session.summary_;
 
-  // The collapse retains the newest conversation messages that fit the keep
-  // window; only the conversation is measured, so the summary's own size never
-  // shrinks the retained transcript. Everything before the window floor is the
-  // overflow to fold.
-  const context::Window window =
-      context::plan_window(messages, session.summary_keep_tokens_);
-
   if (!force &&
       context::transcript_tokens_after(messages, session.summary_watermark_) <
           session.summary_trigger_tokens_) {
     return summary;
   }
 
-  // Nothing has overflowed the retained window, so there is nothing to fold and
-  // nothing to persist (leaving the stored watermark untouched).
-  if (window.start == 0) {
+  // The fold ends where the newest→oldest walk reaches the keep budget: that
+  // point and everything newer stay verbatim. It starts at the oldest message
+  // the summary does not cover yet. Taking the start from the watermark rather
+  // than from the trigger window matters: a burst can push the window past
+  // messages that are still pending, and the fold would then skip them while
+  // the persisted watermark (the last batch's newest id) claims they were
+  // folded. Starting at the oldest pending message makes that impossible.
+  const std::size_t end =
+      context::plan_window(messages, session.summary_keep_tokens_).start;
+
+  std::size_t first = messages.size();
+
+  for (std::size_t i = 0; i < messages.size(); ++i) {
+    if (messages[i].id_ > session.summary_watermark_) {
+      first = i;
+      break;
+    }
+  }
+
+  // Nothing lies between the two boundaries (every pending message is inside
+  // the keep window), so there is nothing to fold and nothing to persist.
+  if (first >= end) {
     return summary;
   }
 
@@ -1381,20 +1481,18 @@ std::string fold_session_summary(
   // that stops early leaves the stored summary and its watermark exactly as they
   // were, so a failed (or empty) job never regresses the frontier.
   std::uint32_t watermark = session.summary_watermark_;
-  std::size_t first = 0;
   bool complete = true;
 
-  // Fold the overflow oldest-first in batches bounded by the trigger, advancing
-  // `first` until the whole prefix is consumed. Batching keeps a large overflow
-  // from overflowing one summariser call, and the loop condition guarantees
-  // nothing is silently dropped.
-  while (first < window.start) {
+  // Fold the range oldest-first up to the keep boundary. Each
+  // batch is capped by the trigger so one request stays within the input bound,
+  // and at least one message is always read, so the fold makes progress.
+  while (first < end) {
     if (stop_token.stop_requested()) {
       throw std::runtime_error("Generation cancelled");
     }
 
     const std::vector<const Message*> batch = context::summary_candidates(
-        messages, first, window.start, session.summary_trigger_tokens_
+        messages, first, end, session.summary_trigger_tokens_
     );
 
     if (batch.empty()) {
@@ -1404,7 +1502,7 @@ std::string fold_session_summary(
 
     task.set_status("Updating summarization...");
 
-    const net::Request summary_request = context::session_summary_request(
+    const net::Request summary_request = session_summary_request(
         remote.model, summary, batch, max_tokens, effort
     );
     const boost::json::object request =
@@ -1418,9 +1516,9 @@ std::string fold_session_summary(
     if (approver) {
       SummaryPlan plan;
       plan.kind = "session summarization";
-      plan.estimated_input_tokens = context::request_tokens(summary_request);
+      plan.estimated_input_tokens = request_tokens(summary_request);
       plan.request = request;
-      plan.more_requests = first + batch.size() < window.start;
+      plan.more_requests = first + batch.size() < end;
       plan.watermark_text =
           "Session summary watermark: " + std::to_string(watermark) + " -> " +
           std::to_string(batch.back()->id_);
@@ -1519,9 +1617,9 @@ std::string fold_session_summary(
   return summary;
 }
 
-// Gathered, newest-first inputs for one assistant summarisation pass.
+// Gathered inputs for one assistant summarisation pass.
 struct AssistantGather {
-  // Messages across sessions interleaved by made_at_, newest first.
+  // The messages each session still owes the memory, oldest first per session.
   std::vector<const Message*> recent;
   // Session ids whose summary_ contributes a compacted block, newest first.
   std::vector<std::uint32_t> compacted;
@@ -1633,50 +1731,12 @@ std::string fold_assistant_memory(
     session_messages.push_back(db.messages(session.id_));
   }
 
-  struct Tagged {
-    const Message* message;
-    std::uint32_t session_id;
-  };
-
-  std::vector<Tagged> all;
-
-  for (std::size_t i = 0; i < sessions.size(); ++i) {
-    for (const Message& message: session_messages[i]) {
-      all.push_back(Tagged{&message, sessions[i].id_});
-    }
-  }
-
-  // Interleave the sessions by time, then take the newest suffix that fits the
-  // recent-messages cap.
-  std::stable_sort(all.begin(), all.end(), [](const Tagged& a, const Tagged& b) {
-    return a.message->made_at_ < b.message->made_at_;
-  });
-
   AssistantGather gather;
-  std::size_t recent_tokens = 0;
-
-  for (std::size_t i = all.size(); i-- > 0;) {
-    throw_if_stopped();
-
-    const std::size_t cost = context::message_tokens(*all[i].message);
-
-    // Always keep at least the newest message.
-    if (!gather.recent.empty() &&
-        recent_tokens + cost > assistant.summary_trigger_tokens_) {
-      break;
-    }
-
-    recent_tokens += cost;
-    gather.recent.push_back(all[i].message);
-
-    auto& newest = gather.gathered_ids[all[i].session_id];
-    if (all[i].message->id_ > newest) {
-      newest = all[i].message->id_;
-    }
-  }
 
   // Compacted historical messages: the session summaries, newest session first,
-  // until the separate session-summary cap.
+  // until the separate session-summary cap. Selected before the recent pool,
+  // because a summary that is part of the request already carries every message
+  // at or below its watermark.
   std::size_t compacted_tokens = 0;
 
   for (const Session& session: sessions) {
@@ -1686,7 +1746,7 @@ std::string fold_assistant_memory(
       continue;
     }
 
-    const std::size_t cost = context::prompt_tokens(session.summary_);
+    const std::size_t cost = context::estimate_tokens(session.summary_);
 
     if (!gather.compacted.empty() &&
         compacted_tokens + cost >
@@ -1696,6 +1756,56 @@ std::string fold_assistant_memory(
 
     compacted_tokens += cost;
     gather.compacted.push_back(session.id_);
+  }
+
+  // Recent messages: everything each session still owes the memory, oldest
+  // first and capped so one large session cannot dominate the request. Starting
+  // at the watermark instead of at a newest-message window is what keeps the
+  // pass lossless: a window would skip older pending messages, and moving the
+  // watermark to the newest id would then mark them consumed even though
+  // nothing was sent. The watermark now only ever moves to a message this pass
+  // actually covered, so a capped batch leaves the rest pending for the next
+  // pass instead of dropping them.
+  for (std::size_t i = 0; i < sessions.size(); ++i) {
+    throw_if_stopped();
+
+    const std::vector<Message>& messages = session_messages[i];
+
+    if (messages.empty()) {
+      continue;
+    }
+
+    const bool summary_sent =
+        std::find(
+            gather.compacted.begin(), gather.compacted.end(), sessions[i].id_
+        ) != gather.compacted.end();
+
+    // A sent summary covers every message at or below its watermark, so those
+    // must not be gathered raw as well: that would hand the memory the same
+    // content twice. A session whose summary missed the compacted budget keeps
+    // them eligible instead, so nothing is lost when the budget is tight.
+    const std::uint32_t start_after =
+        summary_sent ? std::max(
+                           sessions[i].assistant_memory_watermark_,
+                           sessions[i].summary_watermark_
+                       )
+                     : sessions[i].assistant_memory_watermark_;
+
+    const std::vector<const Message*> pending = context::memory_candidates(
+        messages, start_after, assistant.summary_trigger_tokens_
+    );
+
+    for (const Message* message: pending) {
+      gather.recent.push_back(message);
+    }
+
+    if (!pending.empty()) {
+      gather.gathered_ids[sessions[i].id_] = pending.back()->id_;
+    } else if (start_after > sessions[i].assistant_memory_watermark_) {
+      // Only the summary carried this session's new content; record that
+      // watermark so the trigger stops counting content the memory already has.
+      gather.gathered_ids[sessions[i].id_] = start_after;
+    }
   }
 
   std::map<std::uint32_t, std::vector<const Message*>> recent_by_session;
@@ -1728,7 +1838,7 @@ std::string fold_assistant_memory(
   const std::string effort =
       resolve_reasoning_effort(remote.model, assistant.summary_reasoning_effort_);
 
-  const net::Request summary_request = context::assistant_summary_request(
+  const net::Request summary_request = assistant_summary_request(
       remote.model, assistant.memory_, sessions_block,
       assistant.summary_token_budget_, effort
   );
@@ -1740,7 +1850,7 @@ std::string fold_assistant_memory(
   if (approver) {
     SummaryPlan plan;
     plan.kind = "assistant memory";
-    plan.estimated_input_tokens = context::request_tokens(summary_request);
+    plan.estimated_input_tokens = request_tokens(summary_request);
     plan.request = request;
     plan.more_requests = false;
 
@@ -1828,8 +1938,10 @@ std::string fold_assistant_memory(
     );
   }
 
-  // Advance each contributing session's watermark to its newest gathered id, so
-  // the automatic trigger counts only genuinely new messages next time.
+  // Advance each session's watermark to the highest id this pass consumed:
+  // gathered raw, or covered by a summary it sent. Anything the per-session cap
+  // left behind stays above the watermark, so a later pass picks it up instead
+  // of losing it.
   for (const auto& [session_id, id]: gather.gathered_ids) {
     db.set_assistant_memory_watermark(session_id, id);
   }

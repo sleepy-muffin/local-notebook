@@ -13,8 +13,8 @@
 #include <optional>
 #include <string>
 
-#include "local-notebook-core/interface.hpp"
-#include "local-notebook-core/model.hpp"
+#include "local_notebook/core/interface.hpp"
+#include "local_notebook/core/model.hpp"
 #include "support/i18n.hpp"
 #include "ui/dialog_style.hpp"
 

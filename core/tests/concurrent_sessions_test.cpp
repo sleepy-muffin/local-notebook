@@ -3,7 +3,7 @@
 // A turn in one session must not block a turn in another. The shared assistant
 // fold is the one operation that owns every session: it waits for the session
 // turns already running and refuses new ones until it finishes.
-#include "local-notebook-core/interface.hpp"
+#include "local_notebook/core/interface.hpp"
 
 #include <boost/asio.hpp>
 

@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "local-notebook-core/interface.hpp"
+#include "local_notebook/core/interface.hpp"
 #include "shark/log.hpp"
 #include "settings/settings.hpp"
 #include "support/i18n.hpp"

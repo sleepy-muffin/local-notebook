@@ -9,10 +9,10 @@
 #include <unordered_map>
 #include <vector>
 
-#include "local-notebook-core/error_code.hpp"
-#include "local-notebook-core/generation_task.hpp"
-#include "local-notebook-core/model.hpp"
-#include "local-notebook-core/summary.hpp"
+#include "local_notebook/core/error_code.hpp"
+#include "local_notebook/core/generation_task.hpp"
+#include "local_notebook/core/model.hpp"
+#include "local_notebook/core/summary.hpp"
 
 // The one public entry point into the application core.
 //

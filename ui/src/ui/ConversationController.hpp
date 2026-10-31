@@ -5,9 +5,9 @@
 #include <memory>
 #include <string>
 
-#include "local-notebook-core/generation_task.hpp"
-#include "local-notebook-core/interface.hpp"
-#include "local-notebook-core/model.hpp"
+#include "local_notebook/core/generation_task.hpp"
+#include "local_notebook/core/interface.hpp"
+#include "local_notebook/core/model.hpp"
 
 namespace ui {
 
@@ -102,22 +102,35 @@ public:
     on_warning_ = std::move(handler);
   }
 
-  // The UI timer calls this. It forwards streamed text and, once the task
-  // finishes, signals a reload.
+  // Polls the session's own task and, when it is merely watching the shared
+  // assistant pass, that task too.
   void poll();
 
 private:
   // Adopts a task returned by the interface and resets the per-task polling
   // bookkeeping. Returns false when the interface refused to start one.
   bool track(std::shared_ptr<GenerationTask> task);
+
+  // Watches the shared assistant pass without adopting it as the session's own
+  // task. It is polled only to reload once it ends, so the composer can resolve
+  // its summarize mode; it must never become `task_`, or the Tasks window would
+  // list a phantom session row mirroring the assistant's numbers.
+  void observe(std::shared_ptr<GenerationTask> task);
+
   void finish_worker();
 
   lnb::api::interface& api_;
   std::uint32_t session_id_;
 
-  // The turn returned by interface::start_generation(), or the summarisation
-  // task the interface started.
+  // The session's own turn or fold, returned by interface::start_generation()
+  // or interface::summarize_session(). The shared assistant pass is kept in
+  // `observed_task_` instead, because it belongs to every session at once.
   std::shared_ptr<GenerationTask> task_;
+
+  // The shared assistant pass this controller is watching, if any. It has its
+  // own reported flag so a session task and a watched pass never share one.
+  std::shared_ptr<GenerationTask> observed_task_;
+  bool observed_reported_ = false;
 
   // True once finish_worker() has run for task_, so the terminal state is
   // reported exactly once.

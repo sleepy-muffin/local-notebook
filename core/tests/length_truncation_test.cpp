@@ -4,7 +4,7 @@
 // reports `finish_reason == "length"`. A chat turn therefore fails and persists
 // nothing, and a forced session summary fails without advancing the summary
 // watermark.
-#include "local-notebook-core/interface.hpp"
+#include "local_notebook/core/interface.hpp"
 
 #include <boost/asio.hpp>
 
@@ -233,10 +233,10 @@ int main() {
 
     lnb::Session session;
     session.title_ = "Truncated summary";
-    // Keep only the newest message verbatim, and make every message a candidate
-    // for the first batch.
-    session.summary_keep_tokens_ = 1;
-    session.summary_trigger_tokens_ = 1;
+    // The trigger keeps the newest two messages verbatim; the keep boundary
+    // stops at the newest one, so the range to fold is the message between them.
+    session.summary_keep_tokens_ = 18;
+    session.summary_trigger_tokens_ = 36;
     session.summary_token_budget_ = 32;
 
     const std::uint32_t session_id = api.create_session(session);

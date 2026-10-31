@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "local-notebook-core/model.hpp"
+#include "local_notebook/core/model.hpp"
 #include "shark/sqlite3.hpp"
 
 // The reconstructed per-assistant database (design-1.md §9). One file holds all

@@ -1,4 +1,4 @@
-#include "local-notebook-core/interface.hpp"
+#include "local_notebook/core/interface.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "app/assistant_io.hpp"
-#include "context/context.hpp"
+#include "local_notebook/core/context.hpp"
 #include "shark/async.hpp"
 #include "shark/log.hpp"
 #include "net/client.hpp"
@@ -875,7 +875,8 @@ std::shared_ptr<GenerationTask> interface::summarize_assistant(
           save_assistant();
         }
 
-        // The fold advanced every session's assistant watermark.
+        // The fold advanced the assistant watermarks it covered, so the trigger
+        // may have moved.
         mark_assistant_summary_stale();
       }
   );

@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include "local-notebook-core/api_protocol.hpp"
+#include "local_notebook/core/api_protocol.hpp"
 #include "net/tools.hpp"
 
 // The protocol-neutral request model. The protocol enum itself is public

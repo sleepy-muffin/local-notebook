@@ -57,6 +57,11 @@ bool ConversationController::track(std::shared_ptr<GenerationTask> task) {
   return true;
 }
 
+void ConversationController::observe(std::shared_ptr<GenerationTask> task) {
+  observed_task_ = std::move(task);
+  observed_reported_ = false;
+}
+
 bool ConversationController::send(std::string text, lnb::SummaryApprover approver) {
   // One task per session, plus the shared assistant fold which reads every
   // session. A task in another session no longer blocks this send.
@@ -104,7 +109,12 @@ void ConversationController::summarize(lnb::SummaryApprover approver) {
 
   // The automatic assistant pass is a no-op when the trigger is no longer
   // reached, so it still completes cleanly without contacting the network.
-  track(api_.summarize_assistant(false, std::move(approver)));
+  //
+  // It is shared by every session and has its own slot, so it is only watched
+  // here. Adopting it as `task_` would make the Tasks window list this session
+  // as a running task that merely mirrors the assistant's numbers, which is
+  // impossible: while the assistant folds, no session may start a task.
+  observe(api_.summarize_assistant(false, std::move(approver)));
 }
 
 void ConversationController::summarize_session_now(
@@ -146,32 +156,54 @@ void ConversationController::edit_message(
 }
 
 void ConversationController::poll() {
-  if (task_ == nullptr) {
-    return;
-  }
+  if (task_ != nullptr) {
+    const GenerationTask::Snapshot snapshot = task_->snapshot();
 
-  const GenerationTask::Snapshot snapshot = task_->snapshot();
+    if (snapshot.status == GenerationTask::Status::RUNNING &&
+        snapshot.display != last_display_) {
+      last_display_ = snapshot.display;
+      if (on_stream_) {
+        on_stream_(snapshot.display);
+      }
+    }
 
-  if (snapshot.status == GenerationTask::Status::RUNNING &&
-      snapshot.display != last_display_) {
-    last_display_ = snapshot.display;
-    if (on_stream_) {
-      on_stream_(snapshot.display);
+    // The transient operation title ("Searching...", "Updating summarization...")
+    // is shown until the first assistant token arrives.
+    if (snapshot.status == GenerationTask::Status::RUNNING &&
+        snapshot.operation_status != last_status_) {
+      last_status_ = snapshot.operation_status;
+      if (on_status_) {
+        on_status_(snapshot.operation_status);
+      }
+    }
+
+    if (task_->is_terminal() && !reported_) {
+      finish_worker();
     }
   }
 
-  // The transient operation title ("Searching...", "Updating summarization...")
-  // is shown until the first assistant token arrives.
-  if (snapshot.status == GenerationTask::Status::RUNNING &&
-      snapshot.operation_status != last_status_) {
-    last_status_ = snapshot.operation_status;
-    if (on_status_) {
-      on_status_(snapshot.operation_status);
-    }
-  }
+  // A watched assistant pass streams no text into this session; it is polled
+  // only for its ending, which reloads the view so the composer can resolve its
+  // summarize mode. It is dropped once reported, so a stale shared pointer is
+  // never mistaken for this session's own finished task.
+  if (observed_task_ != nullptr && !observed_reported_ &&
+      observed_task_->is_terminal()) {
+    observed_reported_ = true;
 
-  if (task_->is_terminal() && !reported_) {
-    finish_worker();
+    const GenerationTask::Snapshot snapshot = observed_task_->snapshot();
+    observed_task_.reset();
+
+    // Report a failure the same way a failed session task is reported, so the
+    // nudge pointing at the Tasks window is not lost now that the pass is only
+    // watched.
+    if (snapshot.status == GenerationTask::Status::FAILED &&
+        !snapshot.error.empty() && on_error_) {
+      on_error_(snapshot.error);
+    }
+
+    if (on_changed_) {
+      on_changed_();
+    }
   }
 }
 

@@ -8,7 +8,7 @@
 //
 // This drives a real generation against a loopback SSE server, which exercises
 // the whole chain of pumps.
-#include "local-notebook-core/interface.hpp"
+#include "local_notebook/core/interface.hpp"
 
 #include <boost/asio.hpp>
 

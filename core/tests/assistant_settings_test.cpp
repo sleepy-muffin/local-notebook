@@ -7,8 +7,8 @@
 #include "app/assistant_io.hpp"
 #include "utils/util.hpp"
 
-#include "local-notebook-core/interface.hpp"
-#include "local-notebook-core/model.hpp"
+#include "local_notebook/core/interface.hpp"
+#include "local_notebook/core/model.hpp"
 
 #include <filesystem>
 #include <fstream>

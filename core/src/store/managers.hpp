@@ -8,7 +8,7 @@
 #include <string_view>
 #include <vector>
 
-#include "local-notebook-core/model.hpp"
+#include "local_notebook/core/model.hpp"
 #include "store/database.hpp"
 
 // Thin facades over `database`. They exist so callers speak in terms of sessions

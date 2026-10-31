@@ -2,7 +2,7 @@
 
 #include <QWidget>
 
-#include "local-notebook-core/model.hpp"
+#include "local_notebook/core/model.hpp"
 
 class QComboBox;
 class QEvent;

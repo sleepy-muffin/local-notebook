@@ -3,7 +3,7 @@
 // The flag is stored in the session row and must keep the session out of both
 // paths the assistant trigger uses: the cross-session watermark query and the
 // direct scan in assistant_trigger_reached().
-#include "local-notebook-core/interface.hpp"
+#include "local_notebook/core/interface.hpp"
 
 #include <filesystem>
 #include <iostream>

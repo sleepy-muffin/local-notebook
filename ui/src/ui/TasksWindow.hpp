@@ -8,7 +8,7 @@
 #include <functional>
 #include <vector>
 
-#include "local-notebook-core/generation_task.hpp"
+#include "local_notebook/core/generation_task.hpp"
 
 class QEvent;
 class QLabel;

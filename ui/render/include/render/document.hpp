@@ -49,6 +49,9 @@ struct MessageMeta {
   std::uint32_t id = 0;
   std::u16string time;
   std::u16string tokens;
+  // A quiet line drawn in the reserved strip under the message (e.g. whether the
+  // message is still inside the verbatim window). Empty means none.
+  std::u16string status;
   bool editable = false;
   bool streaming = false;
   std::u16string raw;

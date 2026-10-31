@@ -11,9 +11,9 @@
 
 #include <boost/json/object.hpp>
 
-#include "local-notebook-core/generation_task.hpp"
-#include "local-notebook-core/model.hpp"
-#include "local-notebook-core/summary.hpp"
+#include "local_notebook/core/generation_task.hpp"
+#include "local_notebook/core/model.hpp"
+#include "local_notebook/core/summary.hpp"
 #include "net/protocol.hpp"
 #include "net/tools.hpp"
 

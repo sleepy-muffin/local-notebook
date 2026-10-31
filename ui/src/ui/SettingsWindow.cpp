@@ -34,8 +34,8 @@
 #include <string>
 #include <utility>
 
-#include "local-notebook-core/interface.hpp"
-#include "local-notebook-core/generation_task.hpp"
+#include "local_notebook/core/interface.hpp"
+#include "local_notebook/core/generation_task.hpp"
 #include "support/i18n.hpp"
 #include "ui/AssistantForm.hpp"
 #include "ui/BackgroundWidget.hpp"

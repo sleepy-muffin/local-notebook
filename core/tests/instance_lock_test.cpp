@@ -3,7 +3,7 @@
 // Two processes may not have the same assistant open at once. The guard is an
 // operating-system lock (flock/LockFileEx), not a pid check, so a lock file left
 // behind by a crashed instance must never block the next one.
-#include "local-notebook-core/interface.hpp"
+#include "local_notebook/core/interface.hpp"
 
 #include <filesystem>
 #include <fstream>

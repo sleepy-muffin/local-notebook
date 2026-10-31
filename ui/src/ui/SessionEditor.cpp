@@ -26,9 +26,9 @@
 #include <optional>
 #include <string>
 
-#include "local-notebook-core/interface.hpp"
-#include "local-notebook-core/generation_task.hpp"
-#include "local-notebook-core/model.hpp"
+#include "local_notebook/core/interface.hpp"
+#include "local_notebook/core/generation_task.hpp"
+#include "local_notebook/core/model.hpp"
 #include "support/i18n.hpp"
 #include "ui/BackgroundWidget.hpp"
 #include "ui/ConversationView.hpp"
@@ -78,12 +78,11 @@ struct MidwayPreset {
  *
  * response_budget_ midturn_input_budget_
  */
+
+// summary:
+// trigger (the input bound and verbatim window), keep (the reading budget of
+// one summarization batch), summary budget;
 constexpr SummaryPreset kSummaryPresets[] = {
-    // summary:
-    // trigger (the input bound), keep (the level it merges down to), summary;
-    // response; TODO, response is extremely tight for a reasoning model with thinking mode on
-    //           A usable value for them is usually above 16000, much larger than a non-reasoning model.
-    // tool: cumulative input produced midway (tool results fed back)
     {"Instant",      1000,   250,   250},
     {"Very Light",   2000,   500,  1000},
     {"Light",        4000,  1000,  1200},
@@ -92,12 +91,9 @@ constexpr SummaryPreset kSummaryPresets[] = {
     {"Very Heavy",  48000,  8000,  8000},
     {"Ultra",       64000, 16000, 16000},
 };
+// response; TODO, response is extremely tight for a reasoning model with thinking mode on
+//           A usable value for them is usually above 16000, much larger than a non-reasoning model.
 constexpr BudgetPreset kBudgetPresets[] = {
-    // summary:
-    // trigger (the input bound), keep (the level it merges down to), summary;
-    // response; TODO, response is extremely tight for a reasoning model with thinking mode on
-    //           A usable value for them is usually above 16000, much larger than a non-reasoning model.
-    // tool: cumulative input produced midway (tool results fed back)
     {"Instant",                    500},
     {"Very Light",                1000},
     {"Light",                     2000},
@@ -108,12 +104,8 @@ constexpr BudgetPreset kBudgetPresets[] = {
     {"Heavy (Reasoning)",        32000},
     {"Very Heavy (Reasoning)",   64000},
 };
+// tool: cumulative input produced midway (tool results fed back)
 constexpr MidwayPreset kMidwayPresets[] = {
-    // summary:
-    // trigger (the input bound), keep (the level it merges down to), summary;
-    // response; TODO, response is extremely tight for a reasoning model with thinking mode on
-    //           A usable value for them is usually above 16000, much larger than a non-reasoning model.
-    // tool: cumulative input produced midway (tool results fed back)
     {"Very Light",  20000},
     {"Light",       50000},
     {"Balanced",    80000},
@@ -542,14 +534,15 @@ QWidget* SessionEditor::build_summary_tab() {
     const lnb::Session defaults;
     auto* grid = make_budget_grid();
 
-    // A summarization setting decides *when* the transcript is merged and how
-    // much stays verbatim.
+    // The trigger decides when the transcript is merged and which newest
+    // messages stay verbatim; the second field is only the read budget of one
+    // summarization batch.
     summary_trigger_ = add_budget_spin(
         content, grid, 0, 0, trs("Summarization trigger"),
         static_cast<int>(defaults.summary_trigger_tokens_), 256, 2'000'000'000, 256
     );
     summary_keep_ = add_budget_spin(
-        content, grid, 0, 1, trs("Retained tokens"),
+        content, grid, 0, 1, trs("Summarization content"),
         static_cast<int>(defaults.summary_keep_tokens_), 128, 2'000'000'000, 128
     );
     summary_budget_ = add_budget_spin(
@@ -574,11 +567,12 @@ QWidget* SessionEditor::build_summary_tab() {
   docs->setText(trs(
       "<b>How conversation summarization works</b><br>"
       "Conversation summarization is a rolling record of older turns. A request "
-      "carries the system prompt plus the transcript; when that reaches "
-      "<i>Summarization trigger</i>, the older messages are merged into the "
-      "summary, trimming the transcript to the newest <i>Retained tokens</i>. Keep "
-      "the retained level well below the trigger, or the merge would run again on "
-      "the next turn. The message that crosses the boundary is kept whole.<br><br>"
+      "carries the system prompt plus the transcript, always the newest messages "
+      "that fit <i>Summarization trigger</i>. When the new transcript since the "
+      "last update reaches that trigger, the summarizer reads from the first new "
+      "message up to the newest <i>Summarization content</i> tokens and merges "
+      "them into the summary. Keep it below the trigger so there is always "
+      "something to fold. The message that crosses a boundary is kept whole.<br><br>"
       "The watermarks above are <b>bookkeeping only</b>: they count how much is new "
       "so the trigger can fire. They never decide what is sent or what is read — a "
       "summarization update always reads by recency, so pressing <b>Update "
@@ -819,34 +813,18 @@ void SessionEditor::populate_reasoning(
 }
 
 void SessionEditor::save_session() {
-  // Validate before anything is written. The two budgets are related: the reply
-  // must fit inside the input bound, and the retained level must sit below the
-  // trigger, or the summarization update would fire again the moment it
-  // finished. A violated rule keeps the window open so the values can be
-  // corrected.
+  // The summarisation must leave something between the watermark frontier and
+  // the content boundary, so the content limit has to sit below the trigger.
   const std::size_t trigger = static_cast<std::size_t>(summary_trigger_->value());
   const std::size_t keep = static_cast<std::size_t>(summary_keep_->value());
-  const std::size_t response = static_cast<std::size_t>(response_budget_->value());
-
-  // if (response > trigger) {
-  //   QMessageBox::warning(
-  //       this, trs("Invalid Budget"),
-  //       trs(
-  //           "The response budget must not be greater than the summarization "
-  //           "trigger. A reply could otherwise never complete before the "
-  //           "conversation is merged again."
-  //       )
-  //   );
-  //   return;
-  // }
 
   if (keep >= trigger) {
     QMessageBox::warning(
         this, trs("Invalid Budget"),
         trs(
-            "The retained-token level must be smaller than the summarization "
-            "trigger. Otherwise the summarization update would be triggered again "
-            "immediately after it runs."
+            "The summarization content must be smaller than the summarization "
+            "trigger. Otherwise an update would find nothing new to fold, and the "
+            "trigger would fire again immediately."
         )
     );
     return;

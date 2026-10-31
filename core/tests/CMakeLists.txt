@@ -185,3 +185,17 @@ add_test(
   NAME generation-task-mirror
   COMMAND generation-task-mirror-test
 )
+
+add_executable(
+  message-coverage-test
+  message_coverage_test.cpp
+)
+
+target_link_libraries(
+  message-coverage-test
+  PRIVATE
+    local-notebook-core
+    Threads::Threads
+)
+
+add_test(NAME message-coverage COMMAND message-coverage-test)

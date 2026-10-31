@@ -7,7 +7,7 @@
 // display server.
 #include "ui/ConversationController.hpp"
 
-#include "local-notebook-core/interface.hpp"
+#include "local_notebook/core/interface.hpp"
 
 #include <boost/asio.hpp>
 
@@ -251,6 +251,62 @@ int main() {
 
   // One on_changed for the persisted prompt, one when the worker finishes.
   expect(changed >= 2, "the view should be told to reload after the turn");
+
+  // A shared assistant pass must never be adopted as this session's task. If it
+  // were, the Tasks window would list a phantom session row mirroring the
+  // assistant's numbers, even though no session task may run while it folds.
+  {
+    // Make the assistant trigger due while keeping this session's own trigger far
+    // away, so summarize() resolves to the shared assistant pass.
+    lnb::Session stored = api.session(session_id).value_or(lnb::Session{});
+    stored.summary_trigger_tokens_ = 1'000'000;
+    api.save_session(stored);
+
+    lnb::Assistant due = api.assistant();
+    due.summary_trigger_tokens_ = 1;
+    api.set_assistant(due);
+
+    expect(
+        api.has_session_summary_trigger_met(session_id) ==
+            lnb::api::error_code::ERR_ASSISTANT_MEMORY_TRIGGER_HAS_MET,
+        "the assistant trigger should be the due one"
+    );
+
+    const std::shared_ptr<lnb::GenerationTask> own_task = controller.task();
+    expect(own_task != nullptr, "the finished turn should still be retained");
+
+    controller.summarize();
+
+    expect(
+        api.assistant_task() != nullptr, "the assistant pass should start"
+    );
+    expect(
+        controller.task() == own_task,
+        "the session must keep its own task, not adopt the assistant pass"
+    );
+    expect(
+        controller.task() != api.assistant_task(),
+        "the shared assistant pass must not become the session's task"
+    );
+    expect(
+        controller.last_snapshot().status !=
+            lnb::GenerationTask::Status::RUNNING,
+        "the session must not report the assistant pass as its own running task"
+    );
+    expect(
+        !controller.busy(),
+        "the session must not look busy while the assistant folds"
+    );
+
+    api.cancel_assistant();
+    api.wait_for_generation();
+    controller.poll();
+
+    expect(
+        controller.task() == own_task,
+        "a finished assistant pass must not be retained as the session's task"
+    );
+  }
 
   if (failures != 0) {
     std::cerr << failures << " expectation(s) failed\n";

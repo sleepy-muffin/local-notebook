@@ -2,7 +2,7 @@
 
 #include <string>
 
-#include "local-notebook-core/model.hpp"
+#include "local_notebook/core/model.hpp"
 
 namespace lnb {
 

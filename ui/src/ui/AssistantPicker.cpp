@@ -27,8 +27,8 @@
 #include <algorithm>
 #include <string>
 
-#include "local-notebook-core/interface.hpp"
-#include "local-notebook-core/model.hpp"
+#include "local_notebook/core/interface.hpp"
+#include "local_notebook/core/model.hpp"
 #include "shark/log.hpp"
 #include "settings/settings.hpp"
 #include "support/i18n.hpp"

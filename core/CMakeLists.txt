@@ -57,6 +57,7 @@ add_library(${PROJECT_NAME}
         include/local-notebook-core/interface.hpp
         include/local-notebook-core/model.hpp
         include/local-notebook-core/summary.hpp
+        include/local-notebook-core/context.hpp
 
         src/interface.cpp
 
@@ -64,14 +65,12 @@ add_library(${PROJECT_NAME}
         src/utils/util.cpp
         src/utils/lock.hpp
         src/utils/lock.cpp
+        src/utils/context.cpp
 
         src/store/database.hpp
         src/store/database.cpp
         src/store/managers.hpp
         src/store/managers.cpp
-
-        src/context/context.hpp
-        src/context/context.cpp
 
         src/net/protocol.hpp
         src/net/protocol.cpp

@@ -810,6 +810,50 @@ struct TranscriptCanvas::Private {
     return result;
   }
 
+  // Draws the quiet per-message status line into the reserved strip under the
+  // message. It sits on the side opposite the hover actions, so the two never
+  // collide, and it is painted (not a widget) so it scrolls with the document.
+  void paint_message_status(QPainter& painter) {
+    const render::Document& document = layout.document();
+    const std::vector<render::MessageGeom>& geometry = layout.message_geometry();
+
+    QFont font = chat_font();
+
+    if (font.pointSizeF() > 0.0) {
+      font.setPointSizeF(std::max(7.0, font.pointSizeF() * 0.8));
+    } else if (font.pixelSize() > 0) {
+      font.setPixelSize(std::max(9, static_cast<int>(font.pixelSize() * 0.8)));
+    }
+
+    painter.save();
+    painter.setFont(font);
+    painter.setPen(theme().colors.text_muted);
+
+    for (std::size_t i = 0; i < document.messages.size() && i < geometry.size(); ++i) {
+      const render::MessageMeta& meta = document.messages[i];
+
+      if (meta.status.empty()) {
+        continue;
+      }
+
+      QRectF strip = to_rect(geometry[i].actions);
+      strip.setLeft(strip.left() + kBodySidePadding);
+      strip.setRight(strip.right() - kBodySidePadding);
+
+      if (strip.width() <= 0.0) {
+        continue;
+      }
+
+      const bool right_aligned = meta.role == render::Role::Assistant;
+      const Qt::Alignment align = (right_aligned ? Qt::AlignRight : Qt::AlignLeft) |
+                                  Qt::AlignVCenter;
+
+      painter.drawText(strip, align, qstring(meta.status));
+    }
+
+    painter.restore();
+  }
+
   void update_scrollbars() {
     auto* bar = q->verticalScrollBar();
     const int viewport_height = q->viewport()->height();
@@ -1364,6 +1408,7 @@ void TranscriptCanvas::paintEvent(QPaintEvent* event) {
 
   QtCanvasAdapter canvas(painter, d_->backend);
   d_->layout.paint(canvas, clip, d_->selection);
+  d_->paint_message_status(painter);
 }
 
 void TranscriptCanvas::resizeEvent(QResizeEvent* event) {

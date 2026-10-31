@@ -2,7 +2,7 @@
 // diagnostic trace, even when it sends nothing or the send fails. Before this
 // was fixed the task completed with an empty log, which the Tasks window renders
 // as "This task produced no log.".
-#include "local-notebook-core/interface.hpp"
+#include "local_notebook/core/interface.hpp"
 
 #include <chrono>
 #include <filesystem>

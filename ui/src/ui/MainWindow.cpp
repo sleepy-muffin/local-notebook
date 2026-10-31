@@ -26,7 +26,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "local-notebook-core/interface.hpp"
+#include "local_notebook/core/interface.hpp"
 #include "settings/settings.hpp"
 #include "support/i18n.hpp"
 #include "ui/ConversationView.hpp"

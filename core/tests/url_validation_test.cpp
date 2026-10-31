@@ -3,7 +3,7 @@
 // destroyed temporary; reading scheme()/host()/path() then returned garbage and
 // valid URLs could be rejected. A sanitizer build flags that read immediately,
 // and the assertions below pin the accepted and rejected shapes.
-#include "local-notebook-core/interface.hpp"
+#include "local_notebook/core/interface.hpp"
 
 #include <iostream>
 #include <string>

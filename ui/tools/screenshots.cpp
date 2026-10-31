@@ -8,9 +8,9 @@
 #include <iostream>
 #include <string>
 
-#include "local-notebook-core/interface.hpp"
-#include "local-notebook-core/model.hpp"
-#include "local-notebook-core/summary.hpp"
+#include "local_notebook/core/interface.hpp"
+#include "local_notebook/core/model.hpp"
+#include "local_notebook/core/summary.hpp"
 #include "settings/settings.hpp"
 #include "support/i18n.hpp"
 #include "ui/MainWindow.hpp"
@@ -196,8 +196,8 @@ int main(int argc, char** argv) {
   );
 
   // The featured session is created last, so its newest message is what the
-  // main window opens. Its retained window is deliberately small, which gives
-  // the summarisation review below a real overflow to fold.
+  // main window opens. Its verbatim window (the trigger) is deliberately small,
+  // which gives the summarisation review below a real overflow to fold.
   lnb::Session design;
   design.title_ = "Summarisation design";
   design.custom_instructions_ =
@@ -206,7 +206,8 @@ int main(int argc, char** argv) {
   design.summary_ =
       "The session is designing a two-level memory: a session summarization and a "
       "shared assistant memory. Watermarks are bookkeeping only.";
-  design.summary_keep_tokens_ = 120;
+  design.summary_trigger_tokens_ = 160;
+  design.summary_keep_tokens_ = 80;
 
   const std::uint32_t design_id = api.create_session(design);
   seed_design_session(api, design_id);

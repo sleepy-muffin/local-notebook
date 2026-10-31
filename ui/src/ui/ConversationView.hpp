@@ -116,8 +116,10 @@ private:
   // Builds the renderer document for the messages in the current window.
   [[nodiscard]] render::Document build_document() const;
 
-  // Appends one stored message (its metadata and styled blocks) to `document`.
-  void append_rendered_message(render::Document& document, const lnb::Message& message) const;
+  // Appends one stored message (its metadata, quiet status line and styled
+  // blocks) to `document`.
+  void append_rendered_message(
+      render::Document& document, const lnb::Message& message, std::u16string status) const;
 
   // Reveals one more page of older messages above the current window. The
   // canvas restores the reader's place, so paging never jumps.

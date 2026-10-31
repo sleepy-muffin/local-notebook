@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "local-notebook-core/model.hpp"
+#include "local_notebook/core/model.hpp"
 
 class QComboBox;
 class QCheckBox;
