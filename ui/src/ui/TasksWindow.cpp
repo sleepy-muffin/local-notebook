@@ -1,17 +1,18 @@
 #include "ui/TasksWindow.hpp"
 
+#include <QClipboard>
 #include <QEvent>
-#include <QFontDatabase>
 #include <QFrame>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMouseEvent>
-#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QShowEvent>
 #include <QStyle>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <QVariant>
 
@@ -67,23 +68,222 @@ QString budget_name(lnb::core::GenerationTask::BudgetKind kind) {
   return {};
 }
 
+// -----------------------------------------------------------------------------
+// Log parsing
+// -----------------------------------------------------------------------------
+
+// How much of a long line a row previews. Enough to tell entries apart at a
+// glance; the full text is one Copy away.
+constexpr int kPreviewChars = 320;
+
+// The longest log the list renders, newest last. The task log itself is bounded,
+// but a turn that used many tools can still produce thousands of entries, and one
+// widget per entry would be slow to build for no benefit when only the tail of a
+// finished turn is usually inspected.
+constexpr std::size_t kMaxLogRows = 400;
+
+// True for a line that starts a new log entry, so a multi-line body (a tool
+// result, the hidden reasoning) knows where it ends.
+bool starts_entry(const QString& line) {
+  return line.startsWith(QStringLiteral("[request ")) ||
+         line.startsWith(QStringLiteral("[response ")) ||
+         line.startsWith(QStringLiteral("tool call: ")) ||
+         line.startsWith(QStringLiteral("tool result: ")) ||
+         line.startsWith(QStringLiteral("generate_reply round=")) ||
+         line.startsWith(QStringLiteral("[assistant-summary]")) ||
+         line.startsWith(QStringLiteral("--- hidden reasoning ---"));
+}
+
+// A single-line, length-capped excerpt of `text`, for the preview line.
+QString snippet(QString text) {
+  text = text.trimmed();
+
+  if (text.size() <= kPreviewChars) {
+    return text;
+  }
+
+  return text.left(kPreviewChars).trimmed() + QStringLiteral("…");
+}
+
+QString character_count(const QString& text) {
+  return trs("%1 characters").arg(static_cast<qulonglong>(text.size()));
+}
+
+// Reads a top-level string field out of a request body. Only used to label a
+// request row with the model it was sent to; the body itself is never shown.
+QString json_string_field(const QString& json, const QString& key) {
+  const QString needle = QStringLiteral("\"%1\"").arg(key);
+  int at = json.indexOf(needle);
+
+  if (at < 0) {
+    return {};
+  }
+
+  at = json.indexOf(QLatin1Char(':'), at + needle.size());
+
+  if (at < 0) {
+    return {};
+  }
+
+  at = json.indexOf(QLatin1Char('"'), at + 1);
+  const int end = at < 0 ? -1 : json.indexOf(QLatin1Char('"'), at + 1);
+
+  if (at < 0 || end < 0) {
+    return {};
+  }
+
+  return json.mid(at + 1, end - at - 1);
+}
+
+// Splits the diagnostic log into readable entries. The format, written by the
+// network layer, is one header line per item, with an optional body following:
+//
+//   [request chat] POST https://…
+//   {"model": …}
+//   [response chat] finish_reason=stop tool_calls=0
+//   tool call: read_file({"path": "…"})
+//   tool result: read_file -> <file contents>
+//   --- hidden reasoning ---
+//   <reasoning>
+std::vector<TaskLogEntry> parse_log(const QString& text) {
+  const QStringList lines = text.split(QLatin1Char('\n'));
+  const int count = static_cast<int>(lines.size());
+
+  std::vector<TaskLogEntry> entries;
+
+  for (int i = 0; i < count; ++i) {
+    const QString line = lines[i];
+
+    if (line.trimmed().isEmpty()) {
+      continue;
+    }
+
+    TaskLogEntry entry;
+
+    if (line.startsWith(QStringLiteral("[request "))) {
+      const int sep = line.indexOf(QStringLiteral("] POST "));
+
+      entry.kind = TaskLogEntry::Kind::Request;
+      entry.badge = trs("Request");
+      entry.title = sep > 0 ? line.mid(9, sep - 9) : QString();
+
+      QString body;
+
+      while (i + 1 < count && !lines[i + 1].trimmed().isEmpty() &&
+             !starts_entry(lines[i + 1].trimmed()) && !lines[i + 1].startsWith(QLatin1Char('['))) {
+        if (!body.isEmpty()) {
+          body += QLatin1Char('\n');
+        }
+
+        body += lines[++i];
+      }
+
+      entry.raw = line + (body.isEmpty() ? QString() : QLatin1Char('\n') + body);
+      entry.detail = character_count(body);
+
+      const QString endpoint = sep > 0 ? line.mid(sep + 2) : QString();
+      const QString model = json_string_field(body, QStringLiteral("model"));
+
+      entry.preview = endpoint;
+
+      if (!model.isEmpty()) {
+        entry.preview += (entry.preview.isEmpty() ? QString() : QStringLiteral("\n")) +
+                         trs("Model: %1").arg(model);
+      }
+    } else if (line.startsWith(QStringLiteral("[response "))) {
+      const int sep = line.indexOf(QLatin1Char(']'));
+
+      entry.kind = TaskLogEntry::Kind::Response;
+      entry.badge = trs("Response");
+      entry.title = sep > 0 ? line.mid(10, sep - 10) : QString();
+      entry.preview = sep > 0 ? line.mid(sep + 1).trimmed() : line;
+      entry.raw = line;
+    } else if (line.startsWith(QStringLiteral("tool call: "))) {
+      const QString rest = line.mid(11);
+      const int open = rest.indexOf(QLatin1Char('('));
+
+      entry.kind = TaskLogEntry::Kind::ToolCall;
+      entry.badge = trs("Tool call");
+      entry.title = open > 0 ? rest.left(open) : rest;
+      entry.preview = snippet(open >= 0 ? rest.mid(open + 1) : QString());
+      entry.raw = line;
+    } else if (line.startsWith(QStringLiteral("tool result: "))) {
+      const QString rest = line.mid(13);
+      const int arrow = rest.indexOf(QStringLiteral(" -> "));
+
+      entry.kind = TaskLogEntry::Kind::ToolResult;
+      entry.badge = trs("Tool result");
+      entry.title = arrow > 0 ? rest.left(arrow) : rest;
+
+      QString output = arrow > 0 ? rest.mid(arrow + 4) : QString();
+      QString raw = line;
+
+      while (i + 1 < count && !starts_entry(lines[i + 1].trimmed())) {
+        raw += QLatin1Char('\n') + lines[++i];
+        output += QLatin1Char('\n') + lines[i];
+      }
+
+      entry.raw = raw;
+      entry.detail = character_count(output.trimmed());
+      entry.preview = snippet(output);
+    } else if (line.startsWith(QStringLiteral("--- hidden reasoning ---"))) {
+      entry.kind = TaskLogEntry::Kind::Reasoning;
+      entry.badge = trs("Reasoning");
+
+      QString reasoning;
+
+      while (i + 1 < count) {
+        reasoning += QLatin1Char('\n') + lines[++i];
+      }
+
+      reasoning = reasoning.trimmed();
+      entry.raw = line + QLatin1Char('\n') + reasoning;
+      entry.detail = character_count(reasoning);
+      entry.preview = snippet(reasoning);
+    } else if (line.startsWith(QStringLiteral("generate_reply round="))) {
+      entry.kind = TaskLogEntry::Kind::Note;
+      entry.badge = trs("Round");
+      entry.title = line.mid(QStringLiteral("generate_reply round=").size()).trimmed();
+      entry.raw = line;
+    } else {
+      entry.kind = TaskLogEntry::Kind::Note;
+      entry.badge = trs("Log");
+      entry.title = line;
+      entry.raw = line;
+    }
+
+    entries.push_back(std::move(entry));
+  }
+
+  if (entries.size() > kMaxLogRows) {
+    entries.erase(entries.begin(), entries.end() - static_cast<std::ptrdiff_t>(kMaxLogRows));
+  }
+
+  return entries;
+}
+
 } // namespace
 
 TasksWindow::TasksWindow(QWidget* parent) : QDialog(parent) {
   setObjectName(QStringLiteral("TasksWindow"));
   setWindowTitle(trs("Tasks"));
   setModal(false);
-  resize(920, 560);
-  setMinimumSize(560, 320);
+  resize(1040, 620);
+  setMinimumSize(640, 360);
   setFont(ui_font());
 
   auto* root = new QVBoxLayout(this);
   root->setContentsMargins(0, 0, 0, 0);
   root->setSpacing(0);
 
-  auto* header = new QWidget(this);
+  // The header mirrors the main window's title bar: the page title, a quiet
+  // subtitle, and a hairline underneath.
+  auto* header = new QFrame(this);
+  header->setObjectName(QStringLiteral("TaskHeader"));
+  header->setAttribute(Qt::WA_StyledBackground, true);
+
   auto* header_layout = new QVBoxLayout(header);
-  header_layout->setContentsMargins(20, 16, 20, 12);
+  header_layout->setContentsMargins(20, 14, 20, 12);
   header_layout->setSpacing(2);
 
   auto* title = new QLabel(trs("Tasks"), header);
@@ -104,14 +304,24 @@ TasksWindow::TasksWindow(QWidget* parent) : QDialog(parent) {
   header_layout->addWidget(subtitle);
   root->addWidget(header);
 
-  // Two columns, like the main window: the task list on the left and the selected
-  // task's log on the right. The log is a pane, never a separate dialog, so the
-  // list stays visible while it is being read.
+  // Two columns, like the main window's sidebar and transcript: a fixed-width
+  // task list on the left and the selected task's log on the right. The log is a
+  // pane, never a separate dialog, so the list stays visible while it is read.
   auto* body = new QHBoxLayout();
   body->setContentsMargins(0, 0, 0, 0);
   body->setSpacing(0);
 
-  auto* scroll = new QScrollArea(this);
+  // The list side is a fixed-width column with its own surface, exactly like the
+  // main window's sidebar, so the two windows read as the same chrome.
+  list_pane_ = new QWidget(this);
+  list_pane_->setObjectName(QStringLiteral("TaskListPane"));
+  list_pane_->setAttribute(Qt::WA_StyledBackground, true);
+
+  auto* pane_layout = new QVBoxLayout(list_pane_);
+  pane_layout->setContentsMargins(0, 0, 0, 0);
+  pane_layout->setSpacing(0);
+
+  auto* scroll = new QScrollArea(list_pane_);
   scroll->setWidgetResizable(true);
   scroll->setFrameShape(QFrame::NoFrame);
   scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -119,43 +329,82 @@ TasksWindow::TasksWindow(QWidget* parent) : QDialog(parent) {
 
   list_ = new QWidget(scroll);
   list_layout_ = new QVBoxLayout(list_);
-  list_layout_->setContentsMargins(16, 0, 16, 16);
-  list_layout_->setSpacing(8);
+  list_layout_->setContentsMargins(10, 12, 10, 12);
+  list_layout_->setSpacing(2);
 
   empty_ = new QLabel(trs("No tasks yet."), list_);
   empty_->setObjectName(QStringLiteral("Muted"));
   empty_->setAlignment(Qt::AlignCenter);
+  empty_->setWordWrap(true);
+  empty_->setContentsMargins(8, 16, 8, 16);
   list_layout_->addWidget(empty_);
   list_layout_->addStretch(1);
 
   scroll->setWidget(list_);
-  body->addWidget(scroll, 2);
+  pane_layout->addWidget(scroll, 1);
+  body->addWidget(list_pane_, 0);
 
-  body->addWidget(v_separator(this));
-
+  // The log side scrolls on the window canvas.
   auto* log_pane = new QWidget(this);
   log_pane->setObjectName(QStringLiteral("TaskLogPane"));
   auto* log_layout = new QVBoxLayout(log_pane);
-  log_layout->setContentsMargins(16, 0, 16, 16);
-  log_layout->setSpacing(8);
+  log_layout->setContentsMargins(20, 14, 20, 14);
+  log_layout->setSpacing(10);
+
+  auto* log_header = new QHBoxLayout();
+  log_header->setContentsMargins(0, 0, 0, 0);
+  log_header->setSpacing(8);
 
   log_title_ = new QLabel(log_pane);
   log_title_->setObjectName(QStringLiteral("TaskLogTitle"));
   apply_derived_font(log_title_, 0.0, true);
 
-  // Raw diagnostic text: never rendered as Markdown. NoWrap keeps the request
-  // bodies readable exactly as they were sent.
-  log_view_ = new QPlainTextEdit(log_pane);
-  log_view_->setObjectName(QStringLiteral("TaskLog"));
-  log_view_->setReadOnly(true);
-  log_view_->setLineWrapMode(QPlainTextEdit::NoWrap);
-  log_view_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-  log_view_->setPlaceholderText(trs("Select a task to read its log."));
+  // Copies the whole log, so a finished task can be pasted into an editor in one
+  // go. Hidden while nothing is selected or the selected task logged nothing.
+  log_copy_ = new QToolButton(log_pane);
+  log_copy_->setObjectName(QStringLiteral("LogCopy"));
+  log_copy_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+  log_copy_->setIconSize(QSize(15, 15));
+  log_copy_->setAutoRaise(true);
+  log_copy_->setCursor(Qt::PointingHandCursor);
+  log_copy_->setFocusPolicy(Qt::NoFocus);
+  log_copy_->setToolTip(trs("Copy log"));
+  log_copy_->setVisible(false);
 
-  log_layout->addWidget(log_title_);
-  log_layout->addWidget(log_view_, 1);
+  QObject::connect(log_copy_, &QToolButton::clicked, this, [this]() {
+    if (!log_text_.isEmpty()) {
+      QGuiApplication::clipboard()->setText(log_text_);
+    }
+  });
 
-  body->addWidget(log_pane, 3);
+  log_header->addWidget(log_title_);
+  log_header->addStretch(1);
+  log_header->addWidget(log_copy_);
+
+  log_scroll_ = new QScrollArea(log_pane);
+  log_scroll_->setWidgetResizable(true);
+  log_scroll_->setFrameShape(QFrame::NoFrame);
+  log_scroll_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  install_scroll_bars(log_scroll_, ScrollBarTrack::Window);
+
+  log_list_ = new QWidget(log_scroll_);
+  log_list_layout_ = new QVBoxLayout(log_list_);
+  log_list_layout_->setContentsMargins(0, 0, 0, 0);
+  log_list_layout_->setSpacing(0);
+
+  log_placeholder_ = new QLabel(trs("Select a task to read its log."), log_list_);
+  log_placeholder_->setObjectName(QStringLiteral("Muted"));
+  log_placeholder_->setWordWrap(true);
+  log_placeholder_->setContentsMargins(0, 8, 0, 8);
+  log_list_layout_->addWidget(log_placeholder_);
+  log_list_layout_->addStretch(1);
+
+  log_scroll_->setWidget(log_list_);
+
+  log_layout->addLayout(log_header);
+  log_layout->addWidget(log_scroll_, 1);
+
+  body->addWidget(log_pane, 1);
 
   root->addLayout(body, 1);
 
@@ -197,19 +446,125 @@ void TasksWindow::select_row(std::size_t index) {
     return;
   }
 
+  if (selected_ != index) {
+    log_shown_ = false;
+  }
+
   selected_ = index;
   update_selection_style();
   refresh_log();
 }
 
-void TasksWindow::refresh_log() {
-  if (log_view_ == nullptr) {
-    return;
+void TasksWindow::clear_log_rows() {
+  for (const LogRow& row : log_rows_) {
+    if (row.widget != nullptr) {
+      log_list_layout_->removeWidget(row.widget);
+      row.widget->deleteLater();
+    }
   }
 
+  log_rows_.clear();
+  log_entries_.clear();
+}
+
+void TasksWindow::rebuild_log_rows(const QString& text) {
+  clear_log_rows();
+  log_entries_ = parse_log(text);
+
+  for (const TaskLogEntry& entry : log_entries_) {
+    auto* row = new QFrame(log_list_);
+    row->setObjectName(QStringLiteral("LogEntry"));
+    row->setAttribute(Qt::WA_StyledBackground, true);
+
+    auto* outer = new QHBoxLayout(row);
+    outer->setContentsMargins(2, 9, 2, 9);
+    outer->setSpacing(10);
+
+    auto* column = new QVBoxLayout();
+    column->setContentsMargins(0, 0, 0, 0);
+    column->setSpacing(3);
+
+    auto* heading = new QHBoxLayout();
+    heading->setContentsMargins(0, 0, 0, 0);
+    heading->setSpacing(8);
+
+    auto* badge = new QLabel(entry.badge, row);
+    badge->setObjectName(QStringLiteral("LogBadge"));
+    apply_derived_font(badge, -0.5, true);
+
+    auto* row_title = new QLabel(entry.title, row);
+    row_title->setObjectName(QStringLiteral("CurrentName"));
+    row_title->setWordWrap(true);
+    row_title->setVisible(!entry.title.isEmpty());
+    row_title->setTextInteractionFlags(Qt::TextSelectableByMouse);
+
+    auto* row_detail = new QLabel(entry.detail, row);
+    row_detail->setObjectName(QStringLiteral("Muted"));
+    row_detail->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    row_detail->setVisible(!entry.detail.isEmpty());
+
+    heading->addWidget(badge);
+    heading->addWidget(row_title, 1);
+    heading->addWidget(row_detail);
+
+    auto* row_preview = new QLabel(entry.preview, row);
+    row_preview->setObjectName(QStringLiteral("LogPreview"));
+    row_preview->setWordWrap(true);
+    row_preview->setVisible(!entry.preview.isEmpty());
+    row_preview->setTextInteractionFlags(Qt::TextSelectableByMouse);
+
+    column->addLayout(heading);
+    column->addWidget(row_preview);
+
+    // Every entry copies its own exact text, so a request body that is never
+    // shown inline is still one click away from an editor.
+    auto* copy = new QToolButton(row);
+    copy->setObjectName(QStringLiteral("LogCopy"));
+    copy->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    copy->setIconSize(QSize(15, 15));
+    copy->setAutoRaise(true);
+    copy->setCursor(Qt::PointingHandCursor);
+    copy->setFocusPolicy(Qt::NoFocus);
+    copy->setToolTip(trs("Copy"));
+
+    QIcon artwork = resource_icon(
+        QStringLiteral("copy"), theme().colors.text_muted, theme().colors.text_muted
+    );
+
+    if (artwork.isNull()) {
+      artwork = style()->standardIcon(QStyle::SP_DialogSaveButton);
+    }
+
+    copy->setIcon(artwork);
+
+    const QString raw = entry.raw;
+    QObject::connect(copy, &QToolButton::clicked, this, [raw]() {
+      QGuiApplication::clipboard()->setText(raw);
+    });
+
+    outer->addLayout(column, 1);
+    outer->addWidget(copy, 0, Qt::AlignTop);
+
+    // Insert before the placeholder and the trailing stretch.
+    log_list_layout_->insertWidget(static_cast<int>(log_rows_.size() + 1), row);
+    log_rows_.push_back(LogRow{row, row_title, row_detail, row_preview});
+  }
+
+  const bool empty = log_entries_.empty();
+  log_placeholder_->setVisible(empty);
+  log_placeholder_->setText(trs("This task produced no log."));
+  log_copy_->setVisible(!text.isEmpty());
+}
+
+void TasksWindow::refresh_log() {
   if (selected_ >= entries_.size()) {
     log_title_->clear();
-    log_view_->clear();
+    clear_log_rows();
+    log_placeholder_->setText(trs("Select a task to read its log."));
+    log_placeholder_->setVisible(true);
+    log_copy_->setVisible(false);
+    log_text_.clear();
+    log_shown_ = false;
     return;
   }
 
@@ -221,22 +576,24 @@ void TasksWindow::refresh_log() {
 
   const QString log =
       log_provider_ != nullptr ? log_provider_(entry.id) : QString();
-  const QString text = log.isEmpty() ? trs("This task produced no log.") : log;
 
-  // The window refreshes on every poll tick, but rewriting identical text would
-  // reset the reader's scroll position for nothing.
-  if (text == log_view_->toPlainText()) {
+  // The window refreshes on every poll tick, but rebuilding identical rows would
+  // reset the reader's scroll position (and cost a full widget rebuild) for
+  // nothing.
+  if (log_shown_ && log == log_text_) {
     return;
   }
 
-  // Keep the reader's place: follow the tail only when it was already at the
-  // bottom, otherwise restore the previous offset after the rewrite.
-  QScrollBar* bar = log_view_->verticalScrollBar();
+  QScrollBar* bar = log_scroll_->verticalScrollBar();
   const bool at_bottom = bar->value() >= bar->maximum() - 2;
   const int offset = bar->value();
 
-  log_view_->setPlainText(text);
+  log_text_ = log;
+  log_shown_ = true;
+  rebuild_log_rows(log);
 
+  // Keep the reader's place: follow the tail only when it was already at the
+  // bottom, otherwise restore the previous offset after the rebuild.
   if (at_bottom) {
     bar->setValue(bar->maximum());
   } else {
@@ -269,25 +626,82 @@ void TasksWindow::apply_style() {
 
   const ThemeColors& c = theme().colors;
 
+  // The header matches the main window's title bar.
   sheet += QStringLiteral(
-               "QFrame#Card { background: %1; border: 1px solid %2; border-radius: 8px; }")
+               "QFrame#TaskHeader { background: %1; border: none;"
+               "  border-bottom: 1px solid %2; }")
+               .arg(colour_hex(c.window), colour_hex(c.border));
+
+  // The task list is the sidebar of this window: its own surface, a hairline
+  // separating it from the log, and no stretch of its own.
+  sheet += QStringLiteral(
+               "QWidget#TaskListPane { background: %1; border: none;"
+               "  border-right: 1px solid %2; }")
                .arg(colour_hex(c.surface), colour_hex(c.border));
-  // A clickable card: the border lifts to the accent while the pointer is over it.
-  sheet += QStringLiteral("QFrame#Card:hover { border: 1px solid %1; }")
-               .arg(colour_hex(c.accent));
-  // The card whose log is shown in the right-hand pane keeps the accent border.
-  sheet += QStringLiteral("QFrame#Card[lnbSelected=\"true\"] { border: 1px solid %1; }")
-               .arg(colour_hex(c.accent));
-  sheet += QStringLiteral("QLabel#TaskLogTitle { color: %1; }")
-               .arg(colour_hex(c.text));
+
+  // Cards read like sidebar rows: flat until hovered, brighter when selected.
+  sheet += QStringLiteral(
+               "QFrame#Card { background: transparent; border: 1px solid transparent;"
+               "  border-radius: 6px; }");
+  sheet += QStringLiteral("QFrame#Card:hover { background: %1; }")
+               .arg(colour_hex(row_hover_background()));
+  sheet += QStringLiteral(
+               "QFrame#Card[lnbSelected=\"true\"] { background: %1;"
+               "  border: 1px solid %2; }")
+               .arg(colour_hex(row_selected_background()), colour_hex(c.accent));
+
+  sheet += QStringLiteral("QLabel#TaskLogTitle { color: %1; }").arg(colour_hex(c.text));
   sheet += QStringLiteral("QLabel#TaskError { color: %1; }").arg(colour_hex(c.danger));
   sheet += QStringLiteral("QLabel#TaskState { color: %1; }").arg(colour_hex(c.accent));
 
+  // Log entries: a plain list, separated by hairlines, with the category in the
+  // accent colour. No fixed-size font and no unwrapped body: the text is the
+  // interface font, and only excerpts are shown.
+  sheet += QStringLiteral(
+               "QFrame#LogEntry { background: transparent; border: none;"
+               "  border-bottom: 1px solid %1; }")
+               .arg(colour_hex(c.border));
+  sheet += QStringLiteral("QLabel#LogBadge { color: %1; }").arg(colour_hex(c.accent));
+  sheet += QStringLiteral("QLabel#LogPreview { color: %1; }").arg(colour_hex(c.text_muted));
+  sheet += QStringLiteral(
+               "QToolButton#LogCopy { background: transparent; border: none;"
+               "  border-radius: 4px; padding: 0; }");
+  sheet += QStringLiteral("QToolButton#LogCopy:hover { background: %1; }")
+               .arg(colour_hex(row_hover_background()));
+
   setStyleSheet(sheet);
+
+  // The list column is a fixed width from the metrics, exactly like the main
+  // window's sidebar, so resizing the window only grows the log pane.
+  if (list_pane_ != nullptr) {
+    list_pane_->setFixedWidth(metrics().tasks_list_width);
+  }
 
   // The window is cached by the main window, so re-derive its fonts from the
   // current base font on every show, exactly as the settings window does.
   reapply_derived_fonts(this);
+
+  // The per-entry copy icons are recoloured from the theme, so they are refreshed
+  // here rather than only when the rows were built.
+  const QIcon copy_icon = [this]() {
+    QIcon artwork = resource_icon(
+        QStringLiteral("copy"), theme().colors.text_muted, theme().colors.text_muted
+    );
+
+    if (artwork.isNull()) {
+      artwork = style()->standardIcon(QStyle::SP_DialogSaveButton);
+    }
+
+    return artwork;
+  }();
+
+  if (log_copy_ != nullptr) {
+    log_copy_->setIcon(copy_icon);
+  }
+
+  for (QToolButton* button : log_list_->findChildren<QToolButton*>()) {
+    button->setIcon(copy_icon);
+  }
 }
 
 void TasksWindow::rebuild_rows(std::size_t count) {
@@ -311,7 +725,7 @@ void TasksWindow::rebuild_rows(std::size_t count) {
     card->installEventFilter(this);
 
     auto* outer = new QHBoxLayout(card);
-    outer->setContentsMargins(14, 10, 14, 10);
+    outer->setContentsMargins(10, 8, 10, 8);
     outer->setSpacing(10);
 
     // The text column is a layout, not a widget, so a click on any label still
@@ -329,13 +743,13 @@ void TasksWindow::rebuild_rows(std::size_t count) {
 
     auto* row_title = new QLabel(card);
     row_title->setObjectName(QStringLiteral("CurrentName"));
+    row_title->setWordWrap(true);
 
     auto* row_id = new QLabel(card);
     row_id->setObjectName(QStringLiteral("Muted"));
-    row_id->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    row_id->setAlignment(Qt::AlignRight | Qt::AlignTop);
 
-    heading->addWidget(row_title);
-    heading->addStretch(1);
+    heading->addWidget(row_title, 1);
     heading->addWidget(row_id);
 
     // Row 2: the two token indicators. When the task publishes a bound, the
@@ -344,11 +758,13 @@ void TasksWindow::rebuild_rows(std::size_t count) {
     // The tooltip names the bound so the three never read alike.
     auto* row_tokens = new QLabel(card);
     row_tokens->setObjectName(QStringLiteral("Muted"));
+    row_tokens->setWordWrap(true);
 
     // Row 3: the state, round and elapsed time, exactly what the single detail
     // line carried before the token row was added.
     auto* row_detail = new QLabel(card);
     row_detail->setObjectName(QStringLiteral("Muted"));
+    row_detail->setWordWrap(true);
 
     auto* row_error = new QLabel(card);
     row_error->setObjectName(QStringLiteral("TaskError"));

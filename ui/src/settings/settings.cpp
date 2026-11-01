@@ -24,6 +24,7 @@ Settings default_settings() {
 QJsonObject metrics_to_json(const ThemeMetrics& metrics) {
   QJsonObject object;
   object["sidebar_width"] = metrics.sidebar_width;
+  object["tasks_list_width"] = metrics.tasks_list_width;
   object["message_spacing"] = metrics.message_spacing;
   object["page_margin"] = metrics.page_margin;
   object["composer_height"] = metrics.composer_height;
@@ -48,6 +49,7 @@ ThemeMetrics metrics_from_json(const QJsonObject& object, ThemeMetrics metrics) 
   };
 
   read_int("sidebar_width", metrics.sidebar_width);
+  read_int("tasks_list_width", metrics.tasks_list_width);
   read_int("message_spacing", metrics.message_spacing);
   read_int("page_margin", metrics.page_margin);
   read_int("composer_height", metrics.composer_height);

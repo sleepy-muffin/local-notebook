@@ -12,13 +12,42 @@
 
 class QEvent;
 class QLabel;
-class QPlainTextEdit;
 class QPushButton;
+class QScrollArea;
 class QShowEvent;
+class QToolButton;
 class QVBoxLayout;
 class QWidget;
 
 namespace ui {
+
+// One readable item of a task's diagnostic log. The log itself is line oriented
+// (`[request …]` lines followed by their body, tool calls, ...); it is parsed
+// into these so the window can show a list instead of a wall of unwrapped text.
+// `raw` keeps the exact bytes, which is what the row's Copy button hands to an
+// editor.
+struct TaskLogEntry {
+  enum class Kind {
+    Request,
+    Response,
+    ToolCall,
+    ToolResult,
+    Reasoning,
+    Note,
+  };
+
+  Kind kind = Kind::Note;
+  // A short category label ("Request", "Tool call", ...).
+  QString badge;
+  // The primary line: the request kind, the tool name, or the note itself.
+  QString title;
+  // A right-aligned secondary figure (the body size, in characters).
+  QString detail;
+  // A wrapped, readable excerpt. Empty when the entry has nothing to preview.
+  QString preview;
+  // The entry verbatim, including any body that is not shown inline.
+  QString raw;
+};
 
 // A unique, non-modal window listing generation tasks: the ones running now and
 // the last finished one per slot (one per session, plus the shared assistant
@@ -27,6 +56,10 @@ namespace ui {
 // exact request body, the tool calls, and any hidden reasoning the model produced
 // — none of which the transcript shows). A running task carries a Cancel button,
 // the only place a shared assistant fold can be stopped.
+//
+// The log is shown as a list of entries rather than a text dump: request bodies
+// are never rendered inline (they are long and unreadable), but every entry
+// carries a Copy button so the exact text can be pasted into an editor.
 //
 // The main window owns one and refreshes it from its poll timer, so it never
 // blocks the window it belongs to.
@@ -93,6 +126,13 @@ private:
     QPushButton* cancel = nullptr;
   };
 
+  struct LogRow {
+    QWidget* widget = nullptr;
+    QLabel* title = nullptr;
+    QLabel* detail = nullptr;
+    QLabel* preview = nullptr;
+  };
+
   void apply_style();
   void rebuild_rows(std::size_t count);
 
@@ -101,18 +141,34 @@ private:
   void select_row(std::size_t index);
   void refresh_log();
 
+  // Turns the log text into list rows. The rows are rebuilt only when the text
+  // actually changed, so a poll tick never disturbs the reader.
+  void rebuild_log_rows(const QString& text);
+  void clear_log_rows();
+
   // Marks the selected card with the accent border, so the list and the pane
   // agree on which task is being read.
   void update_selection_style();
 
+  QWidget* list_pane_ = nullptr;
   QWidget* list_ = nullptr;
   QVBoxLayout* list_layout_ = nullptr;
   QLabel* empty_ = nullptr;
   std::vector<Row> rows_;
 
-  // The right-hand pane: the selected task's name and its raw log text.
+  // The right-hand pane: the selected task's name and its parsed log list.
   QLabel* log_title_ = nullptr;
-  QPlainTextEdit* log_view_ = nullptr;
+  QToolButton* log_copy_ = nullptr;
+  QScrollArea* log_scroll_ = nullptr;
+  QWidget* log_list_ = nullptr;
+  QVBoxLayout* log_list_layout_ = nullptr;
+  QLabel* log_placeholder_ = nullptr;
+
+  std::vector<TaskLogEntry> log_entries_;
+  std::vector<LogRow> log_rows_;
+  // The log text currently rendered, so an unchanged poll tick is a no-op.
+  QString log_text_;
+  bool log_shown_ = false;
 
   // Index into `entries_`, or `npos` while nothing is selected.
   static constexpr std::size_t npos = static_cast<std::size_t>(-1);

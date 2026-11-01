@@ -123,6 +123,7 @@ lnb::ThemeMetrics parse_metrics(const QJsonObject& object) {
   };
 
   read_int("sidebar_width", metrics.sidebar_width);
+  read_int("tasks_list_width", metrics.tasks_list_width);
   read_int("message_spacing", metrics.message_spacing);
   read_int("page_margin", metrics.page_margin);
   read_int("composer_height", metrics.composer_height);

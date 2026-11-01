@@ -648,6 +648,10 @@ QWidget* SettingsWindow::build_metrics_page() {
       &lnb::ThemeMetrics::sidebar_width
   );
   add_metric(
+      trs("Task list width"), pending_metrics_.tasks_list_width, 160, 800, 4,
+      &lnb::ThemeMetrics::tasks_list_width
+  );
+  add_metric(
       trs("Page margin"), pending_metrics_.page_margin, 0, 200, 1,
       &lnb::ThemeMetrics::page_margin
   );

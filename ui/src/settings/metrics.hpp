@@ -9,6 +9,11 @@ struct ThemeMetrics {
   // Sidebar holding "New Session" and the session list.
   int sidebar_width = 280;
 
+  // Fixed width of the task list in the tasks window, which mirrors the sidebar.
+  // The log pane takes the remaining width, so the window grows like the main
+  // one: the list stays put and the reading side expands.
+  int tasks_list_width = 340;
+
   // Vertical gap between transcript entries.
   int message_spacing = 12;
 

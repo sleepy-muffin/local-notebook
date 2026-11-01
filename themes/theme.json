@@ -499,6 +499,7 @@
 
   "default_metrics": {
     "sidebar_width": 280,
+    "tasks_list_width": 340,
     "bubble_radius": 8,
     "message_max_width": 640,
     "message_spacing": 12,
