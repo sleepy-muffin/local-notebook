@@ -3,7 +3,7 @@
 #include <QDialog>
 #include <QWidget>
 
-#include "local_notebook/core/summary.hpp"
+#include "local_notebook/core/structs.hpp"
 
 namespace ui {
 
@@ -13,13 +13,13 @@ namespace ui {
 class SummaryReviewDialog : public QDialog {
 public:
   explicit SummaryReviewDialog(
-      const lnb::SummaryPlan& plan, QWidget* parent = nullptr
+      const lnb::core::SummaryPlan& plan, QWidget* parent = nullptr
   );
 };
 
 // Shows the review dialog and returns true when the user approves the pass.
 // Safe to call from a worker thread: the dialog is shown on the interface
 // thread and the caller blocks until it is dismissed.
-bool review_summary(const lnb::SummaryPlan& plan);
+bool review_summary(const lnb::core::SummaryPlan& plan);
 
 } // namespace ui

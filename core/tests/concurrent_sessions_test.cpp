@@ -37,8 +37,8 @@ void expect_code(
   expect(actual == expected, label);
 }
 
-lnb::SummaryApprover approve() {
-  return [](const lnb::SummaryPlan&) { return true; };
+lnb::core::SummaryApprover approve() {
+  return [](const lnb::core::SummaryPlan&) { return true; };
 }
 
 bool wait_terminal(

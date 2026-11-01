@@ -10,7 +10,7 @@
 
 #include "local_notebook/core/interface.hpp"
 #include "local_notebook/core/model.hpp"
-#include "local_notebook/core/summary.hpp"
+#include "local_notebook/core/structs.hpp"
 #include "settings/settings.hpp"
 #include "shark/str.hpp"
 #include "support/i18n.hpp"
@@ -64,7 +64,7 @@ lnb::Settings make_settings(const char* theme) {
 // applied. Capturing two themes from one window would only relabel the first
 // one's pixels.
 void capture(
-    QApplication& app, lnb::core::interface& api, const lnb::SummaryPlan& plan,
+    QApplication& app, lnb::core::interface& api, const lnb::core::SummaryPlan& plan,
     const std::filesystem::path& output, lnb::Settings& settings,
     const std::string& suffix
 ) {
@@ -214,11 +214,11 @@ int main(int argc, char** argv) {
   // Capture the request the review dialog normally shows, without sending it:
   // the approver runs before the first byte leaves the process, and declining
   // leaves the summary and its watermark untouched.
-  lnb::SummaryPlan plan;
+  lnb::core::SummaryPlan plan;
 
   if (auto task = api.summarize_session(
           design_id, /*force=*/true,
-          [&plan](const lnb::SummaryPlan& proposed) {
+          [&plan](const lnb::core::SummaryPlan& proposed) {
             plan = proposed;
             return false;
           }

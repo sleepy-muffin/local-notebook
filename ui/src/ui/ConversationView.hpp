@@ -77,7 +77,7 @@ public:
   // generation on the same session. `approver` reviews the request; an absent one
   // reviews
   // interactively.
-  void summarize_session_now(lnb::SummaryApprover approver = {});
+  void summarize_session_now(lnb::core::SummaryApprover approver = {});
 
   // The diagnostic log for the current (or last finished) turn, and the last
   // finished turn's snapshot; both feed the tasks window.

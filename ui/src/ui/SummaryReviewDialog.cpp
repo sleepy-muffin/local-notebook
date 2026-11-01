@@ -381,7 +381,7 @@ void on_ui_thread(Function&& show) {
 } // namespace
 
 SummaryReviewDialog::SummaryReviewDialog(
-    const lnb::SummaryPlan& plan, QWidget* parent
+    const lnb::core::SummaryPlan& plan, QWidget* parent
 )
     : QDialog(parent) {
   setObjectName(QStringLiteral("SummaryReview"));
@@ -510,7 +510,7 @@ SummaryReviewDialog::SummaryReviewDialog(
   connect(run, &QPushButton::clicked, this, [this]() { accept(); });
 }
 
-bool review_summary(const lnb::SummaryPlan& plan) {
+bool review_summary(const lnb::core::SummaryPlan& plan) {
   bool approved = false;
 
   on_ui_thread([&plan, &approved]() {

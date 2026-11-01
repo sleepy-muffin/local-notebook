@@ -1147,8 +1147,8 @@ void SettingsWindow::summarize_assistant_now() {
   // a decline is recorded here and read after the task finishes.
   bool declined = false;
 
-  const lnb::SummaryApprover approver =
-      [&declined](const lnb::SummaryPlan& plan) {
+  const lnb::core::SummaryApprover approver =
+      [&declined](const lnb::core::SummaryPlan& plan) {
         const bool approved = review_summary(plan);
         if (!approved) {
           declined = true;

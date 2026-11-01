@@ -62,12 +62,12 @@ bool wait_terminal(
   return task != nullptr && task->is_terminal();
 }
 
-lnb::SummaryApprover approve() {
-  return [](const lnb::SummaryPlan&) { return true; };
+lnb::core::SummaryApprover approve() {
+  return [](const lnb::core::SummaryPlan&) { return true; };
 }
 
-lnb::SummaryApprover decline() {
-  return [](const lnb::SummaryPlan&) { return false; };
+lnb::core::SummaryApprover decline() {
+  return [](const lnb::core::SummaryPlan&) { return false; };
 }
 
 } // namespace

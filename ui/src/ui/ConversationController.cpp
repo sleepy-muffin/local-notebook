@@ -62,7 +62,7 @@ void ConversationController::observe(std::shared_ptr<GenerationTask> task) {
   observed_reported_ = false;
 }
 
-bool ConversationController::send(std::string text, lnb::SummaryApprover approver) {
+bool ConversationController::send(std::string text, lnb::core::SummaryApprover approver) {
   // One task per session, plus the shared assistant fold which reads every
   // session. A task in another session no longer blocks this send.
   if (busy() || api_.session_busy(session_id_) || api_.assistant_busy() ||
@@ -88,7 +88,7 @@ bool ConversationController::send(std::string text, lnb::SummaryApprover approve
   return track(api_.start_generation(session_id_, std::move(approver)));
 }
 
-void ConversationController::summarize(lnb::SummaryApprover approver) {
+void ConversationController::summarize(lnb::core::SummaryApprover approver) {
   if (busy() || api_.session_busy(session_id_) || api_.assistant_busy()) {
     return;
   }
@@ -118,7 +118,7 @@ void ConversationController::summarize(lnb::SummaryApprover approver) {
 }
 
 void ConversationController::summarize_session_now(
-    lnb::SummaryApprover approver
+    lnb::core::SummaryApprover approver
 ) {
   if (busy() || api_.session_busy(session_id_) || api_.assistant_busy()) {
     return;

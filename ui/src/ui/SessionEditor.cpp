@@ -913,8 +913,8 @@ void SessionEditor::summarize_now() {
   // The review runs on the worker thread and blocks on the interface thread, so a
   // decline is recorded here and read after the task finishes.
   bool declined = false;
-  const lnb::SummaryApprover approver =
-      [&declined](const lnb::SummaryPlan& plan) {
+  const lnb::core::SummaryApprover approver =
+      [&declined](const lnb::core::SummaryPlan& plan) {
         const bool approved = review_summary(plan);
         if (!approved) {
           declined = true;

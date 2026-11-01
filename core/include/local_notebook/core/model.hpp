@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "local_notebook/core/api_protocol.hpp"
+#include "local_notebook/core/structs.hpp"
 
 // The reconstructed domain model (design-1.md §2). One Assistant per process;
 // many Sessions per assistant; all sessions of an assistant share one assistant

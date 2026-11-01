@@ -13,7 +13,7 @@
 
 #include "local_notebook/core/generation_task.hpp"
 #include "local_notebook/core/model.hpp"
-#include "local_notebook/core/summary.hpp"
+#include "local_notebook/core/structs.hpp"
 #include "local_notebook/core/interface.hpp"
 #include "net/protocol.hpp"
 #include "net/tools.hpp"

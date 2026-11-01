@@ -57,18 +57,18 @@ public:
   //
   // `approver` reviews the automatic fold the new message may trigger before it
   // is sent; an empty approver proceeds.
-  [[nodiscard]] bool send(std::string text, lnb::SummaryApprover approver = {});
+  [[nodiscard]] bool send(std::string text, lnb::core::SummaryApprover approver = {});
 
   // Resolves one summarisation level per press, the session first. `approver`
   // reviews the proposed pass before it is sent.
-  void summarize(lnb::SummaryApprover approver = {});
+  void summarize(lnb::core::SummaryApprover approver = {});
 
   // Folds the session's overflow into the summary on demand, forcing the pass
   // even when the automatic trigger has not been reached.
   //
   // `approver` reviews the request before it is sent; the editor supplies its own
   // so a declined review is a silent no-op. An absent approver proceeds.
-  void summarize_session_now(lnb::SummaryApprover approver = {});
+  void summarize_session_now(lnb::core::SummaryApprover approver = {});
 
   // The last finished task's outcome and diagnostic log, retained after the worker
   // is gone so the tasks window can show a failure and dump its log.

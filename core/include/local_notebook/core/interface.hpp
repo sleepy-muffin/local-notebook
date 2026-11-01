@@ -9,24 +9,14 @@
 #include <unordered_map>
 #include <vector>
 
-#include "local_notebook/core/error_code.hpp"
 #include "local_notebook/core/generation_task.hpp"
+#include "local_notebook/core/structs.hpp"
 #include "local_notebook/core/model.hpp"
-#include "local_notebook/core/summary.hpp"
 #include "local_notebook/core/utils.hpp"
 
 namespace lnb::core {
 class application;
 
-// The conversation-token readout the title bar reports against. `used_tokens` is
-// the estimated cost of the unsummarised conversation alone (the messages above
-// the session watermark) — never the system prompt — reported without trimming;
-// `limit_tokens` is `session.summary_trigger_tokens_`. `used_tokens` is exactly
-// the quantity the automatic collapse compares against the trigger.
-struct ContextUsage {
-  std::size_t used_tokens = 0;
-  std::size_t limit_tokens = 0;
-};
 
 class interface {
 public:

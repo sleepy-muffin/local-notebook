@@ -837,7 +837,7 @@ void ConversationView::update_send_mode() {
   apply_composer_icons();
 }
 
-void ConversationView::summarize_session_now(lnb::SummaryApprover approver) {
+void ConversationView::summarize_session_now(lnb::core::SummaryApprover approver) {
   if (controller_.busy() || api_.assistant_busy()) {
     return;
   }
@@ -865,8 +865,8 @@ void ConversationView::submit() {
     // The send button has become a summarize button: fold the overflow into
     // the summary, sending nothing. A fresh pass lands at the bottom.
     transcript_->scroll_to_bottom();
-    const lnb::SummaryApprover approver =
-        [](const lnb::SummaryPlan& plan) { return review_summary(plan); };
+    const lnb::core::SummaryApprover approver =
+        [](const lnb::core::SummaryPlan& plan) { return review_summary(plan); };
     controller_.summarize(approver);
     set_busy(controller_.busy());
     return;
@@ -888,8 +888,8 @@ void ConversationView::submit() {
   // The new message may itself push the transcript past the trigger, in which
   // case the turn folds the overflow before replying. That request must be
   // reviewed like every other summarization request.
-  const lnb::SummaryApprover approver =
-      [](const lnb::SummaryPlan& plan) { return review_summary(plan); };
+  const lnb::core::SummaryApprover approver =
+      [](const lnb::core::SummaryPlan& plan) { return review_summary(plan); };
 
   if (controller_.send(text.toStdString(), approver)) {
     input_->clear();
