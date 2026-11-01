@@ -54,7 +54,7 @@ void test_ddg_results() {
       "</div>"
       "</body></html>";
 
-  const auto results = lnb::net::parse_ddg_results(html);
+  const auto results = lnb::core::parse_ddg_results(html);
 
   expect(results.size() == 2, "DDG parses both results");
 
@@ -78,26 +78,26 @@ void test_ddg_results() {
 
 void test_ddg_challenge() {
   expect(
-      lnb::net::is_ddg_challenge(
+      lnb::core::is_ddg_challenge(
           "<html><body><div id=\"anomaly-modal\">Are you a robot?</div>"
           "</body></html>"
       ),
       "DDG anomaly modal is a challenge"
   );
   expect(
-      lnb::net::is_ddg_challenge(
+      lnb::core::is_ddg_challenge(
           "<p>Select all squares containing a duck</p>"
       ),
       "DDG image challenge is a challenge"
   );
   expect(
-      !lnb::net::is_ddg_challenge(
+      !lnb::core::is_ddg_challenge(
           "<p>We detected an anomaly in the data set.</p>"
       ),
       "ordinary text mentioning anomaly is not a challenge"
   );
   expect(
-      !lnb::net::is_ddg_challenge(
+      !lnb::core::is_ddg_challenge(
           "<a class=\"result__a\" href=\"https://example.com\">Example</a>"
       ),
       "result page is not a challenge"
@@ -128,7 +128,7 @@ void test_brave_results() {
       "</a>"
       "</main></body></html>";
 
-  const auto results = lnb::net::parse_brave_results(html);
+  const auto results = lnb::core::parse_brave_results(html);
 
   expect(results.size() == 2, "Brave skips its own internal result");
 
@@ -178,7 +178,7 @@ void test_bing_rss() {
       "</item>"
       "</channel></rss>";
 
-  const auto results = lnb::net::parse_bing_rss(xml);
+  const auto results = lnb::core::parse_bing_rss(xml);
 
   expect(results.size() == 2, "Bing skips its own navigation item");
 
@@ -210,11 +210,11 @@ void test_brave_without_results() {
   const std::string html = "<html><body><p>No results found.</p></body></html>";
 
   expect(
-      lnb::net::parse_brave_results(html).empty(),
+      lnb::core::parse_brave_results(html).empty(),
       "Brave page without result markup yields nothing"
   );
   expect(
-      lnb::net::parse_ddg_results(html).empty(),
+      lnb::core::parse_ddg_results(html).empty(),
       "DDG page without result markup yields nothing"
   );
 }

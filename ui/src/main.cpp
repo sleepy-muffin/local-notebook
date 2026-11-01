@@ -69,10 +69,11 @@ int main(int argc, char **argv) {
   // Point the whole on-disk tree at the per-user application data directory, or at
   // the --user-data override. This must run before the settings are read.
   const std::filesystem::path data_root = resolve_data_root(app.arguments());
-  lnb::api::set_data_root(data_root);
-  shark::log::info("data root: {}", lnb::api::data_root().string());
+  shark::log::info("data root: {}", data_root.string());
 
-  lnb::Settings settings = lnb::load_settings();
+  auto interface = std::make_unique<lnb::core::interface>(data_root);
+
+  lnb::Settings settings = lnb::load_settings(*interface);
 
   // Select the stored UI language before any window is created, so every string
   // is looked up in the right language the first time it is built.
@@ -81,7 +82,6 @@ int main(int argc, char **argv) {
   // Install the theme before any window is created.
   ui::apply_theme(app, settings);
 
-  auto api = std::make_unique<lnb::api::interface>(data_root);
 
   // Reopen the last assistant when auto-login is on and it is still on disk;
   // otherwise ask.
@@ -89,28 +89,28 @@ int main(int argc, char **argv) {
   bool opened = false;
 
   if (settings.auto_login && !last.empty()) {
-    const std::vector<std::string> uuids = lnb::api::scan_assistants();
+    const std::vector<std::string> uuids = interface->get_store().scan_assistants();
 
     if (std::find(uuids.begin(), uuids.end(), last) != uuids.end()) {
-      opened = api->open_assistant(last, lnb::api::load_assistant(last));
+      opened = interface->open_assistant(last);
     }
   }
 
   if (!opened) {
-    ui::AssistantPicker picker(*api, settings);
+    ui::AssistantPicker picker(*interface, settings);
 
     if (picker.exec() != QDialog::Accepted) {
       return 0;
     }
   }
 
-  ui::MainWindow window(*api, settings);
+  ui::MainWindow window(*interface, settings);
   window.show();
 
   const int code = app.exec();
 
-  lnb::save_settings(settings);
-  api->wait_for_generation();
+  lnb::save_settings(*interface, settings);
+  interface->wait_for_generation();
   shark::log::debug("local-notebook exited with code {}", code);
   return code;
 }

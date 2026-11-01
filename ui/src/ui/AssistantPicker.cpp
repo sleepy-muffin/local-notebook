@@ -30,6 +30,7 @@
 #include "local_notebook/core/interface.hpp"
 #include "local_notebook/core/model.hpp"
 #include "shark/log.hpp"
+#include "shark/str.hpp"
 #include "settings/settings.hpp"
 #include "support/i18n.hpp"
 #include "ui/AssistantForm.hpp"
@@ -223,12 +224,12 @@ public:
 };
 
 // The shared editor for creating and editing an assistant. It returns a fully
-// populated lnb::Assistant; the caller decides which UUID to persist it under.
+// populated lnb::core::Assistant; the caller decides which UUID to persist it under.
 class AssistantFormDialog : public QDialog {
 public:
   AssistantFormDialog(
       const QString& title,
-      const lnb::Assistant& initial,
+      const lnb::core::Assistant& initial,
       QWidget* parent = nullptr
   )
       : QDialog(parent), initial_(initial) {
@@ -293,7 +294,7 @@ public:
   }
 
   // The edited assistant. Valid once exec() returned QDialog::Accepted.
-  [[nodiscard]] lnb::Assistant assistant() const { return result_; }
+  [[nodiscard]] lnb::core::Assistant assistant() const { return result_; }
 
   void accept() override {
     // An unusable endpoint is refused here, before anything is written: the base
@@ -306,22 +307,22 @@ public:
 
     // Start from the original so every field the form does not own — memory_, in
     // particular — is carried through untouched.
-    lnb::Assistant value = initial_;
+    lnb::core::Assistant value = initial_;
     form_->write_into(value);
     result_ = value;
     QDialog::accept();
   }
 
 private:
-  lnb::Assistant initial_;
-  lnb::Assistant result_;
+  lnb::core::Assistant initial_;
+  lnb::core::Assistant result_;
   AssistantForm* form_ = nullptr;
 };
 
 } // namespace
 
 AssistantPicker::AssistantPicker(
-    lnb::api::interface& api, lnb::Settings& settings, QWidget* parent
+    lnb::core::interface& api, lnb::Settings& settings, QWidget* parent
 )
     : QDialog(parent), api_(api), settings_(settings) {
   setObjectName(QStringLiteral("AssistantPicker"));
@@ -434,24 +435,22 @@ AssistantPicker::AssistantPicker(
 void AssistantPicker::refresh() {
   list_->clear();
 
-  const std::vector<std::string> uuids = lnb::api::scan_assistants();
+  const std::vector<std::pair<std::string, lnb::core::Assistant>> assistants = api_.list_assistants();
 
-  for (const std::string& uuid : uuids) {
-    const lnb::Assistant assistant = lnb::api::load_assistant(uuid);
-
-    const QString name = to_qstring(assistant.name_);
-    const QString model = to_qstring(assistant.model_);
+  for (const auto& assistant : assistants) {
+    const QString name = to_qstring(assistant.second.name_);
+    const QString model = to_qstring(assistant.second.model_);
 
     auto* item = new QListWidgetItem(
         name.isEmpty() ? trs("Untitled assistant") : name,
         list_
     );
-    item->setData(k_uuid_role, to_qstring(uuid));
+    item->setData(k_uuid_role, to_qstring(assistant.first));
     item->setData(k_model_role, model);
     item->setToolTip(name);
   }
 
-  shark::log::debug("assistant picker listed {} assistant(s)", uuids.size());
+  shark::log::debug("assistant picker listed {} assistant(s)", assistants.size());
 
   if (list_->count() > 0) {
     // Prefer the last-opened assistant when it is still present.
@@ -507,7 +506,7 @@ void AssistantPicker::open_selected() {
 
   // Another running instance may already own this assistant. The core refuses,
   // so keep the picker open and say why rather than silently doing nothing.
-  if (!api_.open_assistant(id, lnb::api::load_assistant(id))) {
+  if (!api_.open_assistant(id)) {
     QMessageBox::warning(
         this, trs("Assistant in use"), to_qstring(api_.last_error())
     );
@@ -520,30 +519,34 @@ void AssistantPicker::open_selected() {
 }
 
 void AssistantPicker::create_new() {
-  AssistantFormDialog form(trs("New assistant"), lnb::Assistant{}, this);
+  AssistantFormDialog form(trs("New assistant"), lnb::core::Assistant{}, this);
   if (form.exec() != QDialog::Accepted) {
     return;
   }
 
-  const lnb::Assistant assistant = form.assistant();
-  const std::string uuid = lnb::api::make_uuid();
+  const lnb::core::Assistant assistant = form.assistant();
+  const std::string uuid = shark::str::make_uuid();
 
-  lnb::api::save_assistant(uuid, assistant);
+  api_.get_store().save_assistant(uuid, assistant);
   shark::log::info("created assistant {}", uuid);
 
-  if (!api_.open_assistant(uuid, assistant)) {
-    QMessageBox::warning(
-        this, trs("Assistant in use"), to_qstring(api_.last_error())
-    );
-    refresh();
-    select_uuid(to_qstring(uuid));
-    update_actions();
-    return;
-  }
+  /*
+   * Do not open the just created one automatically.
+   */
 
-  settings_.auto_login = auto_login_->isChecked();
-  settings_.last_assistant = uuid;
-  accept();
+  //   if (!api_.open_assistant(uuid)) {
+  //     QMessageBox::warning(
+  //         this, trs("Assistant in use"), to_qstring(api_.last_error())
+  //     );
+  //     refresh();
+  //     select_uuid(to_qstring(uuid));
+  //     update_actions();
+  //     return;
+  //   }
+  //
+  //   settings_.auto_login = auto_login_->isChecked();
+  //   settings_.last_assistant = uuid;
+  //   accept();
 }
 
 void AssistantPicker::edit_selected() {
@@ -553,15 +556,15 @@ void AssistantPicker::edit_selected() {
   }
 
   const std::string id = uuid.toStdString();
-  const lnb::Assistant existing = lnb::api::load_assistant(id);
+  const lnb::core::Assistant existing = api_.get_store().load_assistant(id);
 
   AssistantFormDialog form(trs("Edit assistant"), existing, this);
   if (form.exec() != QDialog::Accepted) {
     return;
   }
 
-  const lnb::Assistant assistant = form.assistant();
-  lnb::api::save_assistant(id, assistant);
+  const lnb::core::Assistant assistant = form.assistant();
+  api_.get_store().save_assistant(id, assistant);
   shark::log::info("updated assistant {}", id);
 
   // Keep the in-memory assistant in step when the edited one is the open one.

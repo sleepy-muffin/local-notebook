@@ -31,7 +31,7 @@ void expect(bool condition, const std::string& label) {
 }
 
 void expect_code(
-    lnb::api::error_code actual, lnb::api::error_code expected,
+    lnb::core::error_code actual, lnb::core::error_code expected,
     const std::string& label
 ) {
   expect(actual == expected, label);
@@ -42,7 +42,7 @@ lnb::SummaryApprover approve() {
 }
 
 bool wait_terminal(
-    const std::shared_ptr<lnb::GenerationTask>& task,
+    const std::shared_ptr<lnb::core::GenerationTask>& task,
     std::chrono::seconds limit = std::chrono::seconds(10)
 ) {
   const auto deadline = std::chrono::steady_clock::now() + limit;
@@ -163,22 +163,22 @@ int main() {
       std::filesystem::temp_directory_path() / "lnb-concurrent-sessions-test";
   std::error_code ignored;
   std::filesystem::remove_all(root, ignored);
-  lnb::api::set_data_root(root);
 
   SseServer server;
 
-  lnb::api::interface api;
+  lnb::core::interface api(root);
 
-  lnb::Assistant assistant;
+  lnb::core::Assistant assistant;
   assistant.name_ = "test";
   assistant.api_url_ =
       "http://127.0.0.1:" + std::to_string(server.port()) + "/v1";
   assistant.authentication_token_ = "key";
   assistant.model_ = "test-model";
-  assistant.protocol_ = lnb::net::ApiProtocol::ChatCompletions;
-  expect(api.open_assistant("concurrent-test", assistant), "open_assistant failed");
+  assistant.protocol_ = lnb::core::ApiProtocol::ChatCompletions;
+  api.get_store().save_assistant("concurrent-test", assistant);
+  expect(api.open_assistant("concurrent-test"), "open_assistant failed");
 
-  lnb::Session settings;
+  lnb::core::Session settings;
   settings.title_ = "Session";
 
   const std::uint32_t first = api.create_session(settings);
@@ -190,14 +190,14 @@ int main() {
   //    cancel the first.
   expect_code(
       api.session_prompt(first, "first"),
-      lnb::api::error_code::SUCCESS, "first prompt"
+      lnb::core::error_code::SUCCESS, "first prompt"
   );
   const auto first_task = api.start_generation(first);
   expect(first_task != nullptr, "the first session's turn should start");
 
   expect_code(
       api.session_prompt(second, "second"),
-      lnb::api::error_code::SUCCESS, "a second session must not be blocked"
+      lnb::core::error_code::SUCCESS, "a second session must not be blocked"
   );
   const auto second_task = api.start_generation(second);
   expect(second_task != nullptr, "the second session's turn should start");
@@ -212,7 +212,7 @@ int main() {
   expect(api.assistant_busy(), "the assistant fold should be busy");
   expect_code(
       api.session_prompt(third, "third"),
-      lnb::api::error_code::ERR_ASSISTANT_BUSY,
+      lnb::core::error_code::ERR_ASSISTANT_BUSY,
       "a new prompt must be refused while the assistant fold owns the sessions"
   );
 
@@ -221,15 +221,15 @@ int main() {
   expect(wait_terminal(second_task), "the second turn did not finish");
 
   expect(
-      first_task->snapshot().status == lnb::GenerationTask::Status::COMPLETED,
+      first_task->snapshot().status == lnb::core::GenerationTask::Status::COMPLETED,
       "the first turn should complete"
   );
   expect(
-      second_task->snapshot().status == lnb::GenerationTask::Status::COMPLETED,
+      second_task->snapshot().status == lnb::core::GenerationTask::Status::COMPLETED,
       "the second turn should complete"
   );
   expect(
-      fold->snapshot().status == lnb::GenerationTask::Status::COMPLETED,
+      fold->snapshot().status == lnb::core::GenerationTask::Status::COMPLETED,
       "the assistant fold should complete"
   );
   expect(!api.assistant_busy(), "the assistant fold should be finished");
@@ -237,13 +237,13 @@ int main() {
   // 3. Once the fold is gone, a new prompt is accepted again.
   expect_code(
       api.session_prompt(second, "after the fold"),
-      lnb::api::error_code::SUCCESS,
+      lnb::core::error_code::SUCCESS,
       "prompts must be accepted after the assistant fold finishes"
   );
 
   // Both session transcripts hold their own prompt and reply.
-  const std::vector<lnb::Message> first_messages = api.messages(first);
-  const std::vector<lnb::Message> second_messages = api.messages(second);
+  const std::vector<lnb::core::Message> first_messages = api.messages(first);
+  const std::vector<lnb::core::Message> second_messages = api.messages(second);
 
   expect(
       first_messages.size() == 2, "the first transcript should hold prompt + reply"

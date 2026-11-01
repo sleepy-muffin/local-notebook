@@ -23,8 +23,8 @@ void expect(bool condition, const std::string& label) {
   std::cerr << "FAIL: " << label << '\n';
 }
 
-lnb::Assistant make_assistant() {
-  lnb::Assistant assistant;
+lnb::core::Assistant make_assistant() {
+  lnb::core::Assistant assistant;
   assistant.name_ = "test";
   assistant.api_url_ = "http://127.0.0.1:9/v1";
   assistant.authentication_token_ = "key";
@@ -39,9 +39,10 @@ int main() {
       std::filesystem::temp_directory_path() / "lnb-instance-lock-test";
   std::error_code ignored;
   std::filesystem::remove_all(root, ignored);
-  lnb::api::set_data_root(root);
+  lnb::core::store store(root);
 
   const std::string uuid = "shared-assistant";
+  store.save_assistant(uuid, make_assistant());
 
   // A lock file left behind by an older process: its pid is bogus and nothing
   // holds the operating-system lock. Opening the assistant must still succeed.
@@ -54,15 +55,15 @@ int main() {
   }
 
   {
-    lnb::api::interface first;
+    lnb::core::interface first(root);
     expect(
-        first.open_assistant(uuid, make_assistant()),
+        first.open_assistant(uuid),
         "a stale lock file must not block the first open"
     );
 
-    lnb::api::interface second;
+    lnb::core::interface second(root);
     expect(
-        !second.open_assistant(uuid, make_assistant()),
+        !second.open_assistant(uuid),
         "a second open while the first is live must be refused"
     );
     expect(!second.last_error().empty(), "the refusal should carry a reason");
@@ -75,9 +76,9 @@ int main() {
   // The first interface is gone, so the operating system released its lock; the
   // same directory opens again with no cleanup step of our own.
   {
-    lnb::api::interface third;
+    lnb::core::interface third(root);
     expect(
-        third.open_assistant(uuid, make_assistant()),
+        third.open_assistant(uuid),
         "the assistant must open again once the previous instance exits"
     );
   }
@@ -85,10 +86,10 @@ int main() {
   // Reopening the assistant already open in one interface must not fight its own
   // lock.
   {
-    lnb::api::interface reused;
-    expect(reused.open_assistant(uuid, make_assistant()), "first open");
+    lnb::core::interface reused(root);
+    expect(reused.open_assistant(uuid), "first open");
     expect(
-        reused.open_assistant(uuid, make_assistant()),
+        reused.open_assistant(uuid),
         "reopening the same assistant in the same interface"
     );
   }

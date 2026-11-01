@@ -17,7 +17,7 @@
 //
 // `SessionManager` is the owner of the database; `MessageManager` is a stateless
 // view of one session's messages.
-namespace lnb::store {
+namespace lnb::core {
 
 class MessageManager;
 
@@ -69,4 +69,4 @@ private:
   std::uint32_t session_id_;
 };
 
-} // namespace lnb::store
+} // namespace lnb::core

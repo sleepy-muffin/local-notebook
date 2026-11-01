@@ -38,8 +38,8 @@ void expect_contains(
 }
 
 void expect_status(
-    const std::shared_ptr<lnb::GenerationTask>& task,
-    lnb::GenerationTask::Status expected, const std::string& label
+    const std::shared_ptr<lnb::core::GenerationTask>& task,
+    lnb::core::GenerationTask::Status expected, const std::string& label
 ) {
   expect(task != nullptr, label + ": task is null");
 
@@ -49,7 +49,7 @@ void expect_status(
 }
 
 bool wait_terminal(
-    const std::shared_ptr<lnb::GenerationTask>& task,
+    const std::shared_ptr<lnb::core::GenerationTask>& task,
     std::chrono::seconds limit = std::chrono::seconds(10)
 ) {
   const auto deadline = std::chrono::steady_clock::now() + limit;
@@ -77,22 +77,22 @@ int main() {
       std::filesystem::temp_directory_path() / "lnb-assistant-summary-log-test";
   std::error_code ignored;
   std::filesystem::remove_all(root, ignored);
-  lnb::api::set_data_root(root);
 
-  lnb::api::interface api;
+  lnb::core::interface api(root);
 
-  lnb::Assistant assistant;
+  lnb::core::Assistant assistant;
   assistant.name_ = "test";
   assistant.api_url_ = "http://127.0.0.1:9/v1";
   assistant.authentication_token_ = "key";
   assistant.model_ = "test-model";
-  api.open_assistant("log-test", assistant);
+  api.get_store().save_assistant("log-test", assistant);
+  api.open_assistant("log-test");
 
   // 1. Nothing to merge: the pass still completes, and the log says why.
   {
     const auto task = api.summarize_assistant(true, approve());
     expect(wait_terminal(task), "no-sessions: task did not finish");
-    expect_status(task, lnb::GenerationTask::Status::COMPLETED, "no-sessions");
+    expect_status(task, lnb::core::GenerationTask::Status::COMPLETED, "no-sessions");
 
     const std::string log = task != nullptr ? task->log_text() : std::string{};
     expect(!log.empty(), "no-sessions: log is empty");
@@ -100,12 +100,12 @@ int main() {
     expect_contains(log, "nothing to merge", "no-sessions");
   }
 
-  lnb::Session session;
+  lnb::core::Session session;
   session.title_ = "Session";
   const std::uint32_t session_id = api.create_session(session);
   expect(session_id != 0, "create_session failed");
   expect(
-      api.session_prompt(session_id, "hello") == lnb::api::error_code::SUCCESS,
+      api.session_prompt(session_id, "hello") == lnb::core::error_code::SUCCESS,
       "session_prompt failed"
   );
 
@@ -113,17 +113,17 @@ int main() {
   {
     const auto task = api.summarize_assistant(false, approve());
     expect(wait_terminal(task), "not-reached: task did not finish");
-    expect_status(task, lnb::GenerationTask::Status::COMPLETED, "not-reached");
+    expect_status(task, lnb::core::GenerationTask::Status::COMPLETED, "not-reached");
 
     // The worker publishes the memory budget before it decides anything, so a
     // pass that sends nothing still shows the limit it would have been charged
     // against.
     if (task != nullptr) {
-      const lnb::GenerationTask::Snapshot snapshot = task->snapshot();
+      const lnb::core::GenerationTask::Snapshot snapshot = task->snapshot();
       expect(
           snapshot.output_budget == assistant.summary_token_budget_ &&
               snapshot.output_budget_kind ==
-                  lnb::GenerationTask::BudgetKind::MEMORY,
+                  lnb::core::GenerationTask::BudgetKind::MEMORY,
           "not-reached: the memory budget was not published"
       );
     }
@@ -137,7 +137,7 @@ int main() {
   {
     const auto task = api.summarize_assistant(true, decline());
     expect(wait_terminal(task), "declined: task did not finish");
-    expect_status(task, lnb::GenerationTask::Status::COMPLETED, "declined");
+    expect_status(task, lnb::core::GenerationTask::Status::COMPLETED, "declined");
 
     const std::string log = task != nullptr ? task->log_text() : std::string{};
     expect(!log.empty(), "declined: log is empty");
@@ -151,7 +151,7 @@ int main() {
 
     const auto task = api.summarize_assistant(true, approve());
     expect(wait_terminal(task), "send-failure: task did not finish");
-    expect_status(task, lnb::GenerationTask::Status::FAILED, "send-failure");
+    expect_status(task, lnb::core::GenerationTask::Status::FAILED, "send-failure");
 
     const std::string log = task != nullptr ? task->log_text() : std::string{};
     expect(!log.empty(), "send-failure: log is empty");

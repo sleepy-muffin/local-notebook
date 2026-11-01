@@ -151,7 +151,7 @@ bool theme_inputs_equal(const lnb::Settings& a, const lnb::Settings& b) {
 } // namespace
 
 SettingsWindow::SettingsWindow(
-    lnb::api::interface& api, lnb::Settings& settings, QWidget* parent
+    lnb::core::interface& api, lnb::Settings& settings, QWidget* parent
 )
     : QDialog(parent),
       api_(api),
@@ -1070,7 +1070,7 @@ void SettingsWindow::save() {
   pending_.metrics = pending_metrics_;
 
   settings_ = pending_;
-  lnb::save_settings(settings_);
+  lnb::save_settings(api_, settings_);
 
   // A language change cannot reach the already-built windows (their text is set
   // once, at construction), so it is applied for this run and the user is offered
@@ -1084,7 +1084,7 @@ void SettingsWindow::save() {
   // global settings file. Build the edited copy and publish it in one step, so
   // a worker never observes a half-written assistant.
   if (assistant_form_ != nullptr) {
-    lnb::Assistant updated = api_.assistant();
+    lnb::core::Assistant updated = api_.assistant();
     assistant_form_->write_into(updated);
     if (assistant_memory_ != nullptr) {
       updated.memory_ = assistant_memory_->toPlainText().toStdString();
@@ -1193,14 +1193,14 @@ void SettingsWindow::summarize_assistant_now() {
     return;
   }
 
-  const lnb::GenerationTask::Snapshot snapshot = task->snapshot();
+  const lnb::core::GenerationTask::Snapshot snapshot = task->snapshot();
 
   // A cancellation was deliberate (from the tasks window): say nothing.
-  if (snapshot.status == lnb::GenerationTask::Status::CANCELLED) {
+  if (snapshot.status == lnb::core::GenerationTask::Status::CANCELLED) {
     return;
   }
 
-  if (snapshot.status == lnb::GenerationTask::Status::FAILED) {
+  if (snapshot.status == lnb::core::GenerationTask::Status::FAILED) {
     QMessageBox::warning(
         this, trs("Memory Update Failed"), to_qstring(snapshot.error)
     );

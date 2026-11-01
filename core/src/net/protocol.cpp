@@ -8,7 +8,7 @@
 #include <string_view>
 #include <utility>
 
-namespace lnb::net {
+namespace lnb::core {
 namespace {
 
 std::string trim(const std::string& text) {
@@ -407,4 +407,4 @@ std::string ensure_scheme(const std::string& url) {
   return "https://" + text;
 }
 
-} // namespace lnb::net
+} // namespace lnb::core

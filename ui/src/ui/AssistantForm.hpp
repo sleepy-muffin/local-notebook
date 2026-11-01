@@ -28,11 +28,11 @@ public:
   explicit AssistantForm(QWidget* parent = nullptr);
 
   // Fills every field from `assistant`.
-  void set_assistant(const lnb::Assistant& assistant);
+  void set_assistant(const lnb::core::Assistant& assistant);
 
   // Writes the edited fields back into `assistant`, leaving the fields the form
   // does not own untouched.
-  void write_into(lnb::Assistant& assistant) const;
+  void write_into(lnb::core::Assistant& assistant) const;
 
   // True when the API URL is usable (an http/https base ending in /v1). On false,
   // `error` carries a message naming the expected shape. Callers must check this

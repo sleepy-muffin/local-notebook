@@ -30,7 +30,7 @@ void expect(bool condition, const std::string& label) {
 }
 
 void expect_directories(
-    const lnb::Session& session, const std::vector<std::string>& expected,
+    const lnb::core::Session& session, const std::vector<std::string>& expected,
     const std::string& label
 ) {
   expect(
@@ -41,7 +41,7 @@ void expect_directories(
 }
 
 void expect_permissions(
-    const lnb::Session& session, bool tools, bool read, bool write, bool online,
+    const lnb::core::Session& session, bool tools, bool read, bool write, bool online,
     const std::string& label
 ) {
   expect(
@@ -86,9 +86,9 @@ VALUES (1, 'legacy', '/old/shared');
 }
 
 void test_round_trip(const fs::path& path) {
-  lnb::store::database db(path.string());
+  lnb::core::database db(path.string());
 
-  lnb::Session session;
+  lnb::core::Session session;
   session.title_ = "round trip";
   session.shared_directories_ = {"/one", "/two with spaces"};
   session.tools_enabled_ = false;
@@ -99,7 +99,7 @@ void test_round_trip(const fs::path& path) {
   session.summary_reasoning_effort_ = "high";
 
   const std::uint32_t id = db.insert_session(session);
-  const std::optional<lnb::Session> loaded = db.session(id);
+  const std::optional<lnb::core::Session> loaded = db.session(id);
 
   expect(loaded.has_value(), "round trip: session reloads");
 
@@ -118,7 +118,7 @@ void test_round_trip(const fs::path& path) {
     );
   }
 
-  lnb::Session cleared = loaded.value_or(session);
+  lnb::core::Session cleared = loaded.value_or(session);
   cleared.shared_directories_.clear();
   cleared.tools_enabled_ = true;
   cleared.read_tools_enabled_ = true;
@@ -127,7 +127,7 @@ void test_round_trip(const fs::path& path) {
   cleared.summary_reasoning_effort_ = "low";
   db.update_session(cleared);
 
-  const std::optional<lnb::Session> empty = db.session(id);
+  const std::optional<lnb::core::Session> empty = db.session(id);
   expect(empty.has_value(), "round trip: updated session reloads");
 
   if (empty.has_value()) {
@@ -162,8 +162,8 @@ void test_legacy_migration(const fs::path& path) {
   }
 
   {
-    lnb::store::database db(path.string());
-    const std::optional<lnb::Session> session = db.session(1);
+    lnb::core::database db(path.string());
+    const std::optional<lnb::core::Session> session = db.session(1);
 
     expect(session.has_value(), "migration: legacy session reloads");
 

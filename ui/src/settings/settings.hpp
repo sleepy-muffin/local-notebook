@@ -5,6 +5,7 @@
 #include <string>
 
 #include "settings/metrics.hpp"
+#include "local_notebook/core/interface.hpp"
 
 namespace lnb {
 
@@ -65,8 +66,8 @@ struct Settings {
 };
 
 // data/settings.json. A missing or malformed file yields the defaults.
-Settings load_settings();
-void save_settings(const Settings& settings);
+Settings load_settings(const lnb::core::interface& api);
+void save_settings(const lnb::core::interface& api, const Settings& settings);
 
 // The language to use before the user has chosen one, derived from the system
 // locale: "zh" for Chinese, "ja" for Japanese, and "en" otherwise. This is

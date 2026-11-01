@@ -52,13 +52,13 @@ QString compact_tokens(std::size_t value) {
 
 // The configured limit a task's produced total is charged against, named after
 // the setting it comes from. Empty when the task publishes no bound.
-QString budget_name(lnb::GenerationTask::BudgetKind kind) {
+QString budget_name(lnb::core::GenerationTask::BudgetKind kind) {
   switch (kind) {
-    case lnb::GenerationTask::BudgetKind::RESPONSE:
+    case lnb::core::GenerationTask::BudgetKind::RESPONSE:
       return trs("response budget");
-    case lnb::GenerationTask::BudgetKind::SUMMARIZATION:
+    case lnb::core::GenerationTask::BudgetKind::SUMMARIZATION:
       return trs("summarization budget");
-    case lnb::GenerationTask::BudgetKind::MEMORY:
+    case lnb::core::GenerationTask::BudgetKind::MEMORY:
       return trs("memory budget");
     default:
       break;

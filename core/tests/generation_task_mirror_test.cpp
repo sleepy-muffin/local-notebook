@@ -24,7 +24,7 @@ void expect(bool condition, const std::string& label) {
 } // namespace
 
 int main() {
-  using lnb::GenerationTask;
+  using lnb::core::GenerationTask;
 
   {
     GenerationTask visible;

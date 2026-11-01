@@ -39,17 +39,17 @@ public:
   // ISO-8601 time of each session's newest message, or an empty string when it
   // has none.
   void set_sessions(
-      std::vector<lnb::Session> sessions, std::vector<std::string> last_times
+      std::vector<lnb::core::Session> sessions, std::vector<std::string> last_times
   );
 
-  [[nodiscard]] lnb::Session session_at(int row) const;
+  [[nodiscard]] lnb::core::Session session_at(int row) const;
   [[nodiscard]] std::uint32_t session_id_at(int row) const;
   [[nodiscard]] const std::string& last_time_at(int row) const;
   [[nodiscard]] bool pinned_at(int row) const;
   [[nodiscard]] int row_for(std::uint32_t session_id) const;
 
 private:
-  std::vector<lnb::Session> sessions_;
+  std::vector<lnb::core::Session> sessions_;
   std::vector<std::string> last_times_;  // parallel to sessions_
 };
 

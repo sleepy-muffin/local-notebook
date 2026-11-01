@@ -53,7 +53,7 @@ QVariant SessionListModel::data(const QModelIndex& index, int role) const {
     return {};
   }
 
-  const lnb::Session& session = sessions_[static_cast<std::size_t>(index.row())];
+  const lnb::core::Session& session = sessions_[static_cast<std::size_t>(index.row())];
 
   switch (role) {
     case Qt::DisplayRole:
@@ -73,7 +73,7 @@ QVariant SessionListModel::data(const QModelIndex& index, int role) const {
 }
 
 void SessionListModel::set_sessions(
-    std::vector<lnb::Session> sessions, std::vector<std::string> last_times
+    std::vector<lnb::core::Session> sessions, std::vector<std::string> last_times
 ) {
   beginResetModel();
   sessions_ = std::move(sessions);
@@ -83,7 +83,7 @@ void SessionListModel::set_sessions(
   endResetModel();
 }
 
-lnb::Session SessionListModel::session_at(int row) const {
+lnb::core::Session SessionListModel::session_at(int row) const {
   if (row < 0 || row >= static_cast<int>(sessions_.size())) {
     return {};
   }

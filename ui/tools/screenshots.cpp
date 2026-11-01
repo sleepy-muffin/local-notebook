@@ -12,6 +12,7 @@
 #include "local_notebook/core/model.hpp"
 #include "local_notebook/core/summary.hpp"
 #include "settings/settings.hpp"
+#include "shark/str.hpp"
 #include "support/i18n.hpp"
 #include "ui/MainWindow.hpp"
 #include "ui/SummaryReviewDialog.hpp"
@@ -63,7 +64,7 @@ lnb::Settings make_settings(const char* theme) {
 // applied. Capturing two themes from one window would only relabel the first
 // one's pixels.
 void capture(
-    QApplication& app, lnb::api::interface& api, const lnb::SummaryPlan& plan,
+    QApplication& app, lnb::core::interface& api, const lnb::SummaryPlan& plan,
     const std::filesystem::path& output, lnb::Settings& settings,
     const std::string& suffix
 ) {
@@ -80,8 +81,8 @@ void capture(
   }
 }
 
-lnb::Assistant make_assistant() {
-  lnb::Assistant assistant;
+lnb::core::Assistant make_assistant() {
+  lnb::core::Assistant assistant;
   assistant.name_ = "Aurora";
   assistant.model_ = "gpt-5.6-luna";
   assistant.api_url_ = "https://api.example.invalid/v1";
@@ -96,22 +97,22 @@ lnb::Assistant make_assistant() {
 }
 
 std::uint32_t add_session(
-    lnb::api::interface& api, const std::string& title,
+    lnb::core::interface& api, const std::string& title,
     const std::string& summary
 ) {
-  lnb::Session session;
+  lnb::core::Session session;
   session.title_ = title;
   session.summary_ = summary;
   return api.create_session(session);
 }
 
-void seed_design_session(lnb::api::interface& api, std::uint32_t session_id) {
+void seed_design_session(lnb::core::interface& api, std::uint32_t session_id) {
   api.append_message(
-      session_id, lnb::Role::User,
+      session_id, lnb::core::Role::User,
       "Why can a long conversation truncate the model's reply?"
   );
   api.append_message(
-      session_id, lnb::Role::Assistant,
+      session_id, lnb::core::Role::Assistant,
       "Because the completion budget covers both hidden reasoning and the visible "
       "answer. If the summarization budget is too small, the visible answer can be "
       "cut off.\n\n"
@@ -119,11 +120,11 @@ void seed_design_session(lnb::api::interface& api, std::uint32_t session_id) {
       "The fix is to raise the summarization budget, not the answer budget."
   );
   api.append_message(
-      session_id, lnb::Role::User,
+      session_id, lnb::core::Role::User,
       "Should the input bound be derived from the model context window?"
   );
   api.append_message(
-      session_id, lnb::Role::Assistant,
+      session_id, lnb::core::Role::Assistant,
       "No. Deriving it creates a second source of truth. The input bound is the "
       "session's own `summary_trigger_tokens_`; nothing else feeds it."
   );
@@ -148,7 +149,7 @@ int main(int argc, char** argv) {
 
   const std::filesystem::path scratch =
       std::filesystem::temp_directory_path() /
-      ("lnb-screenshots-" + lnb::api::make_uuid());
+      ("lnb-screenshots-" + shark::str::make_uuid());
 
   std::filesystem::create_directories(scratch);
   std::filesystem::current_path(scratch);
@@ -159,13 +160,11 @@ int main(int argc, char** argv) {
   QApplication::setApplicationVersion(QStringLiteral("0.1.0"));
   QApplication::setWindowIcon(ui::application_icon());
 
-  lnb::api::set_data_root(scratch / "data");
-
-  lnb::api::interface api;
-  api.open_assistant(
-      "a1b2c3d4-0000-0000-0000-000000000001",
-      make_assistant()
+  lnb::core::interface api(scratch / "data");
+  api.get_store().save_assistant(
+      "a1b2c3d4-0000-0000-0000-000000000001", make_assistant()
   );
+  api.open_assistant("a1b2c3d4-0000-0000-0000-000000000001");
 
   // Background sessions, so the sidebar reads like a real notebook.
   const std::uint32_t rust = add_session(
@@ -174,10 +173,10 @@ int main(int argc, char** argv) {
       "Placeholder"
   );
   api.append_message(
-      rust, lnb::Role::User, "Placeholder"
+      rust, lnb::core::Role::User, "Placeholder"
   );
   api.append_message(
-      rust, lnb::Role::Assistant,
+      rust, lnb::core::Role::Assistant,
       "Placeholder"
   );
 
@@ -187,18 +186,18 @@ int main(int argc, char** argv) {
       "The user cares about keeping long transcripts responsive."
   );
   api.append_message(
-      performance, lnb::Role::User,
+      performance, lnb::core::Role::User,
       "How do I keep a long chat list smooth?"
   );
   api.append_message(
-      performance, lnb::Role::Assistant,
+      performance, lnb::core::Role::Assistant,
       "Render only what is visible, and reuse the rows as they scroll."
   );
 
   // The featured session is created last, so its newest message is what the
   // main window opens. Its verbatim window (the trigger) is deliberately small,
   // which gives the summarisation review below a real overflow to fold.
-  lnb::Session design;
+  lnb::core::Session design;
   design.title_ = "Summarisation design";
   design.custom_instructions_ =
       "When discussing design, compare the options and recommend the most mature "

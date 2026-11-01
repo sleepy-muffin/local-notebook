@@ -10,9 +10,10 @@ class QPushButton;
 
 namespace lnb {
 struct Settings;
-namespace api {
-class interface;
 }
+
+namespace lnb::core {
+class interface;
 }
 
 namespace ui {
@@ -26,7 +27,7 @@ namespace ui {
 class AssistantPicker : public QDialog {
 public:
   explicit AssistantPicker(
-      lnb::api::interface& api, lnb::Settings& settings, QWidget* parent = nullptr
+      lnb::core::interface& api, lnb::Settings& settings, QWidget* parent = nullptr
   );
 
 private:
@@ -44,7 +45,7 @@ private:
   [[nodiscard]] QString selected_uuid() const;
   void select_uuid(const QString& uuid);
 
-  lnb::api::interface& api_;
+  lnb::core::interface& api_;
   lnb::Settings& settings_;
 
   QListWidget* list_ = nullptr;

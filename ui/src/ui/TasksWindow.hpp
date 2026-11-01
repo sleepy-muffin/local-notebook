@@ -55,8 +55,8 @@ public:
     // budget it is: a chat turn's response budget, a session summary's
     // summarization budget, or the assistant memory pass's memory budget.
     std::size_t output_budget = 0;
-    lnb::GenerationTask::BudgetKind output_budget_kind =
-        lnb::GenerationTask::BudgetKind::NONE;
+    lnb::core::GenerationTask::BudgetKind output_budget_kind =
+        lnb::core::GenerationTask::BudgetKind::NONE;
     // False when a request reported no usage and the figures are local estimates.
     bool usage_measured = true;
     std::int64_t elapsed_ms = 0;

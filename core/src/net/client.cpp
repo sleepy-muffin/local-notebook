@@ -23,7 +23,7 @@
 #include <utility>
 #include <vector>
 
-namespace lnb::net {
+namespace lnb::core {
 
 namespace {
 
@@ -42,17 +42,17 @@ constexpr std::string_view kSessionSummaryPrompt =
 constexpr std::string_view kAssistantSummaryPrompt =
     "You are going to write an assistant memory update about the user.";
 
-std::size_t request_tokens(const net::Request& request) {
-  std::size_t total = lnb::context::estimate_tokens(request.instructions);
+std::size_t request_tokens(const core::Request& request) {
+  std::size_t total = lnb::core::estimate_tokens(request.instructions);
 
-  for (const lnb::net::OutgoingMessage& message: request.messages) {
-    total += lnb::context::estimate_tokens(message.content) + kMessageOverhead;
+  for (const lnb::core::OutgoingMessage& message: request.messages) {
+    total += lnb::core::estimate_tokens(message.content) + kMessageOverhead;
   }
 
   return total;
 }
 
-lnb::net::Request session_summary_request(
+lnb::core::Request session_summary_request(
     const std::string& model, const std::string& existing_summary,
     const std::vector<const Message*>& candidates, std::size_t max_tokens,
     const std::string& reasoning_effort
@@ -73,22 +73,22 @@ lnb::net::Request session_summary_request(
     transcript += '\n';
   }
 
-  net::Request request;
+  Request request;
   request.model = model;
   request.instructions = system;
   request.include_tools = false;
   request.max_output_tokens = static_cast<int>(max_tokens);
   request.reasoning_effort = reasoning_effort;
 
-  net::OutgoingMessage user;
-  user.role = net::OutgoingMessage::Role::User;
+  OutgoingMessage user;
+  user.role = OutgoingMessage::Role::User;
   user.content = "New conversation to merge into the summary:\n\n" + transcript;
   request.messages.push_back(std::move(user));
 
   return request;
 }
 
-lnb::net::Request assistant_summary_request(
+lnb::core::Request assistant_summary_request(
     const std::string& model, const std::string& existing_memory,
     const std::string& sessions_block, std::size_t max_tokens,
     const std::string& reasoning_effort
@@ -99,15 +99,15 @@ lnb::net::Request assistant_summary_request(
   user += "\n\n# Sessions\n\n";
   user += sessions_block;
 
-  net::Request request;
+  Request request;
   request.model = model;
   request.instructions = std::string(kAssistantSummaryPrompt);
   request.include_tools = false;
   request.max_output_tokens = static_cast<int>(max_tokens);
   request.reasoning_effort = reasoning_effort;
 
-  net::OutgoingMessage message;
-  message.role = net::OutgoingMessage::Role::User;
+  OutgoingMessage message;
+  message.role = OutgoingMessage::Role::User;
   message.content = user;
   request.messages.push_back(std::move(message));
 
@@ -219,13 +219,13 @@ RoundUsage estimate_round_usage(
     const std::vector<ToolCall>& calls
 ) {
   RoundUsage out;
-  out.input_tokens = context::estimate_tokens(body);
-  out.output_tokens = context::estimate_tokens(std::string(reply)) +
-      context::estimate_tokens(std::string(thinking));
+  out.input_tokens = estimate_tokens(body);
+  out.output_tokens = estimate_tokens(std::string(reply)) +
+      estimate_tokens(std::string(thinking));
 
   for (const ToolCall& call: calls) {
-    out.output_tokens += context::estimate_tokens(call.name) +
-        context::estimate_tokens(call.arguments);
+    out.output_tokens += estimate_tokens(call.name) +
+        estimate_tokens(call.arguments);
   }
 
   return out;
@@ -285,7 +285,7 @@ std::string resolve_reasoning_effort(
   return effort;
 }
 
-// Running counterpart of context::prompt_tokens: counts UTF-8 bytes as they
+// Running counterpart of prompt_tokens: counts UTF-8 bytes as they
 // arrive so a live output estimate costs O(chunk) instead of rescanning the
 // whole reply. It mirrors estimate_tokens() exactly.
 class TokenCounter {
@@ -900,8 +900,8 @@ Request build_session_request(
   // The request carries at most the session's input bound: the newest messages
   // that fit `summary_trigger_tokens_`, the boundary message kept whole. The
   // bound is the conversation alone, so the system prompt never eats into it.
-  const context::Window window =
-      context::plan_window(messages, session.summary_trigger_tokens_);
+  const Window window =
+      plan_window(messages, session.summary_trigger_tokens_);
 
   Request request;
   request.model = assistant.model_;
@@ -936,7 +936,7 @@ ContextUsage context_usage(
   // the trigger. Trimming to the trigger made the readout shrink whenever the
   // trigger was lowered, which contradicts the collapse rule.
   usage.used_tokens =
-      context::transcript_tokens_after(messages, session.summary_watermark_);
+      transcript_tokens_after(messages, session.summary_watermark_);
   usage.limit_tokens = session.summary_trigger_tokens_;
 
   return usage;
@@ -964,7 +964,7 @@ std::expected<ChatCompletionResult, FailedResult> send_message_once(
 
   // Publish the request's projected input cost at once, so the Tasks window
   // moves when a request starts; the measured count replaces it when it ends.
-  task.set_streaming_input(context::estimate_tokens(body));
+  task.set_streaming_input(estimate_tokens(body));
 
   // The same body goes into the task's own log, so the tasks window can dump the
   // exact bytes that were posted when a turn is inspected. The endpoint is
@@ -1353,12 +1353,12 @@ std::expected<ChatCompletionResult, FailedResult> generate_reply(
       if (allowance != std::numeric_limits<std::size_t>::max()) {
         output = allowance == 0
             ? std::string("[Tool output budget exhausted; nothing further was read.]")
-            : context::clamp_tokens(output, allowance);
+            : clamp_tokens(output, allowance);
       }
 
       // The readout always charges the tool results, even when their own budget
       // is disabled, because the response budget covers them too.
-      const std::size_t tool_tokens = context::estimate_tokens(output);
+      const std::size_t tool_tokens = estimate_tokens(output);
       midway_used += tool_tokens;
       produced_used += tool_tokens;
       task.set_tool_tokens(midway_used);
@@ -1406,7 +1406,7 @@ namespace {
 // trigger (a manual "summarise now"). Returns the resulting summary, which is
 // the unchanged input when there was nothing to fold.
 std::string fold_session_summary(
-    store::database& db, const Session& session, const Remote& remote,
+    database& db, const Session& session, const Remote& remote,
     GenerationTask& task, std::stop_token stop_token, bool force,
     const SummaryApprover& approver, bool standalone
 ) {
@@ -1437,7 +1437,7 @@ std::string fold_session_summary(
   std::string summary = session.summary_;
 
   if (!force &&
-      context::transcript_tokens_after(messages, session.summary_watermark_) <
+      transcript_tokens_after(messages, session.summary_watermark_) <
           session.summary_trigger_tokens_) {
     return summary;
   }
@@ -1450,7 +1450,7 @@ std::string fold_session_summary(
   // the persisted watermark (the last batch's newest id) claims they were
   // folded. Starting at the oldest pending message makes that impossible.
   const std::size_t end =
-      context::plan_window(messages, session.summary_keep_tokens_).start;
+      plan_window(messages, session.summary_keep_tokens_).start;
 
   std::size_t first = messages.size();
 
@@ -1491,7 +1491,7 @@ std::string fold_session_summary(
       throw std::runtime_error("Generation cancelled");
     }
 
-    const std::vector<const Message*> batch = context::summary_candidates(
+    const std::vector<const Message*> batch = summary_candidates(
         messages, first, end, session.summary_trigger_tokens_
     );
 
@@ -1502,7 +1502,7 @@ std::string fold_session_summary(
 
     task.set_status("Updating summarization...");
 
-    const net::Request summary_request = session_summary_request(
+    const Request summary_request = session_summary_request(
         remote.model, summary, batch, max_tokens, effort
     );
     const boost::json::object request =
@@ -1681,7 +1681,7 @@ std::string build_sessions_block(
 // strict: an empty completion (or a failed request) throws, and the automatic
 // caller catches it and keeps the previous memory.
 std::string fold_assistant_memory(
-    store::database& db, const Assistant& assistant, const Remote& remote,
+    database& db, const Assistant& assistant, const Remote& remote,
     GenerationTask& task, std::stop_token stop_token,
     const SummaryApprover& approver
 ) {
@@ -1746,7 +1746,7 @@ std::string fold_assistant_memory(
       continue;
     }
 
-    const std::size_t cost = context::estimate_tokens(session.summary_);
+    const std::size_t cost = estimate_tokens(session.summary_);
 
     if (!gather.compacted.empty() &&
         compacted_tokens + cost >
@@ -1791,7 +1791,7 @@ std::string fold_assistant_memory(
                        )
                      : sessions[i].assistant_memory_watermark_;
 
-    const std::vector<const Message*> pending = context::memory_candidates(
+    const std::vector<const Message*> pending = memory_candidates(
         messages, start_after, assistant.summary_trigger_tokens_
     );
 
@@ -1838,7 +1838,7 @@ std::string fold_assistant_memory(
   const std::string effort =
       resolve_reasoning_effort(remote.model, assistant.summary_reasoning_effort_);
 
-  const net::Request summary_request = assistant_summary_request(
+  const Request summary_request = assistant_summary_request(
       remote.model, assistant.memory_, sessions_block,
       assistant.summary_token_budget_, effort
   );
@@ -1955,7 +1955,7 @@ std::string fold_assistant_memory(
 // than each session's assistant watermark, summed across all sessions. Public so
 // the interface can cache it.
 bool assistant_trigger_reached(
-    store::database& db, const Assistant& assistant, std::stop_token stop_token
+    database& db, const Assistant& assistant, std::stop_token stop_token
 ) {
   std::size_t new_tokens = 0;
 
@@ -1971,7 +1971,7 @@ bool assistant_trigger_reached(
 
     for (const Message& message: db.messages(session.id_)) {
       if (message.id_ > session.assistant_memory_watermark_) {
-        new_tokens += context::message_tokens(message);
+        new_tokens += message_tokens(message);
       }
     }
   }
@@ -1980,7 +1980,7 @@ bool assistant_trigger_reached(
 }
 
 std::string maybe_summarize_session(
-    store::database& db, const Session& session, const Remote& remote,
+    database& db, const Session& session, const Remote& remote,
     GenerationTask& task, std::stop_token stop_token, SummaryApprover approver
 ) {
   try {
@@ -2002,7 +2002,7 @@ std::string maybe_summarize_session(
 }
 
 std::string summarize_session_now(
-    store::database& db, const Session& session, const Remote& remote,
+    database& db, const Session& session, const Remote& remote,
     GenerationTask& task, std::stop_token stop_token, SummaryApprover approver
 ) {
   return fold_session_summary(
@@ -2011,7 +2011,7 @@ std::string summarize_session_now(
 }
 
 std::string maybe_summarize_assistant(
-    store::database& db, const Assistant& assistant, const Remote& remote,
+    database& db, const Assistant& assistant, const Remote& remote,
     GenerationTask& task, std::stop_token stop_token, SummaryApprover approver
 ) {
   try {
@@ -2037,7 +2037,7 @@ std::string maybe_summarize_assistant(
 }
 
 std::string summarize_assistant_now(
-    store::database& db, const Assistant& assistant, const Remote& remote,
+    database& db, const Assistant& assistant, const Remote& remote,
     GenerationTask& task, std::stop_token stop_token, SummaryApprover approver
 ) {
   return fold_assistant_memory(
@@ -2045,4 +2045,4 @@ std::string summarize_assistant_now(
   );
 }
 
-} // namespace lnb::net
+} // namespace lnb::core

@@ -39,7 +39,7 @@ class TranscriptCanvas;
 class ConversationView : public QWidget {
 public:
   ConversationView(
-      lnb::api::interface& api, const lnb::Settings& settings, std::uint32_t session_id,
+      lnb::core::interface& api, const lnb::Settings& settings, std::uint32_t session_id,
       QWidget* parent = nullptr);
 
   [[nodiscard]] std::uint32_t session_id() const { return session_id_; }
@@ -50,7 +50,7 @@ public:
 
   // The task the session's controller is polling, so the window can map it back
   // to this view for the running-task readout.
-  [[nodiscard]] std::shared_ptr<lnb::GenerationTask> task() const { return controller_.task(); }
+  [[nodiscard]] std::shared_ptr<lnb::core::GenerationTask> task() const { return controller_.task(); }
 
   // Requests the session's in-flight task to stop.
   void cancel() { controller_.cancel(); }
@@ -83,7 +83,7 @@ public:
   // finished turn's snapshot; both feed the tasks window.
   [[nodiscard]] std::string task_log() const { return controller_.task_log(); }
   [[nodiscard]] bool has_finished_task() const { return controller_.has_finished_task(); }
-  [[nodiscard]] lnb::GenerationTask::Snapshot last_snapshot() const {
+  [[nodiscard]] lnb::core::GenerationTask::Snapshot last_snapshot() const {
     return controller_.last_snapshot();
   }
 
@@ -119,7 +119,7 @@ private:
   // Appends one stored message (its metadata, quiet status line and styled
   // blocks) to `document`.
   void append_rendered_message(
-      render::Document& document, const lnb::Message& message, std::u16string status) const;
+      render::Document& document, const lnb::core::Message& message, std::u16string status) const;
 
   // Reveals one more page of older messages above the current window. The
   // canvas restores the reader's place, so paging never jumps.
@@ -149,7 +149,7 @@ private:
   // (Re)applies the two composer action icons for the active theme.
   void apply_composer_icons();
 
-  lnb::api::interface& api_;
+  lnb::core::interface& api_;
   const lnb::Settings& settings_;
   std::uint32_t session_id_;
   ConversationController controller_;
@@ -160,7 +160,7 @@ private:
   // currently handed to the canvas. Older pages are revealed on demand; the
   // number of rendered messages is therefore bounded no matter how long the
   // conversation grows.
-  std::vector<lnb::Message> messages_;
+  std::vector<lnb::core::Message> messages_;
   std::size_t window_start_ = 0;
 
   bool busy_ = false;

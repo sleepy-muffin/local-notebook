@@ -4,7 +4,7 @@
 
 #include <boost/json.hpp>
 
-namespace lnb::store {
+namespace lnb::core {
 
 namespace {
 
@@ -565,4 +565,4 @@ std::unordered_map<std::uint32_t, std::string> database::session_last_times() co
   return times;
 }
 
-} // namespace lnb::store
+} // namespace lnb::core

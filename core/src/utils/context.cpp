@@ -15,7 +15,7 @@
 // one token per non-ASCII codepoint. Counting each UTF-8 lead byte once is
 // conservative for multibyte scripts. This mirrors the legacy estimator so the
 // stored budgets keep their historical meaning.
-std::size_t lnb::context::estimate_tokens(const std::string& text) {
+std::size_t lnb::core::estimate_tokens(const std::string& text) {
   std::size_t ascii = 0;
   std::size_t non_ascii = 0;
 
@@ -30,14 +30,14 @@ std::size_t lnb::context::estimate_tokens(const std::string& text) {
   return (ascii + 3) / 4 + non_ascii;
 }
 
-std::size_t lnb::context::message_tokens(const Message& message) {
+std::size_t lnb::core::message_tokens(const Message& message) {
   constexpr std::size_t kMessageOverhead = 16;
   return estimate_tokens(message.content_) + kMessageOverhead;
 }
 
 
 
-lnb::context::Window lnb::context::plan_window(
+lnb::core::Window lnb::core::plan_window(
     const std::vector<Message>& messages, std::size_t window_tokens
 ) {
   Window window;
@@ -77,7 +77,7 @@ lnb::context::Window lnb::context::plan_window(
 }
 
 
-std::vector<const lnb::Message*> lnb::context::summary_candidates(
+std::vector<const lnb::core::Message*> lnb::core::summary_candidates(
     const std::vector<Message>& messages, std::size_t first, std::size_t last,
     std::size_t max_tokens
 ) {
@@ -101,7 +101,7 @@ std::vector<const lnb::Message*> lnb::context::summary_candidates(
   return candidates;
 }
 
-std::vector<const lnb::Message*> lnb::context::memory_candidates(
+std::vector<const lnb::core::Message*> lnb::core::memory_candidates(
     const std::vector<Message>& messages, std::uint32_t watermark,
     std::size_t max_tokens
 ) {
@@ -129,7 +129,7 @@ std::vector<const lnb::Message*> lnb::context::memory_candidates(
   return candidates;
 }
 
-std::string  lnb::context::clamp_tokens(const std::string& text, std::size_t max_tokens) {
+std::string  lnb::core::clamp_tokens(const std::string& text, std::size_t max_tokens) {
   if (max_tokens == 0 || estimate_tokens(text) <= max_tokens) {
     return text;
   }

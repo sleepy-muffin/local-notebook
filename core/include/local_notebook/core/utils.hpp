@@ -6,7 +6,7 @@
 
 #include "model.hpp"
 
-namespace lnb::utils {
+namespace lnb::core {
 
 // --- Process-wide storage and assistant registry ------------------------
 //
@@ -25,8 +25,8 @@ public:
 
   [[nodiscard]] std::filesystem::path global_settings_path() const;
 
-  [[nodiscard]] std::vector<std::string> scan_assistants();
-  [[nodiscard]] Assistant load_assistant(const std::string &uuid);
+  [[nodiscard]] std::vector<std::string> scan_assistants() const;
+  [[nodiscard]] Assistant load_assistant(const std::string &uuid) const;
 
 
   [[nodiscard]] std::filesystem::path assistant_dir(std::string_view uuid) const;
@@ -38,7 +38,7 @@ public:
   // deliberately never deleted; see instance_lock for why.
   [[nodiscard]] std::filesystem::path assistant_lock(std::string_view uuid);
 
-  void save_assistant(const std::string &uuid, const Assistant &assistant);
+  void save_assistant(const std::string &uuid, const Assistant &assistant) const;
 
 private:
   // Mutable so main() can redirect the whole tree. Defaults to the historical
@@ -48,9 +48,5 @@ private:
 
 };
 
-[[nodiscard]] std::string make_uuid();
-[[nodiscard]] std::string now_iso8601_utc();
 
-
-
-} // namespace lnb::utils
+} // namespace lnb::core

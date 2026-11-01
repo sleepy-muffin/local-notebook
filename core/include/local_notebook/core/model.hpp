@@ -14,7 +14,7 @@
 //
 // These are plain data. The lazily-loading managers (store/managers.hpp) live
 // outside the structs so the model stays copyable and cheap to pass around.
-namespace lnb {
+namespace lnb::core {
 
 // Who wrote a message. Replaces the legacy sender_id/reader_id pair.
 enum class Role : std::uint8_t {
@@ -131,7 +131,7 @@ public:
   // The wire protocol this assistant talks. Responses is the default for every
   // assistant, including ones created before the switch existed, because it is
   // the only endpoint that supports tool calling for the GPT-6 family.
-  net::ApiProtocol protocol_ = net::ApiProtocol::Responses;
+  ApiProtocol protocol_ = ApiProtocol::Responses;
 
   // The level a new session of this assistant starts on. It is not what normal
   // chat turns use, and not what the summarisers run at.

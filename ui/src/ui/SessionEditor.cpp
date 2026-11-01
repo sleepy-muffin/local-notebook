@@ -167,7 +167,7 @@ QComboBox* add_preset_row(
 } // namespace
 
 SessionEditor::SessionEditor(
-    lnb::api::interface& api, std::uint32_t session_id, QWidget* parent
+    lnb::core::interface& api, std::uint32_t session_id, QWidget* parent
 )
     : QDialog(parent),
       api_(api),
@@ -367,7 +367,7 @@ QWidget* SessionEditor::build_general_tab() {
   // ---- Budgets ----
   layout->addWidget(section_label(content, trs("Budgets")));
   {
-    const lnb::Session defaults;
+    const lnb::core::Session defaults;
     auto* grid = make_budget_grid();
 
     response_budget_ = add_budget_spin(
@@ -531,7 +531,7 @@ QWidget* SessionEditor::build_summary_tab() {
   }
 
   {
-    const lnb::Session defaults;
+    const lnb::core::Session defaults;
     auto* grid = make_budget_grid();
 
     // The trigger decides when the transcript is merged and which newest
@@ -696,7 +696,7 @@ QWidget* SessionEditor::build_tools_tab() {
   );
 
   {
-    const lnb::Session defaults;
+    const lnb::core::Session defaults;
     auto* grid = make_budget_grid();
 
     midturn_input_budget_ = add_budget_spin(
@@ -792,10 +792,10 @@ void SessionEditor::populate_reasoning(
   const std::string model = api_.assistant().model_;
   const std::string wanted = preferred;
   const std::string target =
-      wanted.empty() ? lnb::api::reasoning_default_for(model) : wanted;
+      wanted.empty() ? lnb::core::reasoning_default_for(model) : wanted;
 
   const std::vector<std::string> efforts =
-      lnb::api::reasoning_levels_for(model, target);
+      lnb::core::reasoning_levels_for(model, target);
 
   const QSignalBlocker blocker(combo);
   combo->clear();
@@ -830,7 +830,7 @@ void SessionEditor::save_session() {
     return;
   }
 
-  lnb::Session session = session_;
+  lnb::core::Session session = session_;
 
   session.title_ = title_->text().trimmed().toStdString();
   session.custom_instructions_ = instructions_->toPlainText().toStdString();
@@ -953,17 +953,17 @@ void SessionEditor::summarize_now() {
     return;
   }
 
-  const lnb::GenerationTask::Snapshot snapshot =
+  const lnb::core::GenerationTask::Snapshot snapshot =
       conversation_view_->last_snapshot();
 
   // A cancelled pass merged nothing and must not be reported as "nothing to
   // update": cancelling is a deliberate no-op, exactly like a declined
   // review, and the summary is simply left untouched.
-  if (snapshot.status == lnb::GenerationTask::Status::CANCELLED) {
+  if (snapshot.status == lnb::core::GenerationTask::Status::CANCELLED) {
     return;
   }
 
-  if (snapshot.status == lnb::GenerationTask::Status::FAILED) {
+  if (snapshot.status == lnb::core::GenerationTask::Status::FAILED) {
     QMessageBox::warning(
         this, trs("Summarization Update Failed"), to_qstring(snapshot.error)
     );

@@ -5,7 +5,7 @@
 namespace ui {
 
 ConversationController::ConversationController(
-    lnb::api::interface& api, std::uint32_t session_id
+    lnb::core::interface& api, std::uint32_t session_id
 )
     : api_(api), session_id_(session_id) {}
 
@@ -16,8 +16,8 @@ ConversationController::~ConversationController() {
   }
 }
 
-lnb::Session ConversationController::session() const {
-  return api_.session(session_id_).value_or(lnb::Session{});
+lnb::core::Session ConversationController::session() const {
+  return api_.session(session_id_).value_or(lnb::core::Session{});
 }
 
 bool ConversationController::busy() const {
@@ -37,8 +37,8 @@ bool ConversationController::has_finished_task() const {
   return task_ != nullptr && task_->is_terminal();
 }
 
-lnb::GenerationTask::Snapshot ConversationController::last_snapshot() const {
-  return task_ != nullptr ? task_->snapshot() : lnb::GenerationTask::Snapshot{};
+lnb::core::GenerationTask::Snapshot ConversationController::last_snapshot() const {
+  return task_ != nullptr ? task_->snapshot() : lnb::core::GenerationTask::Snapshot{};
 }
 
 std::string ConversationController::task_log() const {
@@ -73,9 +73,9 @@ bool ConversationController::send(std::string text, lnb::SummaryApprover approve
   // The interface owns the send policy: it validates the session and both summary
   // triggers, and persists the prompt before the turn starts, so a failed
   // generation still leaves the user's message in the transcript.
-  const lnb::api::error_code status = api_.session_prompt(session_id_, text);
+  const lnb::core::error_code status = api_.session_prompt(session_id_, text);
 
-  if (status != lnb::api::error_code::SUCCESS) {
+  if (status != lnb::core::error_code::SUCCESS) {
     return false;
   }
 
@@ -95,15 +95,15 @@ void ConversationController::summarize(lnb::SummaryApprover approver) {
 
   // The interface resolves the level: this session's own overflow first, then
   // the shared assistant trigger.
-  const lnb::api::error_code status =
+  const lnb::core::error_code status =
       api_.has_session_summary_trigger_met(session_id_);
 
-  if (status == lnb::api::error_code::ERR_SESSION_SUMMARY_TRIGGER_HAS_MET) {
+  if (status == lnb::core::error_code::ERR_SESSION_SUMMARY_TRIGGER_HAS_MET) {
     summarize_session_now(std::move(approver));
     return;
   }
 
-  if (status != lnb::api::error_code::ERR_ASSISTANT_MEMORY_TRIGGER_HAS_MET) {
+  if (status != lnb::core::error_code::ERR_ASSISTANT_MEMORY_TRIGGER_HAS_MET) {
     return;
   }
 

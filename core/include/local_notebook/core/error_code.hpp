@@ -1,6 +1,6 @@
 #pragma once
 
-namespace lnb::api {
+namespace lnb::core {
 enum class error_code {
   SUCCESS,
 

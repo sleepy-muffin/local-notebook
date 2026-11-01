@@ -13,13 +13,16 @@
 #include "local_notebook/core/generation_task.hpp"
 #include "local_notebook/core/model.hpp"
 #include "local_notebook/core/summary.hpp"
+#include "local_notebook/core/utils.hpp"
 
 namespace lnb::core {
 class application;
-}
 
-namespace lnb::api {
-
+// The conversation-token readout the title bar reports against. `used_tokens` is
+// the estimated cost of the unsummarised conversation alone (the messages above
+// the session watermark) — never the system prompt — reported without trimming;
+// `limit_tokens` is `session.summary_trigger_tokens_`. `used_tokens` is exactly
+// the quantity the automatic collapse compares against the trigger.
 struct ContextUsage {
   std::size_t used_tokens = 0;
   std::size_t limit_tokens = 0;
@@ -27,16 +30,16 @@ struct ContextUsage {
 
 class interface {
 public:
-  interface();
+  interface() = delete;
   explicit interface(std::filesystem::path store_root);
   ~interface();
 
   interface(const interface &) = delete;
   interface &operator=(const interface &) = delete;
 
-  bool open_assistant(std::string uuid, Assistant assistant);
+  bool open_assistant(std::string uuid);
   [[nodiscard]] std::string last_error() const;
-  [[nodiscard]] std::vector<Assistant> list_assistants();
+  [[nodiscard]] std::vector<std::pair<std::string, Assistant>> list_assistants();
   [[nodiscard]] bool has_assistant() const;
   [[nodiscard]] std::string assistant_uuid() const;
   [[nodiscard]] Assistant assistant() const;
@@ -52,6 +55,7 @@ public:
   [[nodiscard]] std::unordered_map<std::uint32_t, std::string> session_last_times() const;
   [[nodiscard]] std::optional<std::string> last_message_time(std::uint32_t session_id) const;
   [[nodiscard]] ContextUsage context_usage(std::uint32_t session_id) const;
+  [[nodiscard]] const store &get_store() const;
 
   std::uint32_t create_session(const Session &session);
   void save_session(const Session &session);
@@ -87,14 +91,6 @@ private:
   std::unique_ptr<lnb::core::application> application_;
 };
 
-void set_data_root(std::filesystem::path root);
-[[nodiscard]] std::filesystem::path data_root();
-[[nodiscard]] std::filesystem::path global_settings_path();
-[[nodiscard]] std::vector<std::string> scan_assistants();
-[[nodiscard]] Assistant load_assistant(const std::string &uuid);
-void save_assistant(const std::string &uuid, const Assistant &assistant);
-[[nodiscard]] std::string make_uuid();
-[[nodiscard]] std::string now_iso8601_utc();
 [[nodiscard]] std::string ensure_scheme(const std::string &url);
 [[nodiscard]] std::string normalize_base_url(const std::string &url);
 [[nodiscard]] bool is_valid_base_url(const std::string &url);
@@ -102,4 +98,4 @@ void save_assistant(const std::string &uuid, const Assistant &assistant);
 [[nodiscard]] std::vector<std::string>
 reasoning_levels_for(const std::string &model, const std::string &stored);
 
-} // namespace lnb::api
+} // namespace lnb::core

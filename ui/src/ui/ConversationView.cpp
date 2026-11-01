@@ -59,8 +59,28 @@ std::u16string to_u16(const QString& value) {
       reinterpret_cast<const char16_t*>(value.utf16()), static_cast<std::size_t>(value.size()));
 }
 
+// Picks the shortest stamp that still identifies the moment: today shows the
+// clock only, the current year drops the year, older times keep the full date.
+QString compact_time_format(const QDateTime& local) {
+  const QDate today = QDate::currentDate();
+  const QDate date = local.date();
+
+  if (date == today) {
+    return QStringLiteral("HH:mm");
+  }
+
+  if (date.year() == today.year()) {
+    return QStringLiteral("MM-dd HH:mm");
+  }
+
+  return QStringLiteral("yyyy-MM-dd HH:mm");
+}
+
 // A stored message's arrival time (ISO-8601 UTC) in the reader's local time. An
 // empty or unparsable value yields an empty string, so notice rows stay bare.
+//
+// The metadata row is narrow, so the stamp is abbreviated: only the clock time
+// for today, month and day for the current year, and the full date otherwise.
 QString format_message_time(const std::string& iso) {
   if (iso.empty()) {
     return {};
@@ -72,7 +92,7 @@ QString format_message_time(const std::string& iso) {
     return {};
   }
 
-  return parsed.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm"));
+  return parsed.toLocalTime().toString(compact_time_format(parsed.toLocalTime()));
 }
 
 // The estimated token cost of one message, on the same compact scale as the
@@ -245,7 +265,7 @@ private:
 // -----------------------------------------------------------------------------
 
 ConversationView::ConversationView(
-    lnb::api::interface& api, const lnb::Settings& settings, std::uint32_t session_id,
+    lnb::core::interface& api, const lnb::Settings& settings, std::uint32_t session_id,
     QWidget* parent)
     : QWidget(parent), api_(api), settings_(settings), session_id_(session_id),
       controller_(api, session_id) {
@@ -270,7 +290,7 @@ ConversationView::ConversationView(
   transcript_->set_on_reach_top([this]() { load_older(); });
 
   transcript_->set_on_copy([this](std::uint32_t message_id) {
-    for (const lnb::Message& message: messages_) {
+    for (const lnb::core::Message& message: messages_) {
       if (message.id_ == message_id) {
         QApplication::clipboard()->setText(from_utf8(message.content_));
         return;
@@ -279,7 +299,7 @@ ConversationView::ConversationView(
   });
 
   transcript_->set_on_edit([this](std::uint32_t message_id) {
-    for (const lnb::Message& message: messages_) {
+    for (const lnb::core::Message& message: messages_) {
       if (message.id_ == message_id) {
         prompt_edit(message_id, from_utf8(message.content_));
         return;
@@ -501,27 +521,10 @@ render::Document ConversationView::build_document() const {
   // The next request sends every message from the newest one back to where
   // summary_trigger_tokens_ runs out (plan_window), so each message can report
   // how much newer material travels with it.
-  const lnb::Session session = controller_.session();
+  const lnb::core::Session session = controller_.session();
   const std::size_t trigger = session.summary_trigger_tokens_;
 
-
-  auto the_window = lnb::context::plan_window(messages_, session.summary_trigger_tokens_);
-//   std::vector<std::size_t> accumulated(messages_.size(), 0);
-//   std::size_t boundary = messages_.size();
-//   std::size_t running = 0;
-//
-//   for (std::size_t i = messages_.size(); i-- > 0;) {
-//     const std::size_t cost = api_.message_tokens(messages_[i]);
-//
-//     // The newest message is always sent, even when it alone exceeds the trigger.
-//     if (running + cost > trigger && boundary < messages_.size()) {
-//       break;
-//     }
-//
-//     running += cost;
-//     boundary = i;
-//     accumulated[i] = running;
-//   }
+  auto the_window = lnb::core::plan_window(messages_, session.summary_trigger_tokens_);
 
   for (std::size_t i = window_start_; i < messages_.size(); ++i) {
     std::u16string status;
@@ -553,8 +556,8 @@ render::Document ConversationView::build_document() const {
 }
 
 void ConversationView::append_rendered_message(
-    render::Document& document, const lnb::Message& message, std::u16string status) const {
-  const bool from_self = message.role_ == lnb::Role::User;
+    render::Document& document, const lnb::core::Message& message, std::u16string status) const {
+  const bool from_self = message.role_ == lnb::core::Role::User;
   const render::Role role = from_self ? render::Role::User : render::Role::Assistant;
 
   const QString raw = from_utf8(message.content_);
@@ -803,7 +806,7 @@ void ConversationView::toggle_composer_height() {
 }
 
 bool ConversationView::summarize_due() const {
-  const lnb::Session session = controller_.session();
+  const lnb::core::Session session = controller_.session();
 
   if (session.id_ == 0) {
     return false;
@@ -813,7 +816,7 @@ bool ConversationView::summarize_due() const {
   // overflow first, then the shared assistant trigger (or an assistant fold
   // already in flight). Every composer therefore reports the same action, and the
   // send button is banned the moment either trigger is met.
-  return api_.has_session_summary_trigger_met(session_id_) != lnb::api::error_code::SUCCESS;
+  return api_.has_session_summary_trigger_met(session_id_) != lnb::core::error_code::SUCCESS;
 }
 
 void ConversationView::refresh_send_mode() {

@@ -1,7 +1,8 @@
 #include "net/tools.hpp"
 
+#include "shark/str.hpp"
 #include "shark/net/http.hpp"
-#include "net/search.hpp"
+#include "shark/file/search.hpp"
 #include "net/search_results.hpp"
 
 #include <boost/json/parse.hpp>
@@ -23,19 +24,10 @@
 #include <utility>
 #include <vector>
 
-namespace lnb::net {
+namespace lnb::core {
 
 namespace {
 
-// ASCII lower-case, used by the smart-case search. A locale-independent fold
-// keeps the matching behaviour stable across platforms.
-std::string to_lower(const std::string& text) {
-  std::string result = text;
-  std::transform(result.begin(), result.end(), result.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
-  return result;
-}
 
 bool equals_ignore_case(std::string_view a, std::string_view b) {
   if (a.size() != b.size()) {
@@ -253,7 +245,7 @@ std::string read_whole_file(const fs::path& file) {
 fs::path checked_repo_path_for_delete(
     const std::string& root_str, const std::string& relative
 ) {
-  const fs::path file = checked_repo_path(root_str, relative);
+  const fs::path file = shark::file::checked_repo_path(root_str, relative);
   std::error_code error;
 
   if (!fs::is_regular_file(file, error) || error) {
@@ -265,38 +257,6 @@ fs::path checked_repo_path_for_delete(
 
 } // namespace
 
-fs::path checked_repo_path(
-    const std::string& root_str, const std::string& relative
-) {
-  std::error_code error;
-  const fs::path root = fs::canonical(root_str, error);
-
-  if (error) {
-    throw std::runtime_error("The shared directory is unavailable");
-  }
-
-  const fs::path input(relative);
-
-  if (input.is_absolute()) {
-    throw std::runtime_error("Paths must be relative to the shared directories");
-  }
-
-  const fs::path candidate = fs::canonical(root / input, error);
-
-  if (error) {
-    throw std::runtime_error("Path does not exist");
-  }
-
-  // fs::canonical() resolves symlinks, so verify the final path still lives
-  // inside the root before handing it back. The error never names the actual
-  // path: the model only works with the relative view.
-  const fs::path rel = candidate.lexically_relative(root);
-  if (rel.empty() || rel.is_absolute() || *rel.begin() == "..") {
-    throw std::runtime_error("Path is outside the shared directories");
-  }
-
-  return candidate;
-}
 
 std::string json_string_or(
     const boost::json::object& object, std::string_view key, std::string fallback
@@ -328,192 +288,9 @@ int json_int_or(
   return static_cast<int>(value->as_double());
 }
 
-bool is_binary_file(const fs::path& path) {
-  // A file counts as binary when a NUL byte appears in its first block. This is
-  // the same convention git and ripgrep use, and it lets search_code cover
-  // every text language without maintaining an extension whitelist.
-  std::ifstream in(path, std::ios::binary);
-  if (!in) {
-    return true;
-  }
 
-  std::array<char, 8192> buffer{};
-  in.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-  const std::streamsize count = in.gcount();
 
-  return std::find(buffer.begin(), buffer.begin() + count, '\0') !=
-      buffer.begin() + count;
-}
 
-std::string list_directory(
-    const std::string& root_path, const std::string& relative_path
-) {
-  const fs::path directory = checked_repo_path(root_path, relative_path);
-
-  std::error_code error;
-  if (!fs::is_directory(directory, error) || error) {
-    throw std::runtime_error("Path is not a directory");
-  }
-
-  std::vector<std::string> entries;
-  constexpr std::size_t MAX_ENTRIES = 500;
-
-  fs::directory_iterator iterator(
-      directory, fs::directory_options::skip_permission_denied, error
-  );
-
-  if (error) {
-    throw std::runtime_error("Cannot read directory");
-  }
-
-  for (fs::directory_iterator end; iterator != end; iterator.increment(error)) {
-    if (error) break;
-
-    std::error_code type_error;
-    const bool is_directory = iterator->is_directory(type_error);
-
-    if (type_error) continue;
-
-    const std::string name = iterator->path().filename().generic_string();
-    entries.push_back(is_directory ? name + "/" : name);
-
-    if (entries.size() >= MAX_ENTRIES) {
-      break;
-    }
-  }
-
-  if (error) {
-    throw std::runtime_error("Cannot read directory");
-  }
-
-  std::sort(entries.begin(), entries.end());
-
-  std::ostringstream out;
-  if (entries.empty()) {
-    return "Directory is empty.";
-  }
-
-  for (const std::string& entry: entries) {
-    out << entry << '\n';
-  }
-
-  if (entries.size() == MAX_ENTRIES) {
-    out << "[Entry limit reached; narrow the directory path.]\n";
-  }
-
-  return out.str();
-}
-
-struct TextSearchResult {
-  std::string text;
-  int matches = 0;
-  int files_scanned = 0;
-  bool truncated = false;
-};
-
-TextSearchResult search_code(
-    const std::string& query, const std::string& root_path,
-    const std::string& relative_path, const std::string& display_prefix
-) {
-  if (query.empty() || query.size() > 256) {
-    throw std::runtime_error("Invalid search query");
-  }
-
-  const fs::path directory = checked_repo_path(root_path, relative_path);
-
-  std::error_code root_error;
-  const fs::path root = fs::canonical(root_path, root_error);
-
-  if (root_error || !fs::is_directory(directory)) {
-    throw std::runtime_error("Search path is not a directory");
-  }
-
-  // Smart case: a query without uppercase letters matches case-insensitively,
-  // mirroring ripgrep/Zed. This only ever adds matches; an all-lowercase query
-  // that the model would otherwise miss now succeeds.
-  const bool case_sensitive = std::any_of(
-      query.begin(), query.end(),
-      [](unsigned char c) { return std::isupper(c) != 0; }
-  );
-  const std::string needle = case_sensitive ? query : to_lower(query);
-
-  std::ostringstream out;
-  int matches = 0;
-  int files_scanned = 0;
-  constexpr int MAX_MATCHES = 30;
-  constexpr int CONTEXT_LINES = 2;
-
-  for (fs::recursive_directory_iterator it(
-           directory, fs::directory_options::skip_permission_denied
-       ),
-       end;
-       it != end && matches < MAX_MATCHES;
-       ++it) {
-    try {
-      if (it->is_symlink()) {
-        if (it->is_directory()) it.disable_recursion_pending();
-        continue;
-      }
-
-      if (!it->is_regular_file()) {
-        continue;
-      }
-
-      if (it->file_size() > 2 * 1024 * 1024) {
-        continue;
-      }
-
-      if (is_binary_file(it->path())) {
-        continue;
-      }
-
-      ++files_scanned;
-
-      std::ifstream in(it->path());
-      if (!in) continue;
-
-      std::vector<std::string> lines;
-      std::string line;
-      while (std::getline(in, line)) {
-        lines.push_back(std::move(line));
-        if (lines.size() > 200000) break;
-      }
-
-      for (std::size_t i = 0; i < lines.size() && matches < MAX_MATCHES; ++i) {
-        const std::string haystack = case_sensitive ? lines[i] : to_lower(lines[i]);
-        if (haystack.find(needle) == std::string::npos) {
-          continue;
-        }
-
-        const auto relative = fs::relative(it->path(), root).generic_string();
-        const std::string shown = display_prefix.empty()
-            ? relative
-            : display_prefix + "/" + relative;
-
-        out << "\n--- " << shown << ":" << (i + 1) << " ---\n";
-
-        const std::size_t begin = i > CONTEXT_LINES ? i - CONTEXT_LINES : 0;
-        const std::size_t finish = std::min(lines.size() - 1, i + CONTEXT_LINES);
-
-        for (std::size_t j = begin; j <= finish; ++j) {
-          out << (j + 1) << ": " << lines[j] << '\n';
-        }
-
-        ++matches;
-      }
-    } catch (const fs::filesystem_error&) {
-      // Skip files that cannot be read (permissions, races, ...).
-      continue;
-    }
-  }
-
-  TextSearchResult result;
-  result.text = out.str();
-  result.matches = matches;
-  result.files_scanned = files_scanned;
-  result.truncated = matches == MAX_MATCHES;
-  return result;
-}
 
 // ------------------------------ network tools ------------------------------
 
@@ -644,7 +421,7 @@ std::vector<MarkedElement> collect_marked(
           boost::regex_constants::mod_s
   );
 
-  const std::string lowered_marker = to_lower(marker);
+  const std::string lowered_marker = shark::str::to_lower(marker);
 
   std::vector<MarkedElement> out;
 
@@ -652,7 +429,7 @@ std::vector<MarkedElement> collect_marked(
        it != end; ++it) {
     const std::string attributes = (*it)[1].str();
 
-    if (to_lower(attributes).find(lowered_marker) == std::string::npos) {
+    if (shark::str::to_lower(attributes).find(lowered_marker) == std::string::npos) {
       continue;
     }
 
@@ -692,7 +469,7 @@ std::string resolve_ddg_url(const std::string& href) {
 } // namespace
 
 bool is_ddg_challenge(const std::string& html) {
-  const std::string lowered = to_lower(html);
+  const std::string lowered = shark::str::to_lower(html);
 
   // DuckDuckGo answers its bot-mitigation page with HTTP 202, so the response
   // status cannot distinguish it from a result page. These markers are unique
@@ -1584,7 +1361,7 @@ std::string run_search_code(
   bool truncated = false;
 
   for (const SearchSegment& segment: plan.segments) {
-    const TextSearchResult result = search_code(
+    const shark::file::TextSearchResult result = shark::file::search_code(
         query, segment.root->path.string(), segment.relative, segment.prefix
     );
 
@@ -1626,7 +1403,7 @@ std::string run_search_regex(
   bool truncated = false;
 
   for (const SearchSegment& segment: plan.segments) {
-    const CodeSearchResult result = search_regex(
+    const shark::file::TextSearchResult result = shark::file::search_regex(
         pattern, segment.root->path.string(), segment.relative, glob,
         segment.prefix
     );
@@ -1668,7 +1445,7 @@ std::string run_find_files(
   bool truncated = false;
 
   for (const SearchSegment& segment: plan.segments) {
-    FileListResult result = find_files(
+    shark::file::FileListResult result = shark::file::find_files(
         glob, segment.root->path.string(), segment.relative, segment.prefix
     );
 
@@ -1748,7 +1525,7 @@ std::string run_list_directory(
   }
 
   const PathTarget target = resolve_target(roots, requested, false);
-  return list_directory(target.root->path.string(), target.relative);
+  return shark::file::list_directory(target.root->path.string(), target.relative);
 }
 
 } // namespace
@@ -1833,7 +1610,7 @@ std::string execute_local_tool(
 
       const PathTarget target = resolve_target(roots, path, false);
       return read_file_range(
-          checked_repo_path(target.root->path.string(), target.relative), start,
+          shark::file::checked_repo_path(target.root->path.string(), target.relative), start,
           end
       );
     }
@@ -1875,7 +1652,7 @@ std::string execute_local_tool(
       }
 
       const PathTarget target = resolve_target(roots, path, false);
-      const fs::path file = checked_repo_path(
+      const fs::path file = shark::file::checked_repo_path(
           target.root->path.string(), target.relative
       );
       std::string content = read_whole_file(file);
@@ -1940,4 +1717,4 @@ std::string execute_local_tool(
   }
 }
 
-} // namespace lnb::net
+} // namespace lnb::core

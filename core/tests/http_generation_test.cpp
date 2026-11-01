@@ -36,7 +36,7 @@ void expect(bool condition, const std::string& label) {
 }
 
 bool wait_terminal(
-    const std::shared_ptr<lnb::GenerationTask>& task, std::chrono::seconds limit
+    const std::shared_ptr<lnb::core::GenerationTask>& task, std::chrono::seconds limit
 ) {
   const auto deadline = std::chrono::steady_clock::now() + limit;
 
@@ -159,28 +159,28 @@ int main() {
       std::filesystem::temp_directory_path() / "lnb-http-generation-test";
   std::error_code ignored;
   std::filesystem::remove_all(root, ignored);
-  lnb::api::set_data_root(root);
 
   SseServer server;
 
-  lnb::api::interface api;
+  lnb::core::interface api(root);
 
-  lnb::Assistant assistant;
+  lnb::core::Assistant assistant;
   assistant.name_ = "test";
   assistant.api_url_ =
       "http://127.0.0.1:" + std::to_string(server.port()) + "/v1";
   assistant.authentication_token_ = "key";
   assistant.model_ = "test-model";
-  assistant.protocol_ = lnb::net::ApiProtocol::ChatCompletions;
-  api.open_assistant("http-generation-test", assistant);
+  assistant.protocol_ = lnb::core::ApiProtocol::ChatCompletions;
+  api.get_store().save_assistant("http-generation-test", assistant);
+  api.open_assistant("http-generation-test");
 
-  lnb::Session session;
+  lnb::core::Session session;
   session.title_ = "Generation";
   const std::uint32_t session_id = api.create_session(session);
   expect(session_id != 0, "create_session failed");
 
   expect(
-      api.session_prompt(session_id, "hi") == lnb::api::error_code::SUCCESS,
+      api.session_prompt(session_id, "hi") == lnb::core::error_code::SUCCESS,
       "session_prompt failed"
   );
 
@@ -196,18 +196,18 @@ int main() {
   expect(finished, "generation did not finish within 5s");
   expect(
       task != nullptr &&
-          task->snapshot().status == lnb::GenerationTask::Status::COMPLETED,
+          task->snapshot().status == lnb::core::GenerationTask::Status::COMPLETED,
       "generation did not complete"
   );
 
-  const std::vector<lnb::Message> messages = api.messages(session_id);
+  const std::vector<lnb::core::Message> messages = api.messages(session_id);
   expect(messages.size() == 2, "transcript should hold the prompt and the reply");
   expect(
       !messages.empty() && messages.back().content_ == "Hello world",
       "assistant reply was not stored"
   );
 
-  const lnb::GenerationTask::Snapshot snapshot = task->snapshot();
+  const lnb::core::GenerationTask::Snapshot snapshot = task->snapshot();
   expect(snapshot.input_tokens == 11, "reported prompt tokens were not recorded");
   expect(snapshot.output_tokens == 2, "reported completion tokens were not recorded");
   expect(snapshot.usage_measured, "reported usage must not be marked an estimate");
@@ -217,7 +217,7 @@ int main() {
   );
   expect(
       snapshot.output_budget_kind ==
-          lnb::GenerationTask::BudgetKind::RESPONSE,
+          lnb::core::GenerationTask::BudgetKind::RESPONSE,
       "the budget kind should name the response budget"
   );
 

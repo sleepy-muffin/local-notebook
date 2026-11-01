@@ -45,7 +45,7 @@ void warn(const std::string& message) {
 }
 
 bool wait_terminal(
-    const std::shared_ptr<lnb::GenerationTask>& task, std::chrono::seconds limit
+    const std::shared_ptr<lnb::core::GenerationTask>& task, std::chrono::seconds limit
 ) {
   const auto deadline = std::chrono::steady_clock::now() + limit;
 
@@ -178,8 +178,8 @@ std::string pseudo_message(std::size_t index) {
 }
 
 void run_task(
-    lnb::api::interface& api, std::uint32_t session_id,
-    const std::shared_ptr<lnb::GenerationTask>& task, const std::string& label
+    lnb::core::interface& api, std::uint32_t session_id,
+    const std::shared_ptr<lnb::core::GenerationTask>& task, const std::string& label
 ) {
   if (task == nullptr) {
     fail(label + ": no task was started");
@@ -196,7 +196,7 @@ void run_task(
 
   api.wait_for_generation();
 
-  if (task->snapshot().status != lnb::GenerationTask::Status::COMPLETED) {
+  if (task->snapshot().status != lnb::core::GenerationTask::Status::COMPLETED) {
     fail(label + ": task did not complete");
   }
 }
@@ -208,31 +208,31 @@ int main() {
       std::filesystem::temp_directory_path() / "lnb-message-coverage-test";
   std::error_code ignored;
   std::filesystem::remove_all(root, ignored);
-  lnb::api::set_data_root(root);
 
   RecordingServer server;
 
-  lnb::api::interface api;
+  lnb::core::interface api(root);
 
-  lnb::Assistant assistant;
+  lnb::core::Assistant assistant;
   assistant.name_ = "test";
   assistant.api_url_ =
       "http://127.0.0.1:" + std::to_string(server.port()) + "/v1";
   assistant.authentication_token_ = "key";
   assistant.model_ = "test-model";
-  assistant.protocol_ = lnb::net::ApiProtocol::ChatCompletions;
+  assistant.protocol_ = lnb::core::ApiProtocol::ChatCompletions;
   // Small budgets keep the run to a handful of messages. The memory trigger
   // doubles as the per-session gather cap.
   assistant.summary_trigger_tokens_ = 200;
   assistant.summary_token_budget_ = 200;
   assistant.summary_token_budget_for_session_summarization_ = 16'000;
 
-  if (!api.open_assistant("message-coverage-test", assistant)) {
+  api.get_store().save_assistant("message-coverage-test", assistant);
+  if (!api.open_assistant("message-coverage-test")) {
     std::cerr << "FAIL: open_assistant failed\n";
     return 1;
   }
 
-  lnb::Session session;
+  lnb::core::Session session;
   session.title_ = "Coverage";
   session.summary_trigger_tokens_ = 100;
   session.summary_keep_tokens_ = 20;
@@ -250,7 +250,7 @@ int main() {
   constexpr std::size_t kSteadyMessages = 8;
 
   for (std::size_t i = 1; i <= kSteadyMessages; ++i) {
-    api.append_message(session_id, lnb::Role::User, pseudo_message(i));
+    api.append_message(session_id, lnb::core::Role::User, pseudo_message(i));
 
     run_task(
         api, session_id, api.summarize_session(session_id, false),
@@ -273,7 +273,7 @@ int main() {
 
   for (std::size_t i = kSteadyMessages + 1;
        i <= kSteadyMessages + kBurstMessages; ++i) {
-    api.append_message(session_id, lnb::Role::User, pseudo_message(i));
+    api.append_message(session_id, lnb::core::Role::User, pseudo_message(i));
   }
 
   run_task(
@@ -298,7 +298,7 @@ int main() {
   );
 
   const auto stored = api.session(session_id);
-  const std::vector<lnb::Message> messages = api.messages(session_id);
+  const std::vector<lnb::core::Message> messages = api.messages(session_id);
 
   if (!stored.has_value()) {
     std::cerr << "FAIL: the session is unreadable\n";
@@ -321,7 +321,7 @@ int main() {
   {
     const auto prompt = api.session_prompt(session_id, prompt_marker + "hi");
 
-    if (prompt != lnb::api::error_code::SUCCESS) {
+    if (prompt != lnb::core::error_code::SUCCESS) {
       fail("session_prompt failed for the window check");
     } else {
       run_task(

@@ -524,10 +524,10 @@ private:
 // MessageActionsBar
 // -----------------------------------------------------------------------------
 
-// The hover strip of one message: "#id  time  tokens" plus the message actions.
-// It is a single reusable widget (not one per message), moved over whichever
-// message is hovered. Its slot is reserved by the renderer's layout, so showing
-// it never reflows the transcript.
+// The hover strip of one message: "#id  time  tokens  status" plus the message
+// actions. It is a single reusable widget (not one per message), moved over
+// whichever message is hovered. Its slot is reserved by the renderer's layout,
+// so showing it never reflows the transcript.
 class MessageActionsBar final : public QWidget {
 public:
   explicit MessageActionsBar(QWidget* parent = nullptr);
@@ -551,6 +551,7 @@ private:
   QLabel* id_ = nullptr;
   QLabel* time_ = nullptr;
   QLabel* tokens_ = nullptr;
+  QLabel* status_ = nullptr;
   QWidget* row_ = nullptr;
   QBoxLayout* outer_ = nullptr;
   QToolButton* copy_ = nullptr;
@@ -561,6 +562,7 @@ private:
   render::Role role_ = render::Role::Assistant;
   bool editable_ = false;
   bool built_ = false;
+  std::u16string status_text_;
 
   std::function<void(std::uint32_t)> on_copy_;
   std::function<void(std::uint32_t)> on_edit_;
@@ -587,6 +589,7 @@ MessageActionsBar::MessageActionsBar(QWidget* parent) : QWidget(parent) {
   id_ = new QLabel(row_);
   time_ = new QLabel(row_);
   tokens_ = new QLabel(row_);
+  status_ = new QLabel(row_);
 
   copy_ = make_button(QStringLiteral("copy"), QStyle::SP_DialogSaveButton, tr("Copy message"));
   edit_ = make_button(QStringLiteral("edit"), QStyle::SP_FileIcon, tr("Edit message"));
@@ -595,6 +598,7 @@ MessageActionsBar::MessageActionsBar(QWidget* parent) : QWidget(parent) {
   row->addWidget(id_);
   row->addWidget(time_);
   row->addWidget(tokens_);
+  row->addWidget(status_);
   row->addWidget(copy_);
   row->addWidget(edit_);
   row->addWidget(remove_);
@@ -658,7 +662,18 @@ void MessageActionsBar::apply_style() {
   const ThemeColors& colors = theme().colors;
   const QString muted = css_color(colors.text_muted);
 
-  for (QLabel* label: {id_, time_, tokens_}) {
+  // The metadata row is deliberately quieter than the message body. Only the
+  // labels shrink here; the action buttons keep their icon size.
+  QFont meta_font = font();
+
+  if (meta_font.pointSizeF() > 0.0) {
+    meta_font.setPointSizeF(std::max(8.0, meta_font.pointSizeF() * 0.85));
+  } else if (meta_font.pixelSize() > 0) {
+    meta_font.setPixelSize(std::max(10, static_cast<int>(meta_font.pixelSize() * 0.85)));
+  }
+
+  for (QLabel* label: {id_, time_, tokens_, status_}) {
+    label->setFont(meta_font);
     label->setStyleSheet(
         QStringLiteral("QLabel { background: transparent; color: %1; }").arg(muted));
   }
@@ -675,7 +690,8 @@ void MessageActionsBar::apply_style() {
 }
 
 void MessageActionsBar::set_message(const render::MessageMeta& meta) {
-  if (built_ && meta.id == message_id_ && meta.role == role_ && meta.editable == editable_) {
+  if (built_ && meta.id == message_id_ && meta.role == role_ && meta.editable == editable_ &&
+      meta.status == status_text_) {
     return;
   }
 
@@ -683,6 +699,7 @@ void MessageActionsBar::set_message(const render::MessageMeta& meta) {
   message_id_ = meta.id;
   role_ = meta.role;
   editable_ = meta.editable;
+  status_text_ = meta.status;
 
   id_->setText(QStringLiteral("#%1").arg(meta.id));
   id_->setVisible(true);
@@ -692,6 +709,9 @@ void MessageActionsBar::set_message(const render::MessageMeta& meta) {
 
   tokens_->setText(qstring(meta.tokens));
   tokens_->setVisible(!tokens_->text().isEmpty());
+
+  status_->setText(qstring(meta.status));
+  status_->setVisible(!status_->text().isEmpty());
 
   copy_->setVisible(meta.role == render::Role::Assistant);
   edit_->setVisible(meta.editable);
@@ -808,50 +828,6 @@ struct TranscriptCanvas::Private {
     result.line_height_self = static_cast<float>(m.line_height_self) / 100.0f;
 
     return result;
-  }
-
-  // Draws the quiet per-message status line into the reserved strip under the
-  // message. It sits on the side opposite the hover actions, so the two never
-  // collide, and it is painted (not a widget) so it scrolls with the document.
-  void paint_message_status(QPainter& painter) {
-    const render::Document& document = layout.document();
-    const std::vector<render::MessageGeom>& geometry = layout.message_geometry();
-
-    QFont font = chat_font();
-
-    if (font.pointSizeF() > 0.0) {
-      font.setPointSizeF(std::max(7.0, font.pointSizeF() * 0.8));
-    } else if (font.pixelSize() > 0) {
-      font.setPixelSize(std::max(9, static_cast<int>(font.pixelSize() * 0.8)));
-    }
-
-    painter.save();
-    painter.setFont(font);
-    painter.setPen(theme().colors.text_muted);
-
-    for (std::size_t i = 0; i < document.messages.size() && i < geometry.size(); ++i) {
-      const render::MessageMeta& meta = document.messages[i];
-
-      if (meta.status.empty()) {
-        continue;
-      }
-
-      QRectF strip = to_rect(geometry[i].actions);
-      strip.setLeft(strip.left() + kBodySidePadding);
-      strip.setRight(strip.right() - kBodySidePadding);
-
-      if (strip.width() <= 0.0) {
-        continue;
-      }
-
-      const bool right_aligned = meta.role == render::Role::Assistant;
-      const Qt::Alignment align = (right_aligned ? Qt::AlignRight : Qt::AlignLeft) |
-                                  Qt::AlignVCenter;
-
-      painter.drawText(strip, align, qstring(meta.status));
-    }
-
-    painter.restore();
   }
 
   void update_scrollbars() {
@@ -1408,7 +1384,6 @@ void TranscriptCanvas::paintEvent(QPaintEvent* event) {
 
   QtCanvasAdapter canvas(painter, d_->backend);
   d_->layout.paint(canvas, clip, d_->selection);
-  d_->paint_message_status(painter);
 }
 
 void TranscriptCanvas::resizeEvent(QResizeEvent* event) {

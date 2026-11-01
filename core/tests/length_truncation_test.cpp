@@ -34,7 +34,7 @@ void expect(bool condition, const std::string& label) {
 }
 
 bool wait_terminal(
-    const std::shared_ptr<lnb::GenerationTask>& task, std::chrono::seconds limit
+    const std::shared_ptr<lnb::core::GenerationTask>& task, std::chrono::seconds limit
 ) {
   const auto deadline = std::chrono::steady_clock::now() + limit;
 
@@ -147,20 +147,20 @@ std::string endpoint(const TruncatingServer& server) {
   return "http://127.0.0.1:" + std::to_string(server.port()) + "/v1";
 }
 
-lnb::Assistant assistant_for(const TruncatingServer& server) {
-  lnb::Assistant assistant;
+lnb::core::Assistant assistant_for(const TruncatingServer& server) {
+  lnb::core::Assistant assistant;
   assistant.name_ = "truncation";
   assistant.api_url_ = endpoint(server);
   assistant.authentication_token_ = "key";
   assistant.model_ = "test-model";
-  assistant.protocol_ = lnb::net::ApiProtocol::ChatCompletions;
+  assistant.protocol_ = lnb::core::ApiProtocol::ChatCompletions;
   return assistant;
 }
 
-lnb::GenerationTask::Snapshot snapshot_of(
-    const std::shared_ptr<lnb::GenerationTask>& task
+lnb::core::GenerationTask::Snapshot snapshot_of(
+    const std::shared_ptr<lnb::core::GenerationTask>& task
 ) {
-  return task != nullptr ? task->snapshot() : lnb::GenerationTask::Snapshot{};
+  return task != nullptr ? task->snapshot() : lnb::core::GenerationTask::Snapshot{};
 }
 
 } // namespace
@@ -170,26 +170,26 @@ int main() {
       std::filesystem::temp_directory_path() / "lnb-length-truncation-test";
   std::error_code ignored;
   std::filesystem::remove_all(root, ignored);
-  lnb::api::set_data_root(root);
 
-  lnb::api::interface api;
+  lnb::core::interface api(root);
 
   // 1. A chat turn cut off at the limit is a failure, and its streamed text is
   //    discarded rather than persisted as the assistant reply.
   {
     TruncatingServer server;
+    api.get_store().save_assistant("length-chat", assistant_for(server));
     expect(
-        api.open_assistant("length-chat", assistant_for(server)),
+        api.open_assistant("length-chat"),
         "open_assistant failed for the chat case"
     );
 
-    lnb::Session session;
+    lnb::core::Session session;
     session.title_ = "Truncated chat";
     const std::uint32_t session_id = api.create_session(session);
     expect(session_id != 0, "create_session failed for the chat case");
 
     expect(
-        api.session_prompt(session_id, "hi") == lnb::api::error_code::SUCCESS,
+        api.session_prompt(session_id, "hi") == lnb::core::error_code::SUCCESS,
         "session_prompt failed for the chat case"
     );
 
@@ -202,10 +202,10 @@ int main() {
 
     api.wait_for_generation();
 
-    const lnb::GenerationTask::Snapshot snapshot = snapshot_of(task);
+    const lnb::core::GenerationTask::Snapshot snapshot = snapshot_of(task);
     expect(finished, "the truncated chat did not finish");
     expect(
-        snapshot.status == lnb::GenerationTask::Status::FAILED,
+        snapshot.status == lnb::core::GenerationTask::Status::FAILED,
         "a truncated chat turn must fail"
     );
     expect(
@@ -226,12 +226,13 @@ int main() {
   //    stored summary and its watermark untouched.
   {
     TruncatingServer server;
+    api.get_store().save_assistant("length-summary", assistant_for(server));
     expect(
-        api.open_assistant("length-summary", assistant_for(server)),
+        api.open_assistant("length-summary"),
         "open_assistant failed for the summary case"
     );
 
-    lnb::Session session;
+    lnb::core::Session session;
     session.title_ = "Truncated summary";
     // The trigger keeps the newest two messages verbatim; the keep boundary
     // stops at the newest one, so the range to fold is the message between them.
@@ -242,9 +243,9 @@ int main() {
     const std::uint32_t session_id = api.create_session(session);
     expect(session_id != 0, "create_session failed for the summary case");
 
-    api.append_message(session_id, lnb::Role::User, "alpha");
-    api.append_message(session_id, lnb::Role::Assistant, "beta");
-    api.append_message(session_id, lnb::Role::User, "gamma");
+    api.append_message(session_id, lnb::core::Role::User, "alpha");
+    api.append_message(session_id, lnb::core::Role::Assistant, "beta");
+    api.append_message(session_id, lnb::core::Role::User, "gamma");
 
     const auto task = api.summarize_session(session_id, true);
     const bool finished = wait_terminal(task, 5s);
@@ -255,10 +256,10 @@ int main() {
 
     api.wait_for_generation();
 
-    const lnb::GenerationTask::Snapshot snapshot = snapshot_of(task);
+    const lnb::core::GenerationTask::Snapshot snapshot = snapshot_of(task);
     expect(finished, "the truncated summary did not finish");
     expect(
-        snapshot.status == lnb::GenerationTask::Status::FAILED,
+        snapshot.status == lnb::core::GenerationTask::Status::FAILED,
         "a truncated summary must fail"
     );
     expect(
@@ -268,11 +269,11 @@ int main() {
     expect(
         snapshot.output_budget == session.summary_token_budget_ &&
             snapshot.output_budget_kind ==
-                lnb::GenerationTask::BudgetKind::SUMMARIZATION,
+                lnb::core::GenerationTask::BudgetKind::SUMMARIZATION,
         "a standalone summary must publish the summarization budget"
     );
 
-    const std::optional<lnb::Session> stored = api.session(session_id);
+    const std::optional<lnb::core::Session> stored = api.session(session_id);
     expect(stored.has_value(), "the summarized session disappeared");
     expect(
         stored.has_value() && stored->summary_.empty(),

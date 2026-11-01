@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-namespace lnb::net {
+namespace lnb::core {
 
 // One web-search hit, independent of which provider produced it.
 struct SearchResult {
@@ -30,4 +30,4 @@ std::vector<SearchResult> parse_bing_rss(const std::string& xml);
 // not enough to detect them.
 bool is_ddg_challenge(const std::string& html);
 
-} // namespace lnb::net
+} // namespace lnb::core

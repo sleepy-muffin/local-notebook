@@ -42,17 +42,18 @@ int main() {
       std::filesystem::temp_directory_path() / "lnb-assistant-settings-test";
   std::error_code ignored;
   std::filesystem::remove_all(root, ignored);
-  lnb::api::set_data_root(root);
 
-  lnb::Assistant assistant;
+  lnb::core::store store(root);
+
+  lnb::core::Assistant assistant;
   assistant.name_ = "settings test";
   assistant.turn_timeout_seconds_ = 240;
   assistant.summary_timeout_seconds_ = 600;
   assistant.summary_reasoning_effort_ = "high";
 
-  lnb::api::save_assistant("test-uuid", assistant);
+  store.save_assistant("test-uuid", assistant);
 
-  const lnb::Assistant loaded = lnb::api::load_assistant("test-uuid");
+  const lnb::core::Assistant loaded = store.load_assistant("test-uuid");
   expect_equal(loaded.turn_timeout_seconds_, 240, "turn timeout round-trips");
   expect_equal(loaded.summary_timeout_seconds_, 600, "summary timeout round-trips");
   expect(loaded.summary_reasoning_effort_ == "high", "summary reasoning level round-trips");
@@ -67,7 +68,7 @@ int main() {
     out << R"({"name":"legacy","api_url":"https://example.com/v1"})" << '\n';
   }
 
-  const lnb::Assistant legacy = lnb::api::load_assistant("legacy-uuid");
+  const lnb::core::Assistant legacy = store.load_assistant("legacy-uuid");
   expect_equal(legacy.turn_timeout_seconds_, 180, "legacy turn default");
   expect_equal(legacy.summary_timeout_seconds_, 420, "legacy summary default");
   // A file without the key reads as the shipped default, not the empty "model

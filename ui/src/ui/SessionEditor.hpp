@@ -16,10 +16,8 @@ class QSpinBox;
 class QStackedWidget;
 class QWidget;
 
-namespace lnb {
-namespace api {
+namespace lnb::core {
 class interface;
-}
 }
 
 namespace ui {
@@ -38,7 +36,7 @@ class ConversationView;
 class SessionEditor : public QDialog {
 public:
   SessionEditor(
-      lnb::api::interface& api, std::uint32_t session_id,
+      lnb::core::interface& api, std::uint32_t session_id,
       QWidget* parent = nullptr
   );
 
@@ -78,11 +76,11 @@ private:
   // conversation view) and reloads the persisted summary when it finishes.
   void summarize_now();
 
-  lnb::api::interface& api_;
+  lnb::core::interface& api_;
 
   // 0 while creating; the stored id once the session exists.
   std::uint32_t session_id_ = 0;
-  lnb::Session session_;
+  lnb::core::Session session_;
 
   QLineEdit* title_ = nullptr;
   QPlainTextEdit* instructions_ = nullptr;

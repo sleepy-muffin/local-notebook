@@ -46,7 +46,7 @@ void test_valid_bases() {
   };
 
   for (const std::string& base: bases) {
-    expect(lnb::api::is_valid_base_url(base), "accepted base: \"" + base + "\"");
+    expect(lnb::core::is_valid_base_url(base), "accepted base: \"" + base + "\"");
   }
 }
 
@@ -64,30 +64,30 @@ void test_invalid_bases() {
 
   for (const std::string& base: bases) {
     expect(
-        !lnb::api::is_valid_base_url(base), "rejected base: \"" + base + "\""
+        !lnb::core::is_valid_base_url(base), "rejected base: \"" + base + "\""
     );
   }
 }
 
 void test_helpers() {
   expect_equal(
-      lnb::api::ensure_scheme("example.com/v1"), "https://example.com/v1",
+      lnb::core::ensure_scheme("example.com/v1"), "https://example.com/v1",
       "ensure_scheme adds https"
   );
   expect_equal(
-      lnb::api::ensure_scheme("http://example.com/v1"),
+      lnb::core::ensure_scheme("http://example.com/v1"),
       "http://example.com/v1", "ensure_scheme keeps http"
   );
   expect_equal(
-      lnb::api::normalize_base_url("https://example.com/v1/responses"),
+      lnb::core::normalize_base_url("https://example.com/v1/responses"),
       "https://example.com/v1", "normalize strips /responses"
   );
   expect_equal(
-      lnb::api::normalize_base_url("https://example.com/v1/chat/completions"),
+      lnb::core::normalize_base_url("https://example.com/v1/chat/completions"),
       "https://example.com/v1", "normalize strips completions"
   );
   expect_equal(
-      lnb::api::normalize_base_url("https://example.com/v1///"),
+      lnb::core::normalize_base_url("https://example.com/v1///"),
       "https://example.com/v1", "normalize strips trailing slashes"
   );
 }
@@ -98,7 +98,7 @@ void test_repeated_validation() {
   for (int i = 0; i < 1000; ++i) {
     const std::string base = "https://io.iioooo.com/v1";
     expect(
-        lnb::api::is_valid_base_url(base), "repeated validation stays true"
+        lnb::core::is_valid_base_url(base), "repeated validation stays true"
     );
 
     const std::string noise(

@@ -4,22 +4,20 @@
 #include "local_notebook/core/utils.hpp"
 #include "net/protocol.hpp"
 
-namespace lnb::api {
-
-interface::interface() : interface(data_root()) {}
+namespace lnb::core {
 
 interface::interface(std::filesystem::path store_root)
     : application_(std::make_unique<core::application>(std::move(store_root))) {}
 
 interface::~interface() = default;
 
-bool interface::open_assistant(std::string uuid, Assistant assistant) {
-  return application_->open_assistant(std::move(uuid), std::move(assistant));
+bool interface::open_assistant(std::string uuid) {
+  return application_->open_assistant(std::move(uuid));
 }
 
 std::string interface::last_error() const { return application_->last_error(); }
 
-std::vector<Assistant> interface::list_assistants() { return application_->list_assistants(); }
+std::vector<std::pair<std::string, Assistant>> interface::list_assistants() { return application_->list_assistants(); }
 
 bool interface::has_assistant() const { return application_->has_assistant(); }
 
@@ -36,6 +34,10 @@ void interface::set_assistant_memory(std::string memory) {
 }
 
 void interface::save_assistant() { application_->save_assistant(); }
+
+const store& interface::get_store() const {
+  return application_->get_store();
+}
 
 std::optional<Session> interface::session(std::uint32_t session_id) const {
   return application_->session(session_id);
@@ -150,49 +152,12 @@ void interface::cancel_assistant() { application_->cancel_assistant(); }
 
 void interface::wait_for_generation() { application_->wait_for_generation(); }
 
-namespace {
-
-  std::filesystem::path &process_data_root() {
-    static std::filesystem::path root{"data"};
-    return root;
-  }
-
-  utils::store process_store() { return utils::store(process_data_root()); }
-
-} // namespace
-
-void set_data_root(std::filesystem::path root) {
-  process_data_root() = root.empty() ? std::filesystem::path{"data"} : std::move(root);
-}
-
-std::filesystem::path data_root() { return process_data_root(); }
-
-std::filesystem::path global_settings_path() { return process_store().global_settings_path(); }
-
-std::vector<std::string> scan_assistants() { return process_store().scan_assistants(); }
-
-Assistant load_assistant(const std::string &uuid) { return process_store().load_assistant(uuid); }
-
-void save_assistant(const std::string &uuid, const Assistant &assistant) {
-  process_store().save_assistant(uuid, assistant);
-}
-
-std::string make_uuid() { return utils::make_uuid(); }
-
-std::string now_iso8601_utc() { return utils::now_iso8601_utc(); }
-
-std::string ensure_scheme(const std::string &url) { return net::ensure_scheme(url); }
-
-std::string normalize_base_url(const std::string &url) { return net::normalize_base_url(url); }
-
-bool is_valid_base_url(const std::string &url) { return net::is_valid_base_url(url); }
-
 std::string reasoning_default_for(const std::string &model) {
-  return net::default_reasoning_effort(model);
+  return default_reasoning_effort(model);
 }
 
 std::vector<std::string> reasoning_levels_for(const std::string &model, const std::string &stored) {
-  return net::reasoning_efforts_with_stored(model, stored);
+  return reasoning_efforts_with_stored(model, stored);
 }
 
-} // namespace lnb::api
+} // namespace lnb::core

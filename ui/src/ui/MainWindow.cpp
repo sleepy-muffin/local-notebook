@@ -110,7 +110,7 @@ QString format_time(const std::optional<std::string>& iso) {
 } // namespace
 
 MainWindow::MainWindow(
-    lnb::api::interface& api, lnb::Settings& settings, QWidget* parent
+    lnb::core::interface& api, lnb::Settings& settings, QWidget* parent
 )
     : BackgroundWidget(parent, /*use_background_image=*/true),
       api_(api),
@@ -132,7 +132,7 @@ MainWindow::MainWindow(
   refresh_sessions();
 
   // Open the most recent session so the app is useful immediately.
-  const std::vector<lnb::Session> sessions =
+  const std::vector<lnb::core::Session> sessions =
       api_.recent_sessions(kSessionListLimit);
   if (!sessions.empty()) {
     open_conversation(sessions.front().id_);
@@ -162,7 +162,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 
   // Persist the window geometry for the next launch.
   settings_.geometry = saveGeometry().toBase64().toStdString();
-  lnb::save_settings(settings_);
+  lnb::save_settings(api_, settings_);
 
   BackgroundWidget::closeEvent(event);
 }
@@ -676,7 +676,7 @@ void MainWindow::refresh_sessions() {
     return;
   }
 
-  std::vector<lnb::Session> sessions = api_.recent_sessions(kSessionListLimit);
+  std::vector<lnb::core::Session> sessions = api_.recent_sessions(kSessionListLimit);
 
   // The newest message time of every session, in one query, aligned with the
   // ordered snapshot for the rows' second line.
@@ -686,12 +686,12 @@ void MainWindow::refresh_sessions() {
   // Split into the two categories. most_recent() already returns pinned sessions
   // first and each group keeps its newest-message order, so no extra sort is
   // needed.
-  std::vector<lnb::Session> pinned;
-  std::vector<lnb::Session> rest;
+  std::vector<lnb::core::Session> pinned;
+  std::vector<lnb::core::Session> rest;
   std::vector<std::string> pinned_times;
   std::vector<std::string> rest_times;
 
-  for (const lnb::Session& session : sessions) {
+  for (const lnb::core::Session& session : sessions) {
     const auto it = last_times.find(session.id_);
     const std::string time = it == last_times.end() ? std::string{} : it->second;
 
@@ -709,7 +709,7 @@ void MainWindow::refresh_sessions() {
 
   for (const auto& [id, view] : conversations_) {
     const bool found = std::any_of(
-        sessions.begin(), sessions.end(), [id](const lnb::Session& s) { return s.id_ == id; }
+        sessions.begin(), sessions.end(), [id](const lnb::core::Session& s) { return s.id_ == id; }
     );
 
     if (!found) {
@@ -742,7 +742,7 @@ void MainWindow::refresh_sessions() {
   // changed, so a new message does not clear and rebuild the lists on every turn.
   const auto unchanged = [](
                              const SessionListModel* model,
-                             const std::vector<lnb::Session>& rows,
+                             const std::vector<lnb::core::Session>& rows,
                              const std::vector<std::string>& times
                          ) {
     if (static_cast<std::size_t>(model->rowCount()) != rows.size()) {
@@ -750,8 +750,8 @@ void MainWindow::refresh_sessions() {
     }
 
     for (int row = 0; row < model->rowCount(); ++row) {
-      const lnb::Session stored = model->session_at(row);
-      const lnb::Session& wanted = rows[static_cast<std::size_t>(row)];
+      const lnb::core::Session stored = model->session_at(row);
+      const lnb::core::Session& wanted = rows[static_cast<std::size_t>(row)];
 
       if (stored.id_ != wanted.id_ || stored.title_ != wanted.title_ ||
           stored.pinned_ != wanted.pinned_ ||
@@ -1018,7 +1018,7 @@ void MainWindow::update_task_indicator() {
 
   // Count the running tasks without touching the database: this runs on every
   // poll tick, while the full entry list is only built for a visible window.
-  const std::shared_ptr<lnb::GenerationTask> assistant = api_.assistant_task();
+  const std::shared_ptr<lnb::core::GenerationTask> assistant = api_.assistant_task();
   int running = 0;
 
   for (const auto& [id, view] : conversations_) {
@@ -1055,14 +1055,14 @@ void MainWindow::update_task_indicator() {
     return;
   }
 
-  const auto describe = [](lnb::GenerationTask::Status status) -> QString {
+  const auto describe = [](lnb::core::GenerationTask::Status status) -> QString {
     switch (status) {
-      case lnb::GenerationTask::Status::PENDING:
-      case lnb::GenerationTask::Status::RUNNING:
+      case lnb::core::GenerationTask::Status::PENDING:
+      case lnb::core::GenerationTask::Status::RUNNING:
         return trs("Running");
-      case lnb::GenerationTask::Status::FAILED:
+      case lnb::core::GenerationTask::Status::FAILED:
         return trs("Failed");
-      case lnb::GenerationTask::Status::CANCELLED:
+      case lnb::core::GenerationTask::Status::CANCELLED:
         return trs("Cancelled");
       default:
         return trs("Completed");
@@ -1096,7 +1096,7 @@ void MainWindow::update_task_indicator() {
         ? from_utf8(session->title_)
         : trs("Session #%1").arg(id);
 
-    const lnb::GenerationTask::Snapshot snapshot = view->last_snapshot();
+    const lnb::core::GenerationTask::Snapshot snapshot = view->last_snapshot();
     entry.rounds = snapshot.rounds;
     // Measured totals are summed over every request the task has completed; the
     // in-flight request's live projection is added on top, so the readout moves
@@ -1129,7 +1129,7 @@ void MainWindow::update_task_indicator() {
     entry.cancellable = busy;
     entry.title = trs("Assistant memory");
 
-    const lnb::GenerationTask::Snapshot snapshot = assistant->snapshot();
+    const lnb::core::GenerationTask::Snapshot snapshot = assistant->snapshot();
     entry.rounds = snapshot.rounds;
     // Measured totals are summed over every request the task has completed; the
     // in-flight request's live projection is added on top, so the readout moves
@@ -1209,7 +1209,7 @@ void MainWindow::pin_session(std::uint32_t session_id) {
     return;
   }
 
-  lnb::Session updated = *stored;
+  lnb::core::Session updated = *stored;
   updated.pinned_ = !updated.pinned_;
   api_.save_session(updated);
 
@@ -1285,7 +1285,7 @@ void MainWindow::update_header() {
 
   header_subtitle_->setText(trs("Session #%1").arg(session->id_));
 
-  const lnb::api::ContextUsage usage = api_.context_usage(current_session_);
+  const lnb::core::ContextUsage usage = api_.context_usage(current_session_);
 
   header_summarization_trigger_->setText(
       trs("summarization trigger: ") + format_tokens(usage.used_tokens, usage.limit_tokens)
@@ -1301,7 +1301,7 @@ void MainWindow::update_header() {
 }
 
 void MainWindow::update_current_block() {
-  const lnb::Assistant assistant = api_.assistant();
+  const lnb::core::Assistant assistant = api_.assistant();
 
   const QString name = from_utf8(assistant.name_);
   current_name_->setText(name.isEmpty() ? trs("Assistant") : name);

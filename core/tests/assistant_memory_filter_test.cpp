@@ -29,11 +29,10 @@ int main() {
       std::filesystem::temp_directory_path() / "lnb-assistant-memory-filter-test";
   std::error_code ignored;
   std::filesystem::remove_all(root, ignored);
-  lnb::api::set_data_root(root);
 
-  lnb::api::interface api;
+  lnb::core::interface api(root);
 
-  lnb::Assistant assistant;
+  lnb::core::Assistant assistant;
   assistant.name_ = "test";
   assistant.api_url_ = "http://127.0.0.1:9/v1";
   assistant.authentication_token_ = "key";
@@ -41,13 +40,14 @@ int main() {
   // Any new token is enough to reach the shared trigger; this test checks which
   // sessions count, not the threshold arithmetic.
   assistant.summary_trigger_tokens_ = 1;
-  expect(api.open_assistant("filter-test", assistant), "open_assistant failed");
+  api.get_store().save_assistant("filter-test", assistant);
+  expect(api.open_assistant("filter-test"), "open_assistant failed");
 
   // A fresh session includes itself by default.
-  lnb::Session defaults;
+  lnb::core::Session defaults;
   expect(defaults.include_in_assistant_memory_, "a new session must be included");
 
-  lnb::Session session;
+  lnb::core::Session session;
   session.title_ = "Opted out";
   session.summary_trigger_tokens_ = 2'000'000'000;  // keep the session trigger clear
   session.include_in_assistant_memory_ = false;
@@ -62,13 +62,13 @@ int main() {
       "the opt-out flag must round-trip through the database"
   );
 
-  api.append_message(session_id, lnb::Role::User, "a message that counts");
+  api.append_message(session_id, lnb::core::Role::User, "a message that counts");
 
   // Only the opted-out session has new content, so neither assistant path may
   // see it: the session itself stays below its own trigger.
   expect(
       api.has_session_summary_trigger_met(session_id) ==
-          lnb::api::error_code::SUCCESS,
+          lnb::core::error_code::SUCCESS,
       "an opted-out session must not reach the assistant trigger"
   );
   expect(
@@ -77,13 +77,13 @@ int main() {
   );
 
   // Opting the same session back in makes the same transcript count.
-  lnb::Session opted_in = *stored;
+  lnb::core::Session opted_in = *stored;
   opted_in.include_in_assistant_memory_ = true;
   api.save_session(opted_in);
 
   expect(
       api.has_session_summary_trigger_met(session_id) ==
-          lnb::api::error_code::ERR_ASSISTANT_MEMORY_TRIGGER_HAS_MET,
+          lnb::core::error_code::ERR_ASSISTANT_MEMORY_TRIGGER_HAS_MET,
       "an opted-in session must reach the assistant trigger"
   );
   expect(

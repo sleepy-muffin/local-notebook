@@ -13,16 +13,16 @@ namespace ui {
 
 // The shared worker state lives in lnb; bring it in so the controller reads
 // naturally.
-using lnb::GenerationTask;
+using lnb::core::GenerationTask;
 
 // One session's conversation logic. The application owns a single
-// lnb::api::interface, and every controller talks to it: a send is validated and
+// lnb::core::interface, and every controller talks to it: a send is validated and
 // persisted by interface::session_prompt(), then the turn itself is driven by
 // interface::start_generation(). The controller only polls the task the
 // interface returns, so the view stays passive.
 class ConversationController {
 public:
-  ConversationController(lnb::api::interface& api, std::uint32_t session_id);
+  ConversationController(lnb::core::interface& api, std::uint32_t session_id);
   ~ConversationController();
 
   ConversationController(const ConversationController&) = delete;
@@ -36,7 +36,7 @@ public:
   [[nodiscard]] std::shared_ptr<GenerationTask> task() const { return task_; }
 
   // The session as stored (a fresh read).
-  [[nodiscard]] lnb::Session session() const;
+  [[nodiscard]] lnb::core::Session session() const;
 
   // True while the session's task is in flight.
   [[nodiscard]] bool busy() const;
@@ -73,7 +73,7 @@ public:
   // The last finished task's outcome and diagnostic log, retained after the worker
   // is gone so the tasks window can show a failure and dump its log.
   [[nodiscard]] bool has_finished_task() const;
-  [[nodiscard]] lnb::GenerationTask::Snapshot last_snapshot() const;
+  [[nodiscard]] lnb::core::GenerationTask::Snapshot last_snapshot() const;
 
   // The diagnostic log for the current task, or the last finished one when idle.
   [[nodiscard]] std::string task_log() const;
@@ -119,7 +119,7 @@ private:
 
   void finish_worker();
 
-  lnb::api::interface& api_;
+  lnb::core::interface& api_;
   std::uint32_t session_id_;
 
   // The session's own turn or fold, returned by interface::start_generation()

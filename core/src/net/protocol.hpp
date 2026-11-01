@@ -12,7 +12,7 @@
 
 // The protocol-neutral request model. The protocol enum itself is public
 // (local-notebook-core/api_protocol.hpp), because it is part of Assistant.
-namespace lnb::net {
+namespace lnb::core {
 
 // One entry in the outgoing conversation, independent of the wire API. The
 // builders serialise this to `messages` (Chat) or `input` (Responses), which
@@ -142,4 +142,4 @@ struct Request {
 // "http://" or "https://" is left alone.
 [[nodiscard]] std::string ensure_scheme(const std::string& url);
 
-} // namespace lnb::net
+} // namespace lnb::core

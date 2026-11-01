@@ -17,9 +17,10 @@ class QToolButton;
 
 namespace lnb {
 struct Settings;
-namespace api {
-class interface;
 }
+
+namespace lnb::core {
+class interface;
 }
 
 namespace ui {
@@ -37,7 +38,7 @@ class TasksWindow;
 class MainWindow : public BackgroundWidget {
 public:
   explicit MainWindow(
-      lnb::api::interface& api, lnb::Settings& settings,
+      lnb::core::interface& api, lnb::Settings& settings,
       QWidget* parent = nullptr
   );
   ~MainWindow() override;
@@ -108,7 +109,7 @@ private:
   // Refreshes the current-session block at the foot of the sidebar.
   void update_current_block();
 
-  lnb::api::interface& api_;
+  lnb::core::interface& api_;
   lnb::Settings& settings_;
 
   QWidget* sidebar_ = nullptr;

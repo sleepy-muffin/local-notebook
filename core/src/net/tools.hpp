@@ -9,7 +9,7 @@
 #include <string_view>
 #include <vector>
 
-namespace lnb::net {
+namespace lnb::core {
 
 namespace fs = std::filesystem;
 
@@ -41,12 +41,6 @@ struct ToolPermissions {
   }
 };
 
-// Resolves a model-supplied `relative` path against `root_str` and rejects
-// anything that would escape the root (including via symlinks). Absolute paths
-// are rejected: the model only ever works with relative paths.
-fs::path checked_repo_path(
-    const std::string& root_str, const std::string& relative
-);
 
 std::string json_string_or(
     const boost::json::object& object, std::string_view key,
@@ -56,13 +50,8 @@ int json_int_or(
     const boost::json::object& object, std::string_view key, int fallback
 );
 
-// True when the file looks binary (a NUL byte in its first block), so
-// search_code can cover every text language without an extension whitelist.
-bool is_binary_file(const fs::path& path);
 
-std::string list_directory(
-    const std::string& root_path, const std::string& relative_path
-);
+
 
 // Performs an HTTP GET on `url` (http/https only) and returns the raw body,
 // capped to `max_bytes`. Throws on a transport error.
@@ -104,4 +93,4 @@ std::string execute_local_tool(
     const ToolPermissions& permissions = {}
 );
 
-} // namespace lnb::net
+} // namespace lnb::core

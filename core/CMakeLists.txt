@@ -51,37 +51,18 @@ find_package(Threads REQUIRED)
 # executor type.
 add_library(${PROJECT_NAME}
         STATIC
-        include/local_notebook/core/api_protocol.hpp
-        include/local_notebook/core/error_code.hpp
-        include/local_notebook/core/generation_task.hpp
-        include/local_notebook/core/interface.hpp
-        include/local_notebook/core/utils.hpp
-        include/local_notebook/core/model.hpp
-        include/local_notebook/core/summary.hpp
-        include/local_notebook/core/context.hpp
 
         src/interface.cpp
         src/application.cpp
         src/utils.cpp
 
-
-        src/utils/lock.hpp
-        src/utils/lock.cpp
         src/utils/context.cpp
 
-        src/store/database.hpp
         src/store/database.cpp
-        src/store/managers.hpp
         src/store/managers.cpp
 
-        src/net/protocol.hpp
         src/net/protocol.cpp
-        src/net/tools.hpp
         src/net/tools.cpp
-        src/net/search_results.hpp
-        src/net/search.hpp
-        src/net/search.cpp
-        src/net/client.hpp
         src/net/client.cpp
 
 

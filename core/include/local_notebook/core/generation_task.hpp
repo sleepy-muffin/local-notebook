@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-namespace lnb {
+namespace lnb::core {
 
 // The shared state of one background generation, updated by the worker thread
 // and polled by the UI thread. It is the only channel between the two, so every

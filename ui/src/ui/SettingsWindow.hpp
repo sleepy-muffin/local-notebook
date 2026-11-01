@@ -18,10 +18,8 @@ class QShowEvent;
 class QStackedWidget;
 class QWidget;
 
-namespace lnb {
-namespace api {
+namespace lnb::core {
 class interface;
-}
 }
 
 namespace ui {
@@ -40,7 +38,7 @@ class AssistantForm;
 class SettingsWindow : public QDialog {
 public:
   explicit SettingsWindow(
-      lnb::api::interface& api, lnb::Settings& settings,
+      lnb::core::interface& api, lnb::Settings& settings,
       QWidget* parent = nullptr
   );
 
@@ -99,7 +97,7 @@ private:
 
   void update_account_page();
 
-  lnb::api::interface& api_;
+  lnb::core::interface& api_;
   lnb::Settings& settings_;
 
   // The edited copies; nothing is committed until Save.

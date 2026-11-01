@@ -89,10 +89,10 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
     protocol_ = new ComboBox(this);
     protocol_->setObjectName(QStringLiteral("AssistantProtocol"));
     protocol_->addItem(
-        trs("Responses API"), static_cast<int>(lnb::net::ApiProtocol::Responses)
+        trs("Responses API"), static_cast<int>(lnb::core::ApiProtocol::Responses)
     );
     protocol_->addItem(
-        trs("Chat Completions"), static_cast<int>(lnb::net::ApiProtocol::ChatCompletions)
+        trs("Chat Completions"), static_cast<int>(lnb::core::ApiProtocol::ChatCompletions)
     );
     protocol_->setToolTip(
         trs("The endpoint used for every request. Responses is required for tool "
@@ -292,7 +292,7 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
   content->addStretch(1);
 }
 
-void AssistantForm::set_assistant(const lnb::Assistant& assistant) {
+void AssistantForm::set_assistant(const lnb::core::Assistant& assistant) {
   name_->setText(to_qstring(assistant.name_));
   model_->setText(to_qstring(assistant.model_));
 
@@ -327,7 +327,7 @@ void AssistantForm::set_assistant(const lnb::Assistant& assistant) {
   );
 }
 
-void AssistantForm::write_into(lnb::Assistant& assistant) const {
+void AssistantForm::write_into(lnb::core::Assistant& assistant) const {
   assistant.name_ = name_->text().trimmed().toStdString();
   if (assistant.name_.empty()) {
     assistant.name_ = "Untitled assistant";
@@ -343,9 +343,9 @@ void AssistantForm::write_into(lnb::Assistant& assistant) const {
   const std::string url_text = api_url_->text().trimmed().toStdString();
   assistant.api_url_ = url_text.empty()
       ? std::string{}
-      : lnb::api::normalize_base_url(lnb::api::ensure_scheme(url_text));
+      : lnb::core::normalize_base_url(lnb::core::ensure_scheme(url_text));
 
-  assistant.protocol_ = static_cast<lnb::net::ApiProtocol>(
+  assistant.protocol_ = static_cast<lnb::core::ApiProtocol>(
       protocol_->currentData().toInt()
   );
   assistant.reasoning_effort_ = reasoning_->currentText().toStdString();
@@ -375,11 +375,11 @@ void AssistantForm::write_into(lnb::Assistant& assistant) const {
 bool AssistantForm::validate_base_url(QString& error) const {
   // The stored base is passed through the same completion a focus-out performs,
   // so typing "example.com/v1" validates as "https://example.com/v1".
-  const std::string url = lnb::api::ensure_scheme(
+  const std::string url = lnb::core::ensure_scheme(
       api_url_->text().trimmed().toStdString()
   );
 
-  if (!lnb::api::is_valid_base_url(url)) {
+  if (!lnb::core::is_valid_base_url(url)) {
     error = trs("The API URL must be an http:// or https:// base ending in /v1, "
                 "for example https://api.example.com/v1.");
     return false;
@@ -400,10 +400,10 @@ void AssistantForm::rebuild_reasoning(
 
   // An empty selection (a fresh form) starts on the model's first available level.
   const std::string target =
-      wanted.empty() ? lnb::api::reasoning_default_for(model) : wanted;
+      wanted.empty() ? lnb::core::reasoning_default_for(model) : wanted;
 
   const std::vector<std::string> efforts =
-      lnb::api::reasoning_levels_for(model, target);
+      lnb::core::reasoning_levels_for(model, target);
 
   // Rebuilding the list would otherwise emit spurious change signals.
   const QSignalBlocker blocker(combo);
@@ -429,7 +429,7 @@ bool AssistantForm::eventFilter(QObject* watched, QEvent* event) {
       // Completing the scheme is a visible, explicit edit: the field now shows
       // exactly the base that will be stored.
       api_url_->setText(
-          to_qstring(lnb::api::ensure_scheme(text.toStdString()))
+          to_qstring(lnb::core::ensure_scheme(text.toStdString()))
       );
     }
   }

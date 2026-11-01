@@ -53,21 +53,21 @@ std::string run(
     const std::string& name, const std::string& arguments,
     const std::vector<std::string>& roots
 ) {
-  lnb::net::ToolCall call;
+  lnb::core::ToolCall call;
   call.name = name;
   call.arguments = arguments;
-  return lnb::net::execute_local_tool(call, roots, std::nullopt);
+  return lnb::core::execute_local_tool(call, roots, std::nullopt);
 }
 
 std::string run_with(
     const std::string& name, const std::string& arguments,
     const std::vector<std::string>& roots,
-    const lnb::net::ToolPermissions& permissions
+    const lnb::core::ToolPermissions& permissions
 ) {
-  lnb::net::ToolCall call;
+  lnb::core::ToolCall call;
   call.name = name;
   call.arguments = arguments;
-  return lnb::net::execute_local_tool(call, roots, std::nullopt, permissions);
+  return lnb::core::execute_local_tool(call, roots, std::nullopt, permissions);
 }
 
 std::string path_argument(const fs::path& path) {
@@ -176,7 +176,7 @@ void test_multiple_directories(
 void test_permissions(const fs::path& alpha) {
   const std::vector<std::string> roots{alpha.string()};
 
-  lnb::net::ToolPermissions defaults;
+  lnb::core::ToolPermissions defaults;
   defaults.filesystem = true;
 
   // The default posture reads and browses online, but never writes.
@@ -213,7 +213,7 @@ void test_permissions(const fs::path& alpha) {
       contains(read, "hello needle"), "permissions: reading is on by default"
   );
 
-  lnb::net::ToolPermissions no_read = defaults;
+  lnb::core::ToolPermissions no_read = defaults;
   no_read.read = false;
   const std::string read_denied =
       run_with("list_directory", "{}", roots, no_read);
@@ -222,7 +222,7 @@ void test_permissions(const fs::path& alpha) {
       "permissions: reading can be disabled"
   );
 
-  lnb::net::ToolPermissions no_online = defaults;
+  lnb::core::ToolPermissions no_online = defaults;
   no_online.online = false;
   const std::string online_denied = run_with(
       "fetch_url", "{\"url\":\"https://example.com\"}", roots, no_online
@@ -232,7 +232,7 @@ void test_permissions(const fs::path& alpha) {
       "permissions: online access can be disabled"
   );
 
-  lnb::net::ToolPermissions off = defaults;
+  lnb::core::ToolPermissions off = defaults;
   off.enabled = false;
   const std::string master_denied =
       run_with("list_directory", "{}", roots, off);
@@ -245,7 +245,7 @@ void test_permissions(const fs::path& alpha) {
 void test_write_tools(const fs::path& alpha, const fs::path& outside) {
   const std::vector<std::string> roots{alpha.string()};
 
-  lnb::net::ToolPermissions permissions;
+  lnb::core::ToolPermissions permissions;
   permissions.filesystem = true;
   permissions.write = true;
 
@@ -357,7 +357,7 @@ void test_write_tools(const fs::path& alpha, const fs::path& outside) {
 void test_delete_tool(const fs::path& alpha, const fs::path& outside) {
   const std::vector<std::string> roots{alpha.string()};
 
-  lnb::net::ToolPermissions permissions;
+  lnb::core::ToolPermissions permissions;
   permissions.filesystem = true;
   permissions.write = true;
 
@@ -403,11 +403,11 @@ void test_delete_tool(const fs::path& alpha, const fs::path& outside) {
 }
 
 void test_tool_definitions() {
-  const auto names = [](const lnb::net::ToolPermissions& permissions) {
+  const auto names = [](const lnb::core::ToolPermissions& permissions) {
     std::vector<std::string> out;
 
     for (const boost::json::value& value:
-         lnb::net::tool_definitions(permissions)) {
+         lnb::core::tool_definitions(permissions)) {
       out.emplace_back(
           value.as_object().at("function").as_object().at("name").as_string()
       );
@@ -422,7 +422,7 @@ void test_tool_definitions() {
 
   // Without a shared directory, only the network tools are offered even when
   // the read and write switches are on.
-  lnb::net::ToolPermissions no_filesystem;
+  lnb::core::ToolPermissions no_filesystem;
   no_filesystem.filesystem = false;
   no_filesystem.read = true;
   no_filesystem.write = true;
@@ -437,7 +437,7 @@ void test_tool_definitions() {
       "definitions: online tools are offered"
   );
 
-  lnb::net::ToolPermissions read_only;
+  lnb::core::ToolPermissions read_only;
   read_only.filesystem = true;
   read_only.read = true;
   read_only.write = false;
@@ -458,7 +458,7 @@ void test_tool_definitions() {
       !has(read_tools, "fetch_url"), "definitions: offline omits the network tools"
   );
 
-  lnb::net::ToolPermissions write_only = read_only;
+  lnb::core::ToolPermissions write_only = read_only;
   write_only.read = false;
   write_only.write = true;
 
@@ -473,7 +473,7 @@ void test_tool_definitions() {
       "definitions: writing offers the write and delete tools"
   );
 
-  lnb::net::ToolPermissions disabled;
+  lnb::core::ToolPermissions disabled;
   disabled.enabled = false;
   expect(
       names(disabled).empty(), "definitions: the master switch offers nothing"

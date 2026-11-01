@@ -12,7 +12,7 @@
 // request and what should be folded into the summarization; it never touches the
 // network or the database, which keeps the rules testable and reusable by the
 // summarisation passes.
-namespace lnb::context {
+namespace lnb::core {
 
 // Estimated cost of one stored message as it appears in the payload: its text
 // plus a small fixed overhead for the role and JSON scaffolding.
@@ -64,7 +64,7 @@ inline std::size_t transcript_tokens(
   std::size_t total = 0;
 
   for (const Message& message: messages) {
-    total += context::message_tokens(message);
+    total += message_tokens(message);
   }
 
   return total;
@@ -80,7 +80,7 @@ inline std::size_t transcript_tokens_after(
 
   for (const Message& message: messages) {
     if (message.id_ > watermark) {
-      total += context::message_tokens(message);
+      total += message_tokens(message);
     }
   }
 
@@ -111,4 +111,4 @@ std::vector<const Message*> memory_candidates(
 // when it had to cut. Used to bound each tool result.
 std::string clamp_tokens(const std::string& text, std::size_t max_tokens);
 
-} // namespace lnb::context
+} // namespace lnb::core

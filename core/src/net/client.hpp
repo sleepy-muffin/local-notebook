@@ -14,16 +14,13 @@
 #include "local_notebook/core/generation_task.hpp"
 #include "local_notebook/core/model.hpp"
 #include "local_notebook/core/summary.hpp"
+#include "local_notebook/core/interface.hpp"
 #include "net/protocol.hpp"
 #include "net/tools.hpp"
 
-namespace lnb {
-namespace store {
-class database;
-} // namespace store
-} // namespace lnb
 
-namespace lnb::net {
+namespace lnb::core {
+  class database;
 
 // Where and how one request goes: the fully derived endpoint URL, the key, the
 // optional proxy, the model id and the wire protocol. Grouping them keeps the
@@ -90,15 +87,7 @@ Request build_session_request(
     const std::vector<Message>& messages
 );
 
-// The conversation-token readout the title bar reports against. `used_tokens` is
-// the estimated cost of the unsummarised conversation alone (the messages above
-// the session watermark) — never the system prompt — reported without trimming;
-// `limit_tokens` is `session.summary_trigger_tokens_`. `used_tokens` is exactly
-// the quantity the automatic collapse compares against the trigger.
-struct ContextUsage {
-  std::size_t used_tokens = 0;
-  std::size_t limit_tokens = 0;
-};
+
 
 ContextUsage context_usage(
     const Session& session, const std::vector<Message>& messages
@@ -143,13 +132,13 @@ ContextUsage context_usage(
 // summary (which is also persisted to the database). `approver`, when set, is
 // consulted before the request is sent and may cancel the pass.
 std::string maybe_summarize_session(
-    store::database& db, const Session& session, const Remote& remote,
+    database& db, const Session& session, const Remote& remote,
     GenerationTask& task, std::stop_token stop_token,
     SummaryApprover approver = {}
 );
 
 std::string summarize_session_now(
-    store::database& db, const Session& session, const Remote& remote,
+    database& db, const Session& session, const Remote& remote,
     GenerationTask& task, std::stop_token stop_token,
     SummaryApprover approver = {}
 );
@@ -160,13 +149,13 @@ std::string summarize_session_now(
 // assigns it to `Assistant::memory_` and persists it, because the assistant is
 // passed by const reference. `approver` behaves as above.
 std::string maybe_summarize_assistant(
-    store::database& db, const Assistant& assistant, const Remote& remote,
+    database& db, const Assistant& assistant, const Remote& remote,
     GenerationTask& task, std::stop_token stop_token,
     SummaryApprover approver = {}
 );
 
 std::string summarize_assistant_now(
-    store::database& db, const Assistant& assistant, const Remote& remote,
+    database& db, const Assistant& assistant, const Remote& remote,
     GenerationTask& task, std::stop_token stop_token,
     SummaryApprover approver = {}
 );
@@ -176,8 +165,8 @@ std::string summarize_assistant_now(
 // against `assistant.summary_trigger_tokens_`. Because it reads every session's
 // transcript, callers should cache the answer rather than call it per frame.
 bool assistant_trigger_reached(
-    store::database& db, const Assistant& assistant,
+    database& db, const Assistant& assistant,
     std::stop_token stop_token = std::stop_token{}
 );
 
-} // namespace lnb::net
+} // namespace lnb::core

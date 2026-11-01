@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace lnb::net {
+namespace lnb::core {
 
 // The wire protocol an assistant talks to. Both shapes are OpenAI's; the two
 // differ in the request body, the tool-loop round-trip and the SSE vocabulary,
@@ -18,4 +18,4 @@ enum class ApiProtocol : std::uint8_t {
   Responses = 1,
 };
 
-} // namespace lnb::net
+} // namespace lnb::core

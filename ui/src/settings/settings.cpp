@@ -190,8 +190,8 @@ std::string default_language_code() {
   }
 }
 
-Settings load_settings() {
-  const auto path = lnb::api::global_settings_path();
+Settings load_settings(const lnb::core::interface& api) {
+  const auto path = api.get_store().global_settings_path();
 
   QFile file(QString::fromStdString(path.string()));
   if (!file.open(QIODevice::ReadOnly)) {
@@ -207,8 +207,8 @@ Settings load_settings() {
   return from_json(document.object());
 }
 
-void save_settings(const Settings& settings) {
-  const auto path = lnb::api::global_settings_path();
+void save_settings(const lnb::core::interface& api, const Settings& settings) {
+  const auto path = api.get_store().global_settings_path();
 
   std::error_code error;
   std::filesystem::create_directories(path.parent_path(), error);

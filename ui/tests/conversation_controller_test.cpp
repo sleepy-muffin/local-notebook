@@ -151,22 +151,22 @@ int main() {
       std::filesystem::temp_directory_path() / "lnb-controller-test";
   std::error_code ignored;
   std::filesystem::remove_all(root, ignored);
-  lnb::api::set_data_root(root);
 
   SseServer server;
 
-  lnb::api::interface api;
+  lnb::core::interface api(root);
 
-  lnb::Assistant assistant;
+  lnb::core::Assistant assistant;
   assistant.name_ = "test";
   assistant.api_url_ =
       "http://127.0.0.1:" + std::to_string(server.port()) + "/v1";
   assistant.authentication_token_ = "key";
   assistant.model_ = "test-model";
-  assistant.protocol_ = lnb::net::ApiProtocol::ChatCompletions;
-  api.open_assistant("controller-test", assistant);
+  assistant.protocol_ = lnb::core::ApiProtocol::ChatCompletions;
+  api.get_store().save_assistant("controller-test", assistant);
+  api.open_assistant("controller-test");
 
-  lnb::Session session;
+  lnb::core::Session session;
   session.title_ = "Controller";
   const std::uint32_t session_id = api.create_session(session);
   expect(session_id != 0, "create_session failed");
@@ -197,7 +197,7 @@ int main() {
   // session_prompt() persists synchronously, so the user turn is visible before
   // the worker has produced anything.
   {
-    const std::vector<lnb::Message> stored = api.messages(session_id);
+    const std::vector<lnb::core::Message> stored = api.messages(session_id);
     expect(stored.size() == 1, "the prompt should be stored before the turn");
     expect(
         !stored.empty() && stored.back().content_ == "hi",
@@ -227,7 +227,7 @@ int main() {
   );
   expect(
       controller.last_snapshot().status ==
-          lnb::GenerationTask::Status::COMPLETED,
+          lnb::core::GenerationTask::Status::COMPLETED,
       "the turn should complete"
   );
   expect(error.empty(), "the turn should not report an error");
@@ -241,7 +241,7 @@ int main() {
   );
 
   {
-    const std::vector<lnb::Message> stored = api.messages(session_id);
+    const std::vector<lnb::core::Message> stored = api.messages(session_id);
     expect(stored.size() == 2, "the transcript should hold the prompt and reply");
     expect(
         !stored.empty() && stored.back().content_ == "Hello world",
@@ -258,21 +258,21 @@ int main() {
   {
     // Make the assistant trigger due while keeping this session's own trigger far
     // away, so summarize() resolves to the shared assistant pass.
-    lnb::Session stored = api.session(session_id).value_or(lnb::Session{});
+    lnb::core::Session stored = api.session(session_id).value_or(lnb::core::Session{});
     stored.summary_trigger_tokens_ = 1'000'000;
     api.save_session(stored);
 
-    lnb::Assistant due = api.assistant();
+    lnb::core::Assistant due = api.assistant();
     due.summary_trigger_tokens_ = 1;
     api.set_assistant(due);
 
     expect(
         api.has_session_summary_trigger_met(session_id) ==
-            lnb::api::error_code::ERR_ASSISTANT_MEMORY_TRIGGER_HAS_MET,
+            lnb::core::error_code::ERR_ASSISTANT_MEMORY_TRIGGER_HAS_MET,
         "the assistant trigger should be the due one"
     );
 
-    const std::shared_ptr<lnb::GenerationTask> own_task = controller.task();
+    const std::shared_ptr<lnb::core::GenerationTask> own_task = controller.task();
     expect(own_task != nullptr, "the finished turn should still be retained");
 
     controller.summarize();
@@ -290,7 +290,7 @@ int main() {
     );
     expect(
         controller.last_snapshot().status !=
-            lnb::GenerationTask::Status::RUNNING,
+            lnb::core::GenerationTask::Status::RUNNING,
         "the session must not report the assistant pass as its own running task"
     );
     expect(

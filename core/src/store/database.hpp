@@ -14,7 +14,7 @@
 // The reconstructed per-assistant database (design-1.md §9). One file holds all
 // sessions and messages of one assistant. It owns the schema; `connection` does
 // not.
-namespace lnb::store {
+namespace lnb::core {
 
 class database {
 public:
@@ -86,4 +86,4 @@ private:
   shark::sqlite::connection connection_;
 };
 
-} // namespace lnb::store
+} // namespace lnb::core

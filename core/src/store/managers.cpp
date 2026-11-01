@@ -1,8 +1,10 @@
+#include <shark/str.hpp>
+
 #include "store/managers.hpp"
 
 #include "local_notebook/core/utils.hpp"
 
-namespace lnb::store {
+namespace lnb::core {
 
 SessionManager::SessionManager(std::string_view db_path)
     : owned_(std::make_unique<database>(db_path)), db_(*owned_) {}
@@ -51,8 +53,8 @@ std::uint32_t MessageManager::append(Role role, const std::string &content) {
   message.session_id_ = session_id_;
   message.role_ = role;
   message.content_ = content;
-  message.made_at_ = utils::now_iso8601_utc();
+  message.made_at_ = shark::str::now_iso8601_utc();
   return db_.insert_message(message);
 }
 
-} // namespace lnb::store
+} // namespace lnb::core
