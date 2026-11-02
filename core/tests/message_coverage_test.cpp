@@ -10,8 +10,9 @@
 //
 // This drives the real fold passes through the public interface against a
 // loopback server. Every pseudo message carries a unique marker, and the test
-// reads the markers back out of the requests that were actually sent. Consuming
-// a message twice is a warning; skipping one is an error.
+// reads the markers back out of the requests that were actually sent. Using a
+// message in both pipelines is valid; omitting it or including it repeatedly
+// within either pipeline is an error.
 #include "local_notebook/core/interface.hpp"
 
 #include <boost/asio.hpp>
@@ -32,17 +33,12 @@ using boost::asio::ip::tcp;
 using namespace std::chrono_literals;
 
 int failures = 0;
-int warnings = 0;
 
 void fail(const std::string& message) {
   ++failures;
   std::cerr << "FAIL: " << message << '\n';
 }
 
-void warn(const std::string& message) {
-  ++warnings;
-  std::cout << "WARN: " << message << '\n';
-}
 
 bool wait_terminal(
     const std::shared_ptr<lnb::core::GenerationTask>& task, std::chrono::seconds limit
@@ -408,6 +404,20 @@ int main() {
     fail("the memory request never carried a session summary");
   }
 
+  const std::uint32_t newest_message_id = messages.back().id_;
+  if (stored->summary_watermark_ > newest_message_id) {
+    fail("the session summary watermark is beyond the newest stored message");
+  }
+  if (stored->assistant_memory_watermark_ > newest_message_id) {
+    fail("the assistant memory watermark is beyond the newest stored message");
+  }
+  // Session summarisation intentionally retains a recent verbatim window, so
+  // its watermark may lag the newest message. The memory pass has no such
+  // retained transcript window after a forced gather.
+  if (stored->assistant_memory_watermark_ != newest_message_id) {
+    fail("the forced memory pass did not advance through the newest message");
+  }
+
   for (std::size_t i = 0; i < messages.size(); ++i) {
     const std::string label = "message " + std::to_string(i + 1) + " (id " +
                               std::to_string(messages[i].id_) + ")";
@@ -426,16 +436,16 @@ int main() {
       fail("the memory watermark passed an unread message: " + label);
     }
 
+    if (folded[i] == 0 && gathered[i] == 0) {
+      fail("not included in any summarisation or memory request: " + label);
+    }
+
     if (folded[i] > 1) {
-      warn("summarised more than once: " + label);
+      fail("included in session summarisation more than once: " + label);
     }
 
     if (gathered[i] > 1) {
-      warn("gathered by the memory more than once: " + label);
-    }
-
-    if (folded[i] > 0 && gathered[i] > 0) {
-      warn("read raw by the memory and also folded: " + label);
+      fail("included in assistant memory more than once: " + label);
     }
   }
 
@@ -444,10 +454,24 @@ int main() {
     return 1;
   }
 
-  std::cout << "message coverage: all expectations passed";
-  if (warnings != 0) {
-    std::cout << " (" << warnings << " warning(s))";
-  }
-  std::cout << '\n';
+  std::cout << "Message coverage report\n"
+            << "  Fixture: " << kMessages
+            << " stored user messages; unique marker per message\n"
+            << "  Steady state: " << kSteadyMessages
+            << " one-at-a-time session and memory passes — PASS\n"
+            << "  Burst: " << kBurstMessages
+            << " queued messages; oldest-first memory and session passes — PASS\n"
+            << "  Forced drain: session and memory passes completed — PASS\n"
+            << "  Request window: boundary message " << kMessages - 2
+            << " included; older message " << kMessages - 3
+            << " excluded — PASS\n"
+            << "  Summary requests: every message at/below watermark was included; "
+               "no message included more than once — PASS\n"
+            << "  Memory requests: every message accounted for; no message "
+               "included more than once — PASS\n"
+            << "  Cross-pipeline overlap: allowed\n"
+            << "  Persisted watermarks: session=" << stored->summary_watermark_
+            << ", memory=" << stored->assistant_memory_watermark_
+            << ", newest message=" << newest_message_id << " — PASS\n";
   return 0;
 }
