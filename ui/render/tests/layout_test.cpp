@@ -96,13 +96,14 @@ public:
   void fill_rect(const render::Rect&, render::Color) override {}
   void fill_rounded_rect(const render::Rect&, render::Color, float) override {}
   void stroke_rounded_rect(const render::Rect&, render::Color, float, float) override {}
-  void stroke_line(render::Point, render::Point, render::Color, float) override {}
+  void stroke_line(render::Point, render::Point, render::Color, float) override { ++stroke_lines; }
   void draw_text(
       std::u16string_view, const render::Rect&, const render::Font&, render::Color,
       render::TextAlign) override {}
   void draw_paragraph(const render::ParagraphPaint&) override { ++paragraphs; }
 
   int paragraphs = 0;
+  int stroke_lines = 0;
 };
 
 render::LayoutTheme test_theme() {
@@ -232,6 +233,48 @@ void test_message_index_by_id() {
   check(!layout.message_by_id(99).has_value(), "unknown id is absent");
 }
 
+void test_table_column_alignment() {
+  FakeBackend backend;
+  render::Layout layout;
+  layout.set_backend(&backend);
+  layout.set_theme(test_theme());
+  layout.set_options(render::LayoutOptions{300.0f, 10.0f, 10.0f, 0.0f, 0.0f, 0.0f});
+
+  render::MessageMeta meta;
+  meta.role = render::Role::Assistant;
+  meta.id = 9;
+
+  render::Block first;
+  first.kind = render::BlockKind::Paragraph;
+  first.table_columns = 2;
+  first.text = u"A  |  B";
+  first.table_cells = {{0, 1}, {6, 1}};
+
+  render::Block second;
+  second.kind = render::BlockKind::Paragraph;
+  second.table_columns = 2;
+  second.text = u"This is a very long first column  |  C";
+  second.table_cells = {{0, 32}, {37, 1}};
+  second.last_in_message = true;
+
+  layout.set_document(render::Document{{meta}, {first, second}});
+
+  const auto& lines = layout.lines();
+  check(lines.size() >= 6, "table cells are shaped independently and long cells wrap");
+  if (lines.size() >= 6) {
+    check(lines[0].x == lines[2].x, "first column starts at the same x in each row");
+    check(lines[1].x == lines[5].x, "second column starts at the same x in each row");
+    check(lines[1].x > lines[0].x, "table columns occupy separate horizontal regions");
+  }
+  check(
+      layout.block_geometry()[1].rect.y > layout.block_geometry()[0].rect.y,
+      "wrapped table rows advance below the previous row");
+
+  NullCanvas canvas;
+  layout.paint(canvas, render::Rect{0.0f, 0.0f, 400.0f, 500.0f}, render::Selection{});
+  check(canvas.stroke_lines == 1, "table rows have a subtle horizontal separator");
+}
+
 void test_incremental_tail() {
   FakeBackend backend;
   render::Layout layout;
@@ -295,6 +338,7 @@ int main() {
   test_geometry_and_selection();
   test_message_index_by_id();
   test_incremental_tail();
+  test_table_column_alignment();
 
   if (failures != 0) {
     std::fprintf(stderr, "%d check(s) failed\n", failures);

@@ -204,3 +204,18 @@ target_link_libraries(
 )
 
 add_test(NAME conversation-controller COMMAND conversation-controller-test)
+
+# Markdown conversion runs on the UI thread, but its data model is independent
+# of widgets and can be tested without a display server.
+add_executable(
+        message-document-test
+        tests/message_document_test.cpp
+)
+
+target_link_libraries(
+        message-document-test
+        PRIVATE
+        local-notebook-ui-core
+)
+
+add_test(NAME message-document COMMAND message-document-test)

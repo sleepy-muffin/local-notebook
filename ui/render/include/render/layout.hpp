@@ -210,7 +210,8 @@ private:
   [[nodiscard]] float role_line_height(Role role) const;
   [[nodiscard]] float shape_block(
       std::size_t block_index, const Block& block, Font base, Color color, float text_x,
-      float text_width, float y, float line_height_scale);
+      float text_width, float y, float line_height_scale, std::uint32_t range_begin = 0,
+      std::uint32_t range_end = UINT32_MAX);
 
   TextBackend* backend_ = nullptr;
   LayoutTheme theme_;

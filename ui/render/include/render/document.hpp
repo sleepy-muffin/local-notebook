@@ -27,6 +27,11 @@ struct Span {
 // U+2028); the layout engine splits those into logical lines, and each logical
 // line wraps independently. A fenced code block is a single Block so its
 // background and rounded corners cover the whole fence.
+struct TableCellRange {
+  std::uint32_t begin = 0;
+  std::uint32_t length = 0;
+};
+
 struct Block {
   BlockKind kind = BlockKind::Paragraph;
   int heading_level = 0;
@@ -34,6 +39,8 @@ struct Block {
   bool ordered = false;
   std::uint32_t list_number = 0;
   int quote_depth = 0;
+  int table_columns = 0;
+  std::vector<TableCellRange> table_cells;
   std::uint32_t message = 0;
   bool first_in_message = false;
   bool last_in_message = false;

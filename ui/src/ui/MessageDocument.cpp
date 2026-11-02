@@ -5,10 +5,12 @@
 #include <QTextBlock>
 #include <QTextBlockFormat>
 #include <QTextCharFormat>
+#include <QTextCursor>
 #include <QTextDocument>
 #include <QTextFragment>
 #include <QTextList>
 #include <QTextListFormat>
+#include <QTextTable>
 
 #include <algorithm>
 #include <utility>
@@ -167,6 +169,48 @@ std::vector<render::Span> spans_from_block(const QTextBlock& block) {
   return normalize_spans(spans, static_cast<std::uint32_t>(text.size()));
 }
 
+render::Block table_row_from_qtext(const QTextTable& table, int row) {
+  render::Block out;
+  out.kind = render::BlockKind::Paragraph;
+  out.table_columns = table.columns();
+
+  for (int column = 0; column < table.columns(); ++column) {
+    if (column > 0) {
+      constexpr std::u16string_view separator = u"  |  ";
+      out.text.append(separator);
+    }
+
+    const std::uint32_t cell_begin = static_cast<std::uint32_t>(out.text.size());
+    const QTextTableCell cell = table.cellAt(row, column);
+    const QTextBlock last = cell.lastCursorPosition().block();
+
+    bool first_block = true;
+    for (QTextBlock block = cell.firstCursorPosition().block(); block.isValid(); block = block.next()) {
+      if (!first_block) {
+        out.text.push_back(u' ');
+      }
+      first_block = false;
+
+      const std::uint32_t offset = static_cast<std::uint32_t>(out.text.size());
+      out.text += to_u16(block.text());
+
+      for (render::Span span : spans_from_block(block)) {
+        span.begin += offset;
+        out.spans.push_back(std::move(span));
+      }
+
+      if (block == last) {
+        break;
+      }
+    }
+
+    out.table_cells.push_back(render::TableCellRange{
+        cell_begin, static_cast<std::uint32_t>(out.text.size()) - cell_begin});
+  }
+
+  return out;
+}
+
 render::Block block_from_qtext(const QTextBlock& block) {
   render::Block out;
 
@@ -239,6 +283,24 @@ std::vector<render::Block> make_markdown_blocks(std::string_view utf8) {
   QTextBlock block = document.begin();
 
   while (block.isValid()) {
+    if (block.text().isEmpty() && block.next().isValid()) {
+      QTextCursor next_cursor(block.next());
+      if (next_cursor.currentTable()) {
+        block = block.next();
+        continue;
+      }
+    }
+
+    QTextCursor cursor(block);
+
+    if (QTextTable* table = cursor.currentTable()) {
+      const QTextTableCell cell = table->cellAt(cursor);
+      const int row = cell.row();
+      blocks.push_back(table_row_from_qtext(*table, row));
+      block = table->cellAt(row, table->columns() - 1).lastCursorPosition().block().next();
+      continue;
+    }
+
     if (block.blockFormat().nonBreakableLines()) {
       // A fenced (or indented) code block is imported as one QTextBlock per
       // line. Folding them back together gives the renderer one block, so its

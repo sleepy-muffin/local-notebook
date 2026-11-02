@@ -330,17 +330,21 @@ Layout::clipped_spans(const Block& block, std::uint32_t begin, std::uint32_t end
 
 float Layout::shape_block(
     std::size_t block_index, const Block& block, Font base, Color color, float text_x,
-    float text_width, float y, float line_height_scale) {
+    float text_width, float y, float line_height_scale, std::uint32_t range_begin,
+    std::uint32_t range_end) {
   float cursor = y;
-  std::uint32_t logical_begin = 0;
+  std::uint32_t logical_begin = range_begin;
 
   const std::uint32_t text_size = static_cast<std::uint32_t>(block.text.size());
+  range_end = std::min(range_end, text_size);
+  range_begin = std::min(range_begin, range_end);
+  logical_begin = range_begin;
 
   // A block's text can carry explicit breaks; each logical line wraps on its
   // own, and the final one is always laid out (an empty paragraph still needs a
   // caret line).
-  for (std::uint32_t index = 0; index <= text_size; ++index) {
-    if (index < text_size && !is_line_break(block.text[index])) {
+  for (std::uint32_t index = range_begin; index <= range_end; ++index) {
+    if (index < range_end && !is_line_break(block.text[index])) {
       continue;
     }
 
@@ -457,6 +461,29 @@ void Layout::layout_block(std::size_t block_index, float x, float width, float y
     geometry.marker = Rect{block_x, y, 2.0f, 0.0f};
     text_x = block_x + 10.0f;
     text_width = std::max(10.0f, block_width - 10.0f);
+  }
+
+  if (block.table_columns > 0 && !block.table_cells.empty()) {
+    const int columns = std::min(block.table_columns, static_cast<int>(block.table_cells.size()));
+    const float column_width = text_width / static_cast<float>(columns);
+    float row_height = 0.0f;
+
+    for (int column = 0; column < columns; ++column) {
+      const TableCellRange& cell = block.table_cells[static_cast<std::size_t>(column)];
+      const float cell_x = text_x + column_width * static_cast<float>(column) + 6.0f;
+      const float cell_width = std::max(10.0f, column_width - 12.0f);
+      const float cell_bottom = shape_block(
+          block_index, block, base, color, cell_x, cell_width, y, scale,
+          cell.begin, cell.begin + cell.length);
+      row_height = std::max(row_height, cell_bottom - y);
+    }
+
+    geometry.rect = Rect{block_x, y, block_width, row_height};
+    geometry.text_x = text_x;
+    geometry.line_count = lines_.size() - geometry.first_line;
+    geometry.gap_after = block.last_in_message ? 0.0f : 8.0f;
+    blocks_.push_back(geometry);
+    return;
   }
 
   const float cursor = shape_block(block_index, block, base, color, text_x, text_width, y, scale);
@@ -649,6 +676,18 @@ void Layout::paint(Canvas& canvas, const Rect& clip, const Selection& selection)
       }
 
       const Block& block = document_.blocks[index];
+
+      if (block.table_columns > 0 && index + 1 < block_end &&
+          document_.blocks[index + 1].table_columns > 0) {
+        const float separator_y = geometry.rect.bottom() + geometry.gap_after * 0.5f;
+        if (separator_y >= clip.y && separator_y <= clip.bottom()) {
+          Color separator = theme_.border;
+          separator.a = static_cast<std::uint8_t>(separator.a * 0.45f);
+          canvas.stroke_line(
+              Point{geometry.rect.x + 2.0f, separator_y},
+              Point{geometry.rect.right() - 2.0f, separator_y}, separator, 1.0f);
+        }
+      }
 
       if (block.kind == BlockKind::Code && !geometry.background.empty()) {
         canvas.fill_rounded_rect(geometry.background, theme_.code_background, theme_.code_radius);
