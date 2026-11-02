@@ -1,5 +1,6 @@
 #pragma once
 
+#include <expected>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -9,10 +10,11 @@
 #include <vector>
 
 #include <shark/async.hpp>
-#include <shark/sync.hpp>
 #include <shark/legacy.hpp>
+#include <shark/sync.hpp>
 
 #include "local_notebook/core/interface.hpp"
+#include "local_notebook/core/structs.hpp"
 #include "local_notebook/core/utils.hpp"
 #include "store/managers.hpp"
 
@@ -48,21 +50,19 @@ public:
   application(const application &) = delete;
   application &operator=(const application &) = delete;
 
-  [[nodiscard]] bool open_assistant(const std::string& uuid);
-  [[nodiscard]] std::string last_error() const;
+  [[nodiscard]] std::expected<void, error_code> open_assistant(const std::string &uuid);
   [[nodiscard]] std::vector<std::pair<std::string, Assistant>> list_assistants();
 
   [[nodiscard]] bool has_assistant() const;
-  [[nodiscard]] std::string assistant_uuid() const;
-  [[nodiscard]] Assistant assistant() const;
+  [[nodiscard]] std::expected<std::string, error_code> assistant_uuid() const;
+  [[nodiscard]] std::expected<Assistant, error_code> assistant() const;
   void set_assistant(Assistant assistant);
   void set_assistant_memory(std::string memory);
   void save_assistant();
 
   [[nodiscard]] std::optional<Session> session(std::uint32_t session_id) const;
   [[nodiscard]] std::vector<Message> messages(std::uint32_t session_id) const;
-  [[nodiscard]] std::vector<Message>
-  recent_messages(std::uint32_t session_id, std::size_t count) const;
+  [[nodiscard]] std::vector<Message> recent_messages(std::uint32_t session_id, std::size_t count) const;
   [[nodiscard]] std::vector<Session> recent_sessions(std::size_t count) const;
   [[nodiscard]] std::unordered_map<std::uint32_t, std::string> session_last_times() const;
   [[nodiscard]] std::optional<std::string> last_message_time(std::uint32_t session_id) const;
@@ -76,22 +76,23 @@ public:
   void edit_message(std::uint32_t message_id, std::string content);
   [[nodiscard]] std::size_t message_tokens(const Message &message) const;
   [[nodiscard]] std::string default_reasoning_effort() const;
-  [[nodiscard]] std::vector<std::string>
-  reasoning_efforts_with_stored(const std::string &stored) const;
+  [[nodiscard]] std::vector<std::string> reasoning_efforts_with_stored(const std::string &stored) const;
 
-  [[nodiscard]] bool busy() const;
+
+  [[nodiscard]] bool any_busy() const;
   [[nodiscard]] bool session_busy(std::uint32_t session_id) const;
   [[nodiscard]] bool assistant_busy() const;
   [[nodiscard]] std::shared_ptr<GenerationTask> assistant_task() const;
   [[nodiscard]] bool assistant_summary_due() const;
   void mark_assistant_summary_stale();
-  [[nodiscard]] core::error_code has_session_summary_trigger_met(std::uint32_t session_id) const;
-  [[nodiscard]] core::error_code session_prompt(std::uint32_t session_id, const std::string &prompt);
-  [[nodiscard]] std::shared_ptr<GenerationTask>
+  [[nodiscard]] std::expected<void, error_code> has_session_summary_trigger_met(std::uint32_t session_id) const;
+  [[nodiscard]] std::expected<void, error_code> has_assistant_trigger_met() const;
+  [[nodiscard]] std::expected<void, error_code> session_prompt(std::uint32_t session_id, const std::string &prompt);
+  [[nodiscard]] std::expected<std::shared_ptr<GenerationTask>, error_code>
   start_generation(std::uint32_t session_id, SummaryApprover approver = {});
-  [[nodiscard]] std::shared_ptr<GenerationTask>
+  [[nodiscard]] std::expected<std::shared_ptr<GenerationTask>, error_code>
   summarize_session(std::uint32_t session_id, bool force, SummaryApprover approver = {});
-  [[nodiscard]] std::shared_ptr<GenerationTask>
+  [[nodiscard]] std::expected<std::shared_ptr<GenerationTask>, error_code>
   summarize_assistant(bool force, SummaryApprover approver = {});
   void cancel_session(std::uint32_t session_id);
   void cancel_assistant();
@@ -100,7 +101,7 @@ public:
   /*
    * Utils
    */
-  [[nodiscard]] const store& get_store() const;
+  [[nodiscard]] const store &get_store() const;
 
 private:
   template<typename Work>
@@ -121,7 +122,6 @@ private:
 
   std::unique_ptr<executor> multi_executor_;
   std::unique_ptr<shark::synchronized<assistant_state>> assistant_state_;
-  std::string last_error_;
   mutable std::mutex tasks_mutex_;
   std::unordered_map<std::uint32_t, task_slot> session_tasks_;
   task_slot assistant_slot_;

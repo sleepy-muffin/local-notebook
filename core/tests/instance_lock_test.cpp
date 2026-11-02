@@ -57,16 +57,20 @@ int main() {
   {
     lnb::core::interface first(root);
     expect(
-        first.open_assistant(uuid),
+        first.open_assistant(uuid).has_value(),
         "a stale lock file must not block the first open"
     );
 
     lnb::core::interface second(root);
+    const auto second_open = second.open_assistant(uuid);
     expect(
-        !second.open_assistant(uuid),
+        !second_open.has_value(),
         "a second open while the first is live must be refused"
     );
-    expect(!second.last_error().empty(), "the refusal should carry a reason");
+    expect(
+        second_open.error() == lnb::core::error_code::ERR_ASSISTANT_HAS_NOT_LOADED_YET,
+        "the refusal should carry the expected error code"
+    );
     expect(
         !second.has_assistant(),
         "a refused open must not attach the assistant"
@@ -78,7 +82,7 @@ int main() {
   {
     lnb::core::interface third(root);
     expect(
-        third.open_assistant(uuid),
+        third.open_assistant(uuid).has_value(),
         "the assistant must open again once the previous instance exits"
     );
   }
@@ -87,9 +91,9 @@ int main() {
   // lock.
   {
     lnb::core::interface reused(root);
-    expect(reused.open_assistant(uuid), "first open");
+    expect(reused.open_assistant(uuid).has_value(), "first open");
     expect(
-        reused.open_assistant(uuid),
+        reused.open_assistant(uuid).has_value(),
         "reopening the same assistant in the same interface"
     );
   }

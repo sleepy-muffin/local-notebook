@@ -1399,16 +1399,14 @@ std::expected<ChatCompletionResult, FailedResult> generate_reply(
   return std::move(result);
 }
 
-namespace {
-
 // Folds the session's overflow — everything older than the verbatim window —
 // into `session.summary_` and persists the result. `force` ignores the automatic
 // trigger (a manual "summarise now"). Returns the resulting summary, which is
 // the unchanged input when there was nothing to fold.
-std::string fold_session_summary(
+std::string update_session_summary(
     database& db, const Session& session, const Remote& remote,
     GenerationTask& task, std::stop_token stop_token, bool force,
-    const SummaryApprover& approver, bool standalone
+    const SummaryApprover& approver
 ) {
   // A cancelled turn must not keep the interface waiting while a large gather
   // runs, so the pass bails out as soon as a stop is requested.
@@ -1416,15 +1414,9 @@ std::string fold_session_summary(
     throw std::runtime_error("Generation cancelled");
   }
 
-  // A standalone pass *is* the task's output, so publish the summarization
-  // budget the readout charges it against. An automatic fold shares its task
-  // with the reply that follows, whose response budget generate_reply publishes
-  // instead, so it must not overwrite that bound here.
-  if (standalone) {
-    task.set_output_budget(
-        session.summary_token_budget_, GenerationTask::BudgetKind::SUMMARIZATION
-    );
-  }
+  task.set_output_budget(
+      session.summary_token_budget_, GenerationTask::BudgetKind::SUMMARIZATION
+  );
 
   const std::vector<Message> messages = db.messages(session.id_);
 
@@ -1531,32 +1523,8 @@ std::string fold_session_summary(
       }
     }
 
-    // A silent, throwaway task: the summariser's text is internal and must not
-    // be streamed into the visible transcript. The outer stop token is forwarded
-    // so cancelling the turn also cancels summarisation.
-    GenerationTask silent_task;
-    silent_task.start();
-
-    // Let the row move while the summariser streams. A fold that merely precedes
-    // a reply keeps its generated text out of the visible output total, so only
-    // the input projection is mirrored there; a standalone update owns the whole
-    // row, so its output is mirrored too.
-    silent_task.mirror_streaming_to(&task, standalone);
-
     const auto outcome = send_message_once(
-        request, remote, silent_task, stop_token, "session-summary"
-    );
-
-    // Keep the request that was already recorded even when the send fails: the
-    // exact bytes are the most useful part of a failed pass. The summariser's
-    // input is always billed into the turn's total, but its generated text is
-    // the task's output only for a standalone update: when the fold merely
-    // precedes a reply, the output figure must stay the reply plus its tool
-    // results, because those are what the response budget bounds.
-    task.append_log(silent_task.log_text());
-    task.add_usage(
-        silent_task.input_tokens(), standalone ? silent_task.output_tokens() : 0,
-        silent_task.usage_measured()
+        request, remote, task, stop_token, "session-summary"
     );
 
     if (!outcome) {
@@ -1680,7 +1648,7 @@ std::string build_sessions_block(
 // §6). The two pools are gathered separately and never mixed. The pass is always
 // strict: an empty completion (or a failed request) throws, and the automatic
 // caller catches it and keeps the previous memory.
-std::string fold_assistant_memory(
+std::string update_assistant_memory(
     database& db, const Assistant& assistant, const Remote& remote,
     GenerationTask& task, std::stop_token stop_token,
     const SummaryApprover& approver
@@ -1887,24 +1855,8 @@ std::string fold_assistant_memory(
     }
   }
 
-  GenerationTask silent_task;
-  silent_task.start();
-
-  // Let the row move while the memory pass streams. This task is the visible one,
-  // so the generated memory is part of the output total and is mirrored with it.
-  silent_task.mirror_streaming_to(&task);
-
   const auto outcome = send_message_once(
-      request, remote, silent_task, stop_token, "assistant-summary"
-  );
-
-  // Keep the request that was already recorded even when the send fails: the
-  // exact bytes are the most useful part of a failed pass. This task *is* the
-  // memory pass, so its token counts are carried over for the readout.
-  task.append_log(silent_task.log_text());
-  task.add_usage(
-      silent_task.input_tokens(), silent_task.output_tokens(),
-      silent_task.usage_measured()
+      request, remote, task, stop_token, "assistant-summary"
   );
 
   if (!outcome) {
@@ -1949,100 +1901,5 @@ std::string fold_assistant_memory(
   return memory;
 }
 
-} // namespace
-
-// The automatic assistant trigger (design-1.md §6): the tokens of messages newer
-// than each session's assistant watermark, summed across all sessions. Public so
-// the interface can cache it.
-bool assistant_trigger_reached(
-    database& db, const Assistant& assistant, std::stop_token stop_token
-) {
-  std::size_t new_tokens = 0;
-
-  for (const Session& session: db.sessions_by_recent()) {
-    if (stop_token.stop_requested()) {
-      return false;
-    }
-
-    // An opted-out session neither triggers the pass nor contributes to it.
-    if (!session.include_in_assistant_memory_) {
-      continue;
-    }
-
-    for (const Message& message: db.messages(session.id_)) {
-      if (message.id_ > session.assistant_memory_watermark_) {
-        new_tokens += message_tokens(message);
-      }
-    }
-  }
-
-  return new_tokens >= assistant.summary_trigger_tokens_;
-}
-
-std::string maybe_summarize_session(
-    database& db, const Session& session, const Remote& remote,
-    GenerationTask& task, std::stop_token stop_token, SummaryApprover approver
-) {
-  try {
-    return fold_session_summary(
-        db, session, remote, task, stop_token, false, approver, false
-    );
-  } catch (const std::exception& error) {
-    // Best effort: an automatic summarisation must never fail the user's turn,
-    // so an unchanged summary is returned instead of propagating.
-    shark::log::info(
-        "maybe_summarize_session: skipped for session {}: {}", session.id_,
-        error.what()
-    );
-    task.append_log(
-        "[session-summary] automatic pass skipped: " + std::string(error.what())
-    );
-    return session.summary_;
-  }
-}
-
-std::string summarize_session_now(
-    database& db, const Session& session, const Remote& remote,
-    GenerationTask& task, std::stop_token stop_token, SummaryApprover approver
-) {
-  return fold_session_summary(
-      db, session, remote, task, stop_token, true, approver, true
-  );
-}
-
-std::string maybe_summarize_assistant(
-    database& db, const Assistant& assistant, const Remote& remote,
-    GenerationTask& task, std::stop_token stop_token, SummaryApprover approver
-) {
-  try {
-    // Empty when the automatic trigger is not reached, so the caller only
-    // overwrites Assistant::memory_ when there is a new memory to persist.
-    if (!assistant_trigger_reached(db, assistant, stop_token)) {
-      task.append_log(
-          "[assistant-summary] automatic trigger not reached; nothing was sent"
-      );
-      return {};
-    }
-
-    return fold_assistant_memory(
-        db, assistant, remote, task, stop_token, approver
-    );
-  } catch (const std::exception& error) {
-    shark::log::info("maybe_summarize_assistant: skipped: {}", error.what());
-    task.append_log(
-        "[assistant-summary] automatic pass skipped: " + std::string(error.what())
-    );
-    return {};
-  }
-}
-
-std::string summarize_assistant_now(
-    database& db, const Assistant& assistant, const Remote& remote,
-    GenerationTask& task, std::stop_token stop_token, SummaryApprover approver
-) {
-  return fold_assistant_memory(
-      db, assistant, remote, task, stop_token, approver
-  );
-}
 
 } // namespace lnb::core

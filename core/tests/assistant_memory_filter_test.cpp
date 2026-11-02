@@ -41,7 +41,7 @@ int main() {
   // sessions count, not the threshold arithmetic.
   assistant.summary_trigger_tokens_ = 1;
   api.get_store().save_assistant("filter-test", assistant);
-  expect(api.open_assistant("filter-test"), "open_assistant failed");
+  expect(api.open_assistant("filter-test").has_value(), "open_assistant failed");
 
   // A fresh session includes itself by default.
   lnb::core::Session defaults;
@@ -67,8 +67,7 @@ int main() {
   // Only the opted-out session has new content, so neither assistant path may
   // see it: the session itself stays below its own trigger.
   expect(
-      api.has_session_summary_trigger_met(session_id) ==
-          lnb::core::error_code::SUCCESS,
+      api.has_session_summary_trigger_met(session_id).has_value(),
       "an opted-out session must not reach the assistant trigger"
   );
   expect(
@@ -82,8 +81,9 @@ int main() {
   api.save_session(opted_in);
 
   expect(
-      api.has_session_summary_trigger_met(session_id) ==
-          lnb::core::error_code::ERR_ASSISTANT_MEMORY_TRIGGER_HAS_MET,
+      !api.has_session_summary_trigger_met(session_id).has_value() &&
+          api.has_session_summary_trigger_met(session_id).error() ==
+              lnb::core::error_code::ERR_ASSISTANT_MEMORY_TRIGGER_HAS_MET,
       "an opted-in session must reach the assistant trigger"
   );
   expect(

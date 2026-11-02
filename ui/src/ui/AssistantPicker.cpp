@@ -506,10 +506,12 @@ void AssistantPicker::open_selected() {
 
   // Another running instance may already own this assistant. The core refuses,
   // so keep the picker open and say why rather than silently doing nothing.
-  if (!api_.open_assistant(id)) {
-    QMessageBox::warning(
-        this, trs("Assistant in use"), to_qstring(api_.last_error())
-    );
+  const auto opened = api_.open_assistant(id);
+  if (!opened) {
+    const QString reason = opened.error() == lnb::core::error_code::ERR_ASSISTANT_HAS_NOT_LOADED_YET
+        ? trs("This assistant is already open in another instance.")
+        : trs("The assistant could not be opened.");
+    QMessageBox::warning(this, trs("Unable to open assistant"), reason);
     return;
   }
 
@@ -568,7 +570,8 @@ void AssistantPicker::edit_selected() {
   shark::log::info("updated assistant {}", id);
 
   // Keep the in-memory assistant in step when the edited one is the open one.
-  if (api_.has_assistant() && api_.assistant_uuid() == id) {
+  const auto open_uuid = api_.assistant_uuid();
+  if (open_uuid && *open_uuid == id) {
     api_.set_assistant(assistant);
     api_.save_assistant();
   }

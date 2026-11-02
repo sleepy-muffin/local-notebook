@@ -1301,7 +1301,12 @@ void MainWindow::update_header() {
 }
 
 void MainWindow::update_current_block() {
-  const lnb::core::Assistant assistant = api_.assistant();
+  const auto assistant_result = api_.assistant();
+  if (!assistant_result) {
+    current_settings_->setEnabled(false);
+    return;
+  }
+  const lnb::core::Assistant &assistant = *assistant_result;
 
   const QString name = from_utf8(assistant.name_);
   current_name_->setText(name.isEmpty() ? trs("Assistant") : name);

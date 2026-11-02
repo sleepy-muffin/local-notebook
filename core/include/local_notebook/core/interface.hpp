@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -27,12 +28,11 @@ public:
   interface(const interface &) = delete;
   interface &operator=(const interface &) = delete;
 
-  bool open_assistant(std::string uuid);
-  [[nodiscard]] std::string last_error() const;
+  [[nodiscard]] std::expected<void, error_code> open_assistant(std::string uuid);
   [[nodiscard]] std::vector<std::pair<std::string, Assistant>> list_assistants();
   [[nodiscard]] bool has_assistant() const;
-  [[nodiscard]] std::string assistant_uuid() const;
-  [[nodiscard]] Assistant assistant() const;
+  [[nodiscard]] std::expected<std::string, error_code> assistant_uuid() const;
+  [[nodiscard]] std::expected<Assistant, error_code> assistant() const;
   void set_assistant(Assistant assistant);
   void set_assistant_memory(std::string memory);
   void save_assistant();
@@ -59,19 +59,20 @@ public:
   [[nodiscard]] std::vector<std::string>
   reasoning_efforts_with_stored(const std::string &stored) const;
 
+
   [[nodiscard]] bool busy() const;
   [[nodiscard]] bool session_busy(std::uint32_t session_id) const;
   [[nodiscard]] bool assistant_busy() const;
   [[nodiscard]] std::shared_ptr<GenerationTask> assistant_task() const;
   [[nodiscard]] bool assistant_summary_due() const;
   void mark_assistant_summary_stale();
-  [[nodiscard]] error_code has_session_summary_trigger_met(std::uint32_t session_id) const;
-  [[nodiscard]] error_code session_prompt(std::uint32_t session_id, const std::string &prompt);
-  [[nodiscard]] std::shared_ptr<GenerationTask>
+  [[nodiscard]] std::expected<void, error_code> has_session_summary_trigger_met(std::uint32_t session_id) const;
+  [[nodiscard]] std::expected<void, error_code> session_prompt(std::uint32_t session_id, const std::string &prompt);
+  [[nodiscard]] std::expected<std::shared_ptr<GenerationTask>, error_code>
   start_generation(std::uint32_t session_id, SummaryApprover approver = {});
-  [[nodiscard]] std::shared_ptr<GenerationTask>
+  [[nodiscard]] std::expected<std::shared_ptr<GenerationTask>, error_code>
   summarize_session(std::uint32_t session_id, bool force, SummaryApprover approver = {});
-  [[nodiscard]] std::shared_ptr<GenerationTask>
+  [[nodiscard]] std::expected<std::shared_ptr<GenerationTask>, error_code>
   summarize_assistant(bool force, SummaryApprover approver = {});
   void cancel_session(std::uint32_t session_id);
   void cancel_assistant();

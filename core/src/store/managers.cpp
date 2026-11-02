@@ -33,6 +33,28 @@ std::vector<Message> SessionManager::most_recent_after_assistant_memory_watermar
   return db_.messages_after_assistant_memory_watermark();
 }
 
+std::unordered_map<std::uint32_t, std::string> SessionManager::session_last_times() const {
+  return db_.session_last_times();
+}
+
+std::optional<std::string> SessionManager::last_message_time(std::uint32_t id) const {
+  return db_.last_message_time(id);
+}
+
+void SessionManager::set_reasoning_effort(std::uint32_t id, const std::string& level) {
+  db_.set_session_reasoning_effort(id, level);
+}
+
+bool SessionManager::remove_message(std::uint32_t id) {
+  return db_.remove_message(id);
+}
+
+void SessionManager::update_message(std::uint32_t id, const std::string& content) {
+  db_.update_message(id, content);
+}
+
+database& SessionManager::database_for_update() { return db_; }
+
 MessageManager::MessageManager(database &db, std::uint32_t session_id)
     : db_(db), session_id_(session_id) {}
 

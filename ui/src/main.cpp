@@ -92,7 +92,7 @@ int main(int argc, char **argv) {
     const std::vector<std::string> uuids = interface->get_store().scan_assistants();
 
     if (std::find(uuids.begin(), uuids.end(), last) != uuids.end()) {
-      opened = interface->open_assistant(last);
+      opened = interface->open_assistant(last).has_value();
     }
   }
 

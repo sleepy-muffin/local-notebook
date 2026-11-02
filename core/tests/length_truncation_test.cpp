@@ -179,7 +179,7 @@ int main() {
     TruncatingServer server;
     api.get_store().save_assistant("length-chat", assistant_for(server));
     expect(
-        api.open_assistant("length-chat"),
+        api.open_assistant("length-chat").has_value(),
         "open_assistant failed for the chat case"
     );
 
@@ -189,11 +189,16 @@ int main() {
     expect(session_id != 0, "create_session failed for the chat case");
 
     expect(
-        api.session_prompt(session_id, "hi") == lnb::core::error_code::SUCCESS,
+        api.session_prompt(session_id, "hi").has_value(),
         "session_prompt failed for the chat case"
     );
 
-    const auto task = api.start_generation(session_id);
+    const auto task_result = api.start_generation(session_id);
+    expect(task_result.has_value(), "start_generation failed for the chat case");
+    if (!task_result) {
+      return 1;
+    }
+    const auto task = *task_result;
     const bool finished = wait_terminal(task, 5s);
 
     if (!finished) {
@@ -228,7 +233,7 @@ int main() {
     TruncatingServer server;
     api.get_store().save_assistant("length-summary", assistant_for(server));
     expect(
-        api.open_assistant("length-summary"),
+        api.open_assistant("length-summary").has_value(),
         "open_assistant failed for the summary case"
     );
 
@@ -247,7 +252,12 @@ int main() {
     api.append_message(session_id, lnb::core::Role::Assistant, "beta");
     api.append_message(session_id, lnb::core::Role::User, "gamma");
 
-    const auto task = api.summarize_session(session_id, true);
+    const auto task_result = api.summarize_session(session_id, true);
+    expect(task_result.has_value(), "summarize_session failed for the summary case");
+    if (!task_result) {
+      return 1;
+    }
+    const auto task = *task_result;
     const bool finished = wait_terminal(task, 5s);
 
     if (!finished) {

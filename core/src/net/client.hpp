@@ -125,48 +125,17 @@ ContextUsage context_usage(
     const std::vector<std::string>& shared_directories, const Session& session
 );
 
-// Session summarisation (design-1.md §5). `maybe_*` is a no-op (returns the
-// unchanged summary) while the automatic trigger is not reached and swallows
-// failures (best effort); the `*_now` variant ignores the trigger, folds the
-// whole overflow and propagates failures. Both return the resulting session
-// summary (which is also persisted to the database). `approver`, when set, is
-// consulted before the request is sent and may cancel the pass.
-std::string maybe_summarize_session(
+
+std::string update_session_summary(
     database& db, const Session& session, const Remote& remote,
-    GenerationTask& task, std::stop_token stop_token,
-    SummaryApprover approver = {}
+    GenerationTask& task, std::stop_token stop_token, bool force,
+    const SummaryApprover& approver
 );
 
-std::string summarize_session_now(
-    database& db, const Session& session, const Remote& remote,
-    GenerationTask& task, std::stop_token stop_token,
-    SummaryApprover approver = {}
-);
-
-// Assistant summarisation across all sessions (design-1.md §6). `maybe_*` fires
-// only when the automatic trigger is reached; `*_now` folds on demand. Both
-// return the new assistant memory (empty when nothing happened); the caller
-// assigns it to `Assistant::memory_` and persists it, because the assistant is
-// passed by const reference. `approver` behaves as above.
-std::string maybe_summarize_assistant(
+std::string update_assistant_memory(
     database& db, const Assistant& assistant, const Remote& remote,
     GenerationTask& task, std::stop_token stop_token,
-    SummaryApprover approver = {}
-);
-
-std::string summarize_assistant_now(
-    database& db, const Assistant& assistant, const Remote& remote,
-    GenerationTask& task, std::stop_token stop_token,
-    SummaryApprover approver = {}
-);
-
-// The automatic assistant trigger (design-1.md §6): the tokens of messages newer
-// than each session's assistant watermark, summed across all sessions, compared
-// against `assistant.summary_trigger_tokens_`. Because it reads every session's
-// transcript, callers should cache the answer rather than call it per frame.
-bool assistant_trigger_reached(
-    database& db, const Assistant& assistant,
-    std::stop_token stop_token = std::stop_token{}
+    const SummaryApprover& approver
 );
 
 } // namespace lnb::core

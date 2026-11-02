@@ -740,8 +740,9 @@ void SessionEditor::load_session() {
   // A brand-new session starts on the assistant's level (which itself defaults to
   // the model's first available one); an existing row keeps the level it stores.
   // Either way an empty value resolves to the model's first available level.
-  const std::string preferred = session_id_ == 0
-      ? api_.assistant().reasoning_effort_
+  const auto assistant = api_.assistant();
+  const std::string preferred = session_id_ == 0 && assistant
+      ? assistant->reasoning_effort_
       : session_.reasoning_effort_;
   populate_reasoning(reasoning_, preferred);
 
@@ -789,7 +790,8 @@ void SessionEditor::populate_reasoning(
     return;
   }
 
-  const std::string model = api_.assistant().model_;
+  const auto assistant = api_.assistant();
+  const std::string model = assistant ? assistant->model_ : std::string{};
   const std::string wanted = preferred;
   const std::string target =
       wanted.empty() ? lnb::core::reasoning_default_for(model) : wanted;

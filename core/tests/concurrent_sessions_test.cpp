@@ -1,8 +1,7 @@
 // Regression test for the per-session task slots.
 //
-// A turn in one session must not block a turn in another. The shared assistant
-// fold is the one operation that owns every session: it waits for the session
-// turns already running and refuses new ones until it finishes.
+// A turn in one session must not block a turn in another. Assistant-memory
+// updates are exclusive and are rejected while any session task is active.
 #include "local_notebook/core/interface.hpp"
 
 #include <boost/asio.hpp>
@@ -31,10 +30,15 @@ void expect(bool condition, const std::string& label) {
 }
 
 void expect_code(
-    lnb::core::error_code actual, lnb::core::error_code expected,
-    const std::string& label
+    const std::expected<void, lnb::core::error_code>& actual,
+    lnb::core::error_code expected, const std::string& label
 ) {
-  expect(actual == expected, label);
+  expect(
+      expected == lnb::core::error_code::SUCCESS
+          ? actual.has_value()
+          : !actual.has_value() && actual.error() == expected,
+      label
+  );
 }
 
 lnb::core::SummaryApprover approve() {
@@ -176,7 +180,7 @@ int main() {
   assistant.model_ = "test-model";
   assistant.protocol_ = lnb::core::ApiProtocol::ChatCompletions;
   api.get_store().save_assistant("concurrent-test", assistant);
-  expect(api.open_assistant("concurrent-test"), "open_assistant failed");
+  expect(api.open_assistant("concurrent-test").has_value(), "open_assistant failed");
 
   lnb::core::Session settings;
   settings.title_ = "Session";
@@ -192,33 +196,45 @@ int main() {
       api.session_prompt(first, "first"),
       lnb::core::error_code::SUCCESS, "first prompt"
   );
-  const auto first_task = api.start_generation(first);
-  expect(first_task != nullptr, "the first session's turn should start");
+  const auto first_task_result = api.start_generation(first);
+  expect(first_task_result.has_value(), "the first session's turn should start");
+  if (!first_task_result) return 1;
+  const auto first_task = *first_task_result;
 
   expect_code(
       api.session_prompt(second, "second"),
       lnb::core::error_code::SUCCESS, "a second session must not be blocked"
   );
-  const auto second_task = api.start_generation(second);
-  expect(second_task != nullptr, "the second session's turn should start");
+  const auto second_task_result = api.start_generation(second);
+  expect(second_task_result.has_value(), "the second session's turn should start");
+  if (!second_task_result) return 1;
+  const auto second_task = *second_task_result;
 
   expect(api.session_busy(first), "the first session should be busy");
   expect(api.session_busy(second), "the second session should be busy");
 
-  // 2. The assistant fold starts while both session turns run: it is accepted,
-  //    announces itself as busy, and blocks a new session prompt.
-  const auto fold = api.summarize_assistant(true, approve());
-  expect(fold != nullptr, "the assistant fold should accept the running turns");
+  // 2. Assistant memory cannot be updated while session tasks are active.
+  const auto rejected_fold = api.summarize_assistant(true, approve());
+  expect(
+      !rejected_fold && rejected_fold.error() == lnb::core::error_code::ERR_ASSISTANT_OR_ANY_SESSION_BUSY,
+      "assistant memory update should be rejected while session turns run"
+  );
+  expect(wait_terminal(first_task), "the first turn did not finish");
+  expect(wait_terminal(second_task), "the second turn did not finish");
+
+  // 3. Once session tasks finish, the assistant fold owns all work and rejects
+  //    new session prompts.
+  const auto fold_result = api.summarize_assistant(true, approve());
+  expect(fold_result.has_value(), "the assistant fold should start when idle");
+  if (!fold_result) return 1;
+  const auto fold = *fold_result;
   expect(api.assistant_busy(), "the assistant fold should be busy");
   expect_code(
       api.session_prompt(third, "third"),
       lnb::core::error_code::ERR_ASSISTANT_BUSY,
-      "a new prompt must be refused while the assistant fold owns the sessions"
+      "a new prompt must be refused while assistant memory is being updated"
   );
-
   expect(wait_terminal(fold), "the assistant fold did not finish");
-  expect(wait_terminal(first_task), "the first turn did not finish");
-  expect(wait_terminal(second_task), "the second turn did not finish");
 
   expect(
       first_task->snapshot().status == lnb::core::GenerationTask::Status::COMPLETED,

@@ -816,7 +816,8 @@ bool ConversationView::summarize_due() const {
   // overflow first, then the shared assistant trigger (or an assistant fold
   // already in flight). Every composer therefore reports the same action, and the
   // send button is banned the moment either trigger is met.
-  return api_.has_session_summary_trigger_met(session_id_) != lnb::core::error_code::SUCCESS;
+  const auto trigger = api_.has_session_summary_trigger_met(session_id_);
+  return !trigger.has_value();
 }
 
 void ConversationView::refresh_send_mode() {

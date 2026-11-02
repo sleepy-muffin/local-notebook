@@ -172,7 +172,10 @@ int main() {
   assistant.model_ = "test-model";
   assistant.protocol_ = lnb::core::ApiProtocol::ChatCompletions;
   api.get_store().save_assistant("http-generation-test", assistant);
-  api.open_assistant("http-generation-test");
+  if (!api.open_assistant("http-generation-test")) {
+    std::cerr << "FAIL: open_assistant failed\n";
+    return 1;
+  }
 
   lnb::core::Session session;
   session.title_ = "Generation";
@@ -180,11 +183,17 @@ int main() {
   expect(session_id != 0, "create_session failed");
 
   expect(
-      api.session_prompt(session_id, "hi") == lnb::core::error_code::SUCCESS,
+      api.session_prompt(session_id, "hi").has_value(),
       "session_prompt failed"
   );
 
-  const auto task = api.start_generation(session_id);
+  const auto task_result = api.start_generation(session_id);
+  expect(task_result.has_value(), "start_generation failed");
+  if (!task_result) {
+    api.wait_for_generation();
+    return 1;
+  }
+  const auto task = *task_result;
   const bool finished = wait_terminal(task, 5s);
 
   if (!finished) {
@@ -195,8 +204,7 @@ int main() {
 
   expect(finished, "generation did not finish within 5s");
   expect(
-      task != nullptr &&
-          task->snapshot().status == lnb::core::GenerationTask::Status::COMPLETED,
+      task->snapshot().status == lnb::core::GenerationTask::Status::COMPLETED,
       "generation did not complete"
   );
 

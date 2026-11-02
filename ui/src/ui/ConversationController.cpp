@@ -73,9 +73,9 @@ bool ConversationController::send(std::string text, lnb::core::SummaryApprover a
   // The interface owns the send policy: it validates the session and both summary
   // triggers, and persists the prompt before the turn starts, so a failed
   // generation still leaves the user's message in the transcript.
-  const lnb::core::error_code status = api_.session_prompt(session_id_, text);
+  const auto status = api_.session_prompt(session_id_, text);
 
-  if (status != lnb::core::error_code::SUCCESS) {
+  if (!status) {
     return false;
   }
 
@@ -85,7 +85,8 @@ bool ConversationController::send(std::string text, lnb::core::SummaryApprover a
 
   // The prompt is stored; now start the turn. The interface keeps the task alive
   // and runs the worker, so the controller only polls it.
-  return track(api_.start_generation(session_id_, std::move(approver)));
+  auto task = api_.start_generation(session_id_, std::move(approver));
+  return task && track(*task);
 }
 
 void ConversationController::summarize(lnb::core::SummaryApprover approver) {
@@ -95,15 +96,16 @@ void ConversationController::summarize(lnb::core::SummaryApprover approver) {
 
   // The interface resolves the level: this session's own overflow first, then
   // the shared assistant trigger.
-  const lnb::core::error_code status =
-      api_.has_session_summary_trigger_met(session_id_);
+  const auto status = api_.has_session_summary_trigger_met(session_id_);
 
-  if (status == lnb::core::error_code::ERR_SESSION_SUMMARY_TRIGGER_HAS_MET) {
+  if (!status && status.error() ==
+                     lnb::core::error_code::ERR_SESSION_SUMMARY_TRIGGER_HAS_MET) {
     summarize_session_now(std::move(approver));
     return;
   }
 
-  if (status != lnb::core::error_code::ERR_ASSISTANT_MEMORY_TRIGGER_HAS_MET) {
+  if (status || status.error() !=
+                    lnb::core::error_code::ERR_ASSISTANT_MEMORY_TRIGGER_HAS_MET) {
     return;
   }
 
@@ -114,7 +116,10 @@ void ConversationController::summarize(lnb::core::SummaryApprover approver) {
   // here. Adopting it as `task_` would make the Tasks window list this session
   // as a running task that merely mirrors the assistant's numbers, which is
   // impossible: while the assistant folds, no session may start a task.
-  observe(api_.summarize_assistant(false, std::move(approver)));
+  auto task = api_.summarize_assistant(false, std::move(approver));
+  if (task) {
+    observe(*task);
+  }
 }
 
 void ConversationController::summarize_session_now(
@@ -126,7 +131,10 @@ void ConversationController::summarize_session_now(
 
   // Forced, so the manual action folds the overflow regardless of the automatic
   // trigger. The interface snapshots the assistant and session on its worker.
-  track(api_.summarize_session(session_id_, true, std::move(approver)));
+  auto task = api_.summarize_session(session_id_, true, std::move(approver));
+  if (task) {
+    track(*task);
+  }
 }
 
 void ConversationController::cancel() {

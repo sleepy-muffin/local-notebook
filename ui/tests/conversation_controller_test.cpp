@@ -262,12 +262,18 @@ int main() {
     stored.summary_trigger_tokens_ = 1'000'000;
     api.save_session(stored);
 
-    lnb::core::Assistant due = api.assistant();
+    auto due_result = api.assistant();
+    expect(due_result.has_value(), "the open assistant should be available");
+    if (!due_result) {
+      return 1;
+    }
+    lnb::core::Assistant due = *due_result;
     due.summary_trigger_tokens_ = 1;
     api.set_assistant(due);
 
+    const auto trigger = api.has_session_summary_trigger_met(session_id);
     expect(
-        api.has_session_summary_trigger_met(session_id) ==
+        !trigger && trigger.error() ==
             lnb::core::error_code::ERR_ASSISTANT_MEMORY_TRIGGER_HAS_MET,
         "the assistant trigger should be the due one"
     );

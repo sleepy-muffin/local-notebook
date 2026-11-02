@@ -11,19 +11,17 @@ interface::interface(std::filesystem::path store_root)
 
 interface::~interface() = default;
 
-bool interface::open_assistant(std::string uuid) {
+std::expected<void, error_code> interface::open_assistant(std::string uuid) {
   return application_->open_assistant(std::move(uuid));
 }
-
-std::string interface::last_error() const { return application_->last_error(); }
 
 std::vector<std::pair<std::string, Assistant>> interface::list_assistants() { return application_->list_assistants(); }
 
 bool interface::has_assistant() const { return application_->has_assistant(); }
 
-std::string interface::assistant_uuid() const { return application_->assistant_uuid(); }
+std::expected<std::string, error_code> interface::assistant_uuid() const { return application_->assistant_uuid(); }
 
-Assistant interface::assistant() const { return application_->assistant(); }
+std::expected<Assistant, error_code> interface::assistant() const { return application_->assistant(); }
 
 void interface::set_assistant(Assistant assistant) {
   application_->set_assistant(std::move(assistant));
@@ -105,7 +103,8 @@ std::vector<std::string> interface::reasoning_efforts_with_stored(const std::str
   return application_->reasoning_efforts_with_stored(stored);
 }
 
-bool interface::busy() const { return application_->busy(); }
+
+bool interface::busy() const { return application_->any_busy(); }
 
 bool interface::session_busy(std::uint32_t session_id) const {
   return application_->session_busy(session_id);
@@ -121,25 +120,25 @@ bool interface::assistant_summary_due() const { return application_->assistant_s
 
 void interface::mark_assistant_summary_stale() { application_->mark_assistant_summary_stale(); }
 
-error_code interface::has_session_summary_trigger_met(std::uint32_t session_id) const {
+std::expected<void, error_code> interface::has_session_summary_trigger_met(std::uint32_t session_id) const {
   return application_->has_session_summary_trigger_met(session_id);
 }
 
-error_code interface::session_prompt(std::uint32_t session_id, const std::string &prompt) {
+std::expected<void, error_code> interface::session_prompt(std::uint32_t session_id, const std::string &prompt) {
   return application_->session_prompt(session_id, prompt);
 }
 
-std::shared_ptr<GenerationTask>
+std::expected<std::shared_ptr<GenerationTask>, error_code>
 interface::start_generation(std::uint32_t session_id, SummaryApprover approver) {
   return application_->start_generation(session_id, std::move(approver));
 }
 
-std::shared_ptr<GenerationTask>
+std::expected<std::shared_ptr<GenerationTask>, error_code>
 interface::summarize_session(std::uint32_t session_id, bool force, SummaryApprover approver) {
   return application_->summarize_session(session_id, force, std::move(approver));
 }
 
-std::shared_ptr<GenerationTask>
+std::expected<std::shared_ptr<GenerationTask>, error_code>
 interface::summarize_assistant(bool force, SummaryApprover approver) {
   return application_->summarize_assistant(force, std::move(approver));
 }

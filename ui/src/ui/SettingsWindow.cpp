@@ -761,7 +761,9 @@ QWidget* SettingsWindow::build_assistant_page() {
   layout->setSpacing(12);
 
   assistant_form_ = new AssistantForm(content);
-  assistant_form_->set_assistant(api_.assistant());
+  if (const auto assistant = api_.assistant()) {
+    assistant_form_->set_assistant(*assistant);
+  }
   layout->addWidget(assistant_form_);
 
   // ---- Assistant memory ----
@@ -794,12 +796,14 @@ QWidget* SettingsWindow::build_assistant_page() {
   assistant_memory_->setTabChangesFocus(true);
   assistant_memory_->setMinimumHeight(160);
   assistant_memory_->setPlaceholderText(
-      trs(
-          "Automatically maintained record shared across every session. Edit to "
-          "correct it, or clear it to rebuild it from the transcript."
-      )
+    trs(
+      "Automatically maintained record shared across every session. Edit to "
+      "correct it, or clear it to rebuild it from the transcript."
+    )
   );
-  assistant_memory_->setPlainText(to_qstring(api_.assistant().memory_));
+  if (const auto assistant = api_.assistant()) {
+    assistant_memory_->setPlainText(to_qstring(assistant->memory_));
+  }
   memory_layout->addWidget(assistant_memory_);
 
   auto* docs = new QLabel(memory_block);
@@ -1007,12 +1011,13 @@ void SettingsWindow::reload_from_app() {
     reload();
   }
 
-  if (assistant_form_ != nullptr) {
-    assistant_form_->set_assistant(api_.assistant());
-  }
-
-  if (assistant_memory_ != nullptr) {
-    assistant_memory_->setPlainText(to_qstring(api_.assistant().memory_));
+  if (const auto assistant = api_.assistant()) {
+    if (assistant_form_ != nullptr) {
+      assistant_form_->set_assistant(*assistant);
+    }
+    if (assistant_memory_ != nullptr) {
+      assistant_memory_->setPlainText(to_qstring(assistant->memory_));
+    }
   }
 
   update_account_page();
@@ -1088,7 +1093,11 @@ void SettingsWindow::save() {
   // global settings file. Build the edited copy and publish it in one step, so
   // a worker never observes a half-written assistant.
   if (assistant_form_ != nullptr) {
-    lnb::core::Assistant updated = api_.assistant();
+    const auto current = api_.assistant();
+    if (!current) {
+      return;
+    }
+    lnb::core::Assistant updated = *current;
     assistant_form_->write_into(updated);
     if (assistant_memory_ != nullptr) {
       updated.memory_ = assistant_memory_->toPlainText().toStdString();
@@ -1162,14 +1171,14 @@ void SettingsWindow::summarize_assistant_now() {
 
   // The interface snapshots the assistant and owns the worker. The fold persists
   // the resulting memory itself, so nothing has to be copied back here.
-  auto task = api_.summarize_assistant(true, approver);
-
-  if (task == nullptr) {
+  auto result = api_.summarize_assistant(true, approver);
+  if (!result) {
     assistant_summarizing_ = false;
     assistant_summarize_->setEnabled(true);
     assistant_summarize_->setText(trs("Update memory now"));
     return;
   }
+  auto task = *result;
 
   // Keep the modal window responsive while the worker folds every session: the
   // nested loop only pumps events until the task reaches a terminal state. The
@@ -1212,7 +1221,11 @@ void SettingsWindow::summarize_assistant_now() {
   }
 
   const QString previous = assistant_memory_->toPlainText();
-  const QString memory = to_qstring(api_.assistant().memory_);
+  const auto assistant = api_.assistant();
+  if (!assistant) {
+    return;
+  }
+  const QString memory = to_qstring(assistant->memory_);
 
   assistant_memory_->setPlainText(memory);
   // The fold advanced every session's assistant watermark, so the cached trigger

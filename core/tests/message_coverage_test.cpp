@@ -179,8 +179,14 @@ std::string pseudo_message(std::size_t index) {
 
 void run_task(
     lnb::core::interface& api, std::uint32_t session_id,
-    const std::shared_ptr<lnb::core::GenerationTask>& task, const std::string& label
+    std::expected<std::shared_ptr<lnb::core::GenerationTask>, lnb::core::error_code> result,
+    const std::string& label
 ) {
+  if (!result) {
+    fail(label + ": task was rejected");
+    return;
+  }
+  const auto& task = *result;
   if (task == nullptr) {
     fail(label + ": no task was started");
     return;
@@ -227,7 +233,7 @@ int main() {
   assistant.summary_token_budget_for_session_summarization_ = 16'000;
 
   api.get_store().save_assistant("message-coverage-test", assistant);
-  if (!api.open_assistant("message-coverage-test")) {
+  if (!api.open_assistant("message-coverage-test").has_value()) {
     std::cerr << "FAIL: open_assistant failed\n";
     return 1;
   }
@@ -321,7 +327,7 @@ int main() {
   {
     const auto prompt = api.session_prompt(session_id, prompt_marker + "hi");
 
-    if (prompt != lnb::core::error_code::SUCCESS) {
+    if (!prompt) {
       fail("session_prompt failed for the window check");
     } else {
       run_task(

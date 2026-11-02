@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "local_notebook/core/model.hpp"
@@ -35,16 +36,20 @@ public:
   [[nodiscard]] std::optional<Session> get(std::uint32_t id) const;
   [[nodiscard]] std::optional<MessageManager> get_messages(std::uint32_t id) const;
   [[nodiscard]] std::vector<Message> most_recent_after_assistant_memory_watermark() const;
+  [[nodiscard]] std::unordered_map<std::uint32_t, std::string> session_last_times() const;
+  [[nodiscard]] std::optional<std::string> last_message_time(std::uint32_t id) const;
+  void set_reasoning_effort(std::uint32_t id, const std::string& level);
+  bool remove_message(std::uint32_t id);
+  void update_message(std::uint32_t id, const std::string& content);
+  [[nodiscard]] database& database_for_update();
 
   // Inserts `session` and returns its new id. `session.id_` is ignored.
   std::uint32_t create(const Session& session);
   void save(const Session& session);
   void remove(std::uint32_t id);
 
-  // The database this manager owns. Callers that already speak in SQL (the net
-  // layer's summarisers) use it; everything else should stay on the managers.
-  [[nodiscard]] database& db() { return db_; }
-  [[nodiscard]] const database& db() const { return db_; }
+  // Do not allow Getting `database` elsewhere.
+  // Add interface to this class instead.
 
 private:
   std::unique_ptr<database> owned_;

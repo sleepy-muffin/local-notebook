@@ -86,11 +86,16 @@ int main() {
   assistant.authentication_token_ = "key";
   assistant.model_ = "test-model";
   api.get_store().save_assistant("log-test", assistant);
-  api.open_assistant("log-test");
+  if (!api.open_assistant("log-test")) {
+    std::cerr << "FAIL: open_assistant failed\n";
+    return 1;
+  }
 
   // 1. Nothing to merge: the pass still completes, and the log says why.
   {
-    const auto task = api.summarize_assistant(true, approve());
+    const auto result = api.summarize_assistant(true, approve());
+    expect(result.has_value(), "no-sessions: summarize_assistant rejected");
+    const auto task = result ? *result : nullptr;
     expect(wait_terminal(task), "no-sessions: task did not finish");
     expect_status(task, lnb::core::GenerationTask::Status::COMPLETED, "no-sessions");
 
@@ -105,13 +110,15 @@ int main() {
   const std::uint32_t session_id = api.create_session(session);
   expect(session_id != 0, "create_session failed");
   expect(
-      api.session_prompt(session_id, "hello") == lnb::core::error_code::SUCCESS,
+      api.session_prompt(session_id, "hello").has_value(),
       "session_prompt failed"
   );
 
   // 2. Automatic pass with an unreached trigger: completed with an explanation.
   {
-    const auto task = api.summarize_assistant(false, approve());
+    const auto result = api.summarize_assistant(false, approve());
+    expect(result.has_value(), "not-reached: summarize_assistant rejected");
+    const auto task = result ? *result : nullptr;
     expect(wait_terminal(task), "not-reached: task did not finish");
     expect_status(task, lnb::core::GenerationTask::Status::COMPLETED, "not-reached");
 
@@ -135,7 +142,9 @@ int main() {
 
   // 3. A declined review sends nothing but is recorded in the log.
   {
-    const auto task = api.summarize_assistant(true, decline());
+    const auto result = api.summarize_assistant(true, decline());
+    expect(result.has_value(), "declined: summarize_assistant rejected");
+    const auto task = result ? *result : nullptr;
     expect(wait_terminal(task), "declined: task did not finish");
     expect_status(task, lnb::core::GenerationTask::Status::COMPLETED, "declined");
 
@@ -149,7 +158,9 @@ int main() {
     assistant.api_url_ = "ftp://example.com/v1";
     api.set_assistant(assistant);
 
-    const auto task = api.summarize_assistant(true, approve());
+    const auto result = api.summarize_assistant(true, approve());
+    expect(result.has_value(), "send-failure: summarize_assistant rejected");
+    const auto task = result ? *result : nullptr;
     expect(wait_terminal(task), "send-failure: task did not finish");
     expect_status(task, lnb::core::GenerationTask::Status::FAILED, "send-failure");
 
