@@ -1113,7 +1113,6 @@ void MainWindow::update_task_indicator() {
     entry.output_budget = snapshot.output_budget;
     entry.output_budget_kind = snapshot.output_budget_kind;
     entry.elapsed_ms = snapshot.elapsed_ms;
-    entry.error = from_utf8(snapshot.error);
     entry.state = describe(snapshot.status);
 
     entries.push_back(std::move(entry));
@@ -1145,7 +1144,6 @@ void MainWindow::update_task_indicator() {
     entry.output_budget = snapshot.output_budget;
     entry.output_budget_kind = snapshot.output_budget_kind;
     entry.elapsed_ms = snapshot.elapsed_ms;
-    entry.error = from_utf8(snapshot.error);
     entry.state = describe(snapshot.status);
 
     entries.push_back(std::move(entry));

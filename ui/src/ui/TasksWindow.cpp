@@ -91,6 +91,7 @@ bool starts_entry(const QString& line) {
          line.startsWith(QStringLiteral("tool result: ")) ||
          line.startsWith(QStringLiteral("generate_reply round=")) ||
          line.startsWith(QStringLiteral("[assistant-summary]")) ||
+         line.startsWith(QStringLiteral("[failure] ")) ||
          line.startsWith(QStringLiteral("--- hidden reasoning ---"));
 }
 
@@ -240,6 +241,22 @@ std::vector<TaskLogEntry> parse_log(const QString& text) {
       entry.raw = line + QLatin1Char('\n') + reasoning;
       entry.detail = character_count(reasoning);
       entry.preview = snippet(reasoning);
+    } else if (line.startsWith(QStringLiteral("[failure] "))) {
+      entry.kind = TaskLogEntry::Kind::Error;
+      entry.badge = trs("Failure");
+
+      QString message = line.mid(QStringLiteral("[failure] ").size());
+      QString raw = line;
+
+      // A failure ends the task, so any following lines belong to its message.
+      while (i + 1 < count && !starts_entry(lines[i + 1].trimmed())) {
+        message += QLatin1Char('\n') + lines[++i];
+        raw += QLatin1Char('\n') + lines[i];
+      }
+
+      message = message.trimmed();
+      entry.title = message;
+      entry.raw = raw;
     } else if (line.startsWith(QStringLiteral("generate_reply round="))) {
       entry.kind = TaskLogEntry::Kind::Note;
       entry.badge = trs("Round");
@@ -489,7 +506,10 @@ void TasksWindow::rebuild_log_rows(const QString& text) {
     heading->setSpacing(8);
 
     auto* badge = new QLabel(entry.badge, row);
-    badge->setObjectName(QStringLiteral("LogBadge"));
+    badge->setObjectName(
+        entry.kind == TaskLogEntry::Kind::Error ? QStringLiteral("LogBadgeError")
+                                                : QStringLiteral("LogBadge")
+    );
     apply_derived_font(badge, -0.5, true);
 
     auto* row_title = new QLabel(entry.title, row);
@@ -651,7 +671,6 @@ void TasksWindow::apply_style() {
                .arg(colour_hex(row_selected_background()), colour_hex(c.accent));
 
   sheet += QStringLiteral("QLabel#TaskLogTitle { color: %1; }").arg(colour_hex(c.text));
-  sheet += QStringLiteral("QLabel#TaskError { color: %1; }").arg(colour_hex(c.danger));
   sheet += QStringLiteral("QLabel#TaskState { color: %1; }").arg(colour_hex(c.accent));
 
   // Log entries: a plain list, separated by hairlines, with the category in the
@@ -662,6 +681,7 @@ void TasksWindow::apply_style() {
                "  border-bottom: 1px solid %1; }")
                .arg(colour_hex(c.border));
   sheet += QStringLiteral("QLabel#LogBadge { color: %1; }").arg(colour_hex(c.accent));
+  sheet += QStringLiteral("QLabel#LogBadgeError { color: %1; }").arg(colour_hex(c.danger));
   sheet += QStringLiteral("QLabel#LogPreview { color: %1; }").arg(colour_hex(c.text_muted));
   sheet += QStringLiteral(
                "QToolButton#LogCopy { background: transparent; border: none;"
@@ -766,19 +786,14 @@ void TasksWindow::rebuild_rows(std::size_t count) {
     row_detail->setObjectName(QStringLiteral("Muted"));
     row_detail->setWordWrap(true);
 
-    auto* row_error = new QLabel(card);
-    row_error->setObjectName(QStringLiteral("TaskError"));
-    row_error->setWordWrap(true);
-
     // The labels must not swallow the click; the card owns the press.
-    for (QLabel* label : {row_title, row_id, row_tokens, row_detail, row_error}) {
+    for (QLabel* label : {row_title, row_id, row_tokens, row_detail}) {
       label->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     }
 
     column->addLayout(heading);
     column->addWidget(row_tokens);
     column->addWidget(row_detail);
-    column->addWidget(row_error);
 
     // The stop action for a running task. It is the only place a shared assistant
     // fold can be cancelled. The index is captured, so the handler always sees the
@@ -798,7 +813,7 @@ void TasksWindow::rebuild_rows(std::size_t count) {
     outer->addWidget(cancel, 0, Qt::AlignVCenter);
 
     list_layout_->insertWidget(static_cast<int>(i), card);
-    rows_[i] = Row{card, row_title, row_id, row_tokens, row_detail, row_error, cancel};
+    rows_[i] = Row{card, row_title, row_id, row_tokens, row_detail, cancel};
   }
 
   update_selection_style();
@@ -894,9 +909,6 @@ void TasksWindow::set_entries(std::vector<Entry> entries) {
       rows_[i].detail->style()->unpolish(rows_[i].detail);
       rows_[i].detail->style()->polish(rows_[i].detail);
     }
-
-    rows_[i].error->setText(entry.error);
-    rows_[i].error->setVisible(!entry.error.isEmpty());
 
     if (rows_[i].cancel != nullptr) {
       rows_[i].cancel->setVisible(entry.cancellable);

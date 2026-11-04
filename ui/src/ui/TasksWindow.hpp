@@ -33,6 +33,7 @@ struct TaskLogEntry {
     ToolCall,
     ToolResult,
     Reasoning,
+    Error,
     Note,
   };
 
@@ -51,11 +52,12 @@ struct TaskLogEntry {
 
 // A unique, non-modal window listing generation tasks: the ones running now and
 // the last finished one per slot (one per session, plus the shared assistant
-// memory). A failed task is never silently dropped, so its reason stays visible;
-// clicking a row shows that task's own diagnostic log in the right-hand pane (the
-// exact request body, the tool calls, and any hidden reasoning the model produced
-// — none of which the transcript shows). A running task carries a Cancel button,
-// the only place a shared assistant fold can be stopped.
+// memory). A failed task is never silently dropped: its reason is part of the
+// task's diagnostic log, so clicking the row shows it in the right-hand pane
+// along with the requests that led to it (the exact request body, the tool calls,
+// and any hidden reasoning the model produced — none of which the transcript
+// shows). A running task carries a Cancel button, the only place a shared
+// assistant fold can be stopped.
 //
 // The log is shown as a list of entries rather than a text dump: request bodies
 // are never rendered inline (they are long and unreadable), but every entry
@@ -93,8 +95,6 @@ public:
     // False when a request reported no usage and the figures are local estimates.
     bool usage_measured = true;
     std::int64_t elapsed_ms = 0;
-    // The failure reason; empty unless the task failed.
-    QString error;
   };
 
   explicit TasksWindow(QWidget* parent = nullptr);
@@ -122,7 +122,6 @@ private:
     QLabel* id = nullptr;
     QLabel* tokens = nullptr;
     QLabel* detail = nullptr;
-    QLabel* error = nullptr;
     QPushButton* cancel = nullptr;
   };
 

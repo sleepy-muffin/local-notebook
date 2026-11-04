@@ -408,6 +408,14 @@ public:
       warning_.clear();
       streaming_input_tokens_ = 0;
       streaming_output_tokens_ = 0;
+
+      // The reason joins the diagnostic log, so the tasks window shows it in the
+      // right-hand pane beside the requests that led to it instead of on the card.
+      if (log_.size() >= kLogLineLimit) {
+        log_.erase(log_.begin());
+      }
+
+      log_.push_back("[failure] " + error_);
     }
 
     stop_source_.request_stop();

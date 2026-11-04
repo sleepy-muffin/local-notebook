@@ -259,6 +259,7 @@ constexpr Entry kTranslations[] = {
     {"Tool call", "工具调用", "ツール呼び出し"},
     {"Tool result", "工具结果", "ツール結果"},
     {"Reasoning", "推理", "推論"},
+    {"Failure", "失败", "失敗"},
     {"Log", "日志", "ログ"},
     {"Round", "轮次", "ラウンド"},
     {"%1 characters", "%1 个字符", "%1 文字"},
