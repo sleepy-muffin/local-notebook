@@ -109,7 +109,11 @@ public:
 private:
   // Adopts a task returned by the interface and resets the per-task polling
   // bookkeeping. Returns false when the interface refused to start one.
-  bool track(std::shared_ptr<GenerationTask> task);
+  //
+  // `summarization` marks a fold pass: its streamed text is the summary itself
+  // and its status is "Updating summarization...", both of which belong to the
+  // task log in the Tasks window, never to the transcript.
+  bool track(std::shared_ptr<GenerationTask> task, bool summarization = false);
 
   // Watches the shared assistant pass without adopting it as the session's own
   // task. It is polled only to reload once it ends, so the composer can resolve
@@ -135,6 +139,10 @@ private:
   // True once finish_worker() has run for task_, so the terminal state is
   // reported exactly once.
   bool reported_ = false;
+
+  // True while task_ is a summarization fold rather than a chat turn, so its
+  // streamed summary text is not rendered as a reply in the transcript.
+  bool task_is_summarization_ = false;
 
   std::string last_display_;
   std::string last_status_;

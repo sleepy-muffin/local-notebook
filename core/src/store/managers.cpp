@@ -51,6 +51,14 @@ void SessionManager::save(const Session &session) {
 
 void SessionManager::remove(std::uint32_t id) { db_.remove_session(id); }
 
+std::vector<Summary> SessionManager::summaries(std::uint32_t session_id) const {
+  return db_.summaries(session_id);
+}
+
+bool SessionManager::remove_summary(std::uint32_t summary_id) {
+  return db_.remove_summary(summary_id);
+}
+
 std::vector<Message> SessionManager::most_recent_after_assistant_memory_watermark() const {
   return db_.messages_after_assistant_memory_watermark();
 }

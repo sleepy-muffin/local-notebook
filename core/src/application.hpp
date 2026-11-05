@@ -71,6 +71,11 @@ public:
   void save_session(const Session &session);
   void delete_session(std::uint32_t session_id);
 
+  // The stored summary versions of one session, oldest watermark first, and the
+  // removal of one version by id (an older one then becomes active again).
+  [[nodiscard]] std::vector<Summary> summaries(std::uint32_t session_id) const;
+  bool delete_summary(std::uint32_t summary_id);
+
   // Copies the session up to and including `message_id` into a new session with
   // the same settings, and returns the new session's id (0 on failure).
   std::uint32_t branch_session(std::uint32_t session_id, std::uint32_t message_id);

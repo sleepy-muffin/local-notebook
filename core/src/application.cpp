@@ -218,6 +218,21 @@ void lnb::core::application::delete_session(std::uint32_t session_id) {
   mark_assistant_summary_stale();
 }
 
+std::vector<lnb::core::Summary> lnb::core::application::summaries(std::uint32_t session_id) const {
+  if (assistant_state_ == nullptr)
+    return {};
+  return assistant_state_->lock()->sessions_.summaries(session_id);
+}
+
+bool lnb::core::application::delete_summary(std::uint32_t summary_id) {
+  if (assistant_state_ == nullptr)
+    return false;
+  const bool removed = assistant_state_->lock()->sessions_.remove_summary(summary_id);
+  if (removed)
+    mark_assistant_summary_stale();
+  return removed;
+}
+
 std::uint32_t lnb::core::application::branch_session(
     std::uint32_t session_id, std::uint32_t message_id) {
   if (assistant_state_ == nullptr)

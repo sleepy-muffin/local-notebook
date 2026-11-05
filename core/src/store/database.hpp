@@ -48,6 +48,11 @@ public:
   [[nodiscard]] std::vector<Summary> summaries(std::uint32_t session_id) const;
   [[nodiscard]] std::uint32_t insert_summary(const Summary& summary);
 
+  // Removes one summary version by its row id, leaving the older versions
+  // intact so the next-newest becomes active again. Returns true when a row was
+  // removed.
+  bool remove_summary(std::uint32_t summary_id);
+
   // Deletes every summary version whose watermark is at or above `watermark`,
   // because it was built on a message that no longer exists.
   std::size_t remove_summaries_from(std::uint32_t session_id, std::uint32_t watermark);

@@ -75,6 +75,14 @@ void interface::delete_session(std::uint32_t session_id) {
   application_->delete_session(session_id);
 }
 
+std::vector<Summary> interface::summaries(std::uint32_t session_id) const {
+  return application_->summaries(session_id);
+}
+
+bool interface::delete_summary(std::uint32_t summary_id) {
+  return application_->delete_summary(summary_id);
+}
+
 std::uint32_t interface::branch_session(
     std::uint32_t session_id, std::uint32_t message_id) {
   return application_->branch_session(session_id, message_id);

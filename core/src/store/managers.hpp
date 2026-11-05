@@ -49,6 +49,13 @@ public:
   void update_message(std::uint32_t id, const std::string& content);
   [[nodiscard]] database& database_for_update();
 
+  // The stored summary versions of one session, oldest watermark first.
+  [[nodiscard]] std::vector<Summary> summaries(std::uint32_t session_id) const;
+
+  // Removes one summary version by its row id, so the next-newest becomes
+  // active again. Returns true when a row was removed.
+  bool remove_summary(std::uint32_t summary_id);
+
   // Copies the session's settings and its messages up to and including
   // `message_id` (every message when it is 0) into a new session, and returns
   // the new session's id. Summary versions built on the copied prefix come

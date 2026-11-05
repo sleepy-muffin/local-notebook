@@ -45,12 +45,15 @@ std::string ConversationController::task_log() const {
   return task_ != nullptr ? task_->log_text() : std::string{};
 }
 
-bool ConversationController::track(std::shared_ptr<GenerationTask> task) {
+bool ConversationController::track(
+    std::shared_ptr<GenerationTask> task, bool summarization
+) {
   if (task == nullptr) {
     return false;
   }
 
   task_ = std::move(task);
+  task_is_summarization_ = summarization;
   reported_ = false;
   last_display_.clear();
   last_status_.clear();
@@ -133,7 +136,7 @@ void ConversationController::summarize_session_now(
   // trigger. The interface snapshots the assistant and session on its worker.
   auto task = api_.summarize_session(session_id_, true, std::move(approver));
   if (task) {
-    track(*task);
+    track(*task, true);
   }
 }
 
@@ -167,21 +170,27 @@ void ConversationController::poll() {
   if (task_ != nullptr) {
     const GenerationTask::Snapshot snapshot = task_->snapshot();
 
-    if (snapshot.status == GenerationTask::Status::RUNNING &&
-        snapshot.display != last_display_) {
-      last_display_ = snapshot.display;
-      if (on_stream_) {
-        on_stream_(snapshot.display);
+    // A summarization fold streams the summary text itself, and its status is
+    // "Updating summarization...". Both belong to the task log in the Tasks
+    // window; forwarding them here would append the summary to the transcript as
+    // if it were a reply.
+    if (!task_is_summarization_) {
+      if (snapshot.status == GenerationTask::Status::RUNNING &&
+          snapshot.display != last_display_) {
+        last_display_ = snapshot.display;
+        if (on_stream_) {
+          on_stream_(snapshot.display);
+        }
       }
-    }
 
-    // The transient operation title ("Searching...", "Updating summarization...")
-    // is shown until the first assistant token arrives.
-    if (snapshot.status == GenerationTask::Status::RUNNING &&
-        snapshot.operation_status != last_status_) {
-      last_status_ = snapshot.operation_status;
-      if (on_status_) {
-        on_status_(snapshot.operation_status);
+      // The transient operation title ("Searching...", "Updating summarization...")
+      // is shown until the first assistant token arrives.
+      if (snapshot.status == GenerationTask::Status::RUNNING &&
+          snapshot.operation_status != last_status_) {
+        last_status_ = snapshot.operation_status;
+        if (on_status_) {
+          on_status_(snapshot.operation_status);
+        }
       }
     }
 

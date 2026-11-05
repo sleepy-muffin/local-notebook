@@ -76,6 +76,19 @@ private:
   // conversation view) and reloads the persisted summary when it finishes.
   void summarize_now();
 
+  // Rebuilds the version list from the database (newest version first) and shows
+  // its active version. Called after loading and after a version is removed.
+  void reload_summary_versions();
+
+  // Shows one version in the summary box and watermark field. A negative row
+  // (nothing selected / no versions) leaves the box editable so a new summary can
+  // be written. An older, non-active version is shown read-only so that saving
+  // cannot silently revoke a newer one.
+  void show_summary_version(int row);
+
+  // Deletes one summary version and re-projects the session's active summary.
+  void remove_summary_version(std::uint32_t summary_id);
+
   lnb::core::interface& api_;
 
   // 0 while creating; the stored id once the session exists.
@@ -107,6 +120,18 @@ private:
   PlainTextEdit* summary_ = nullptr;
   QSpinBox* watermark_ = nullptr;
   QSpinBox* assistant_watermark_ = nullptr;
+
+  // The stored summary versions, newest first. Selecting one shows its content
+  // and watermark; only the active (newest) version is editable.
+  QListWidget* summary_versions_ = nullptr;
+
+  // The version currently displayed in the summary box. Only an active version
+  // is editable, so a Save cannot silently revoke a newer version while an older
+  // one is merely being inspected.
+  std::uint32_t shown_summary_id_ = 0;
+  std::string shown_summary_content_;
+  std::uint32_t shown_summary_watermark_ = 0;
+  bool shown_summary_active_ = true;
 
   // When unchecked, this session is left out of the shared assistant memory.
   QCheckBox* include_in_assistant_memory_ = nullptr;

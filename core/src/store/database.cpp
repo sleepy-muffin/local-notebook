@@ -582,6 +582,13 @@ std::size_t database::remove_summaries_from(
   return static_cast<std::size_t>(stmt.changes());
 }
 
+bool database::remove_summary(std::uint32_t summary_id) {
+  auto stmt = connection_.prepare("DELETE FROM summary WHERE id = ?");
+  stmt.bind(summary_id);
+  stmt.execute();
+  return stmt.changes() != 0;
+}
+
 std::vector<Message> database::messages(std::uint32_t session_id) const {
   auto stmt = connection_.prepare(
     "SELECT " + std::string(MESSAGE_COLUMNS) +

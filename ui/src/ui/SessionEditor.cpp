@@ -9,6 +9,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -298,6 +299,19 @@ QString SessionEditor::session_stylesheet() const {
                .arg(rgba(row_selected_background()), theme().colors.text.name());
   sheet += QStringLiteral("QStackedWidget#SessionStack { background: transparent; }");
 
+  // The summary version list uses the same row states as the navigation rail, so
+  // the two lists read as one idiom.
+  sheet += QStringLiteral(
+               "QListWidget#SummaryVersions::item { color: %1; padding: 6px 8px;"
+               " border-radius: 6px; margin: 1px 0; }")
+               .arg(theme().colors.text_muted.name());
+  sheet += QStringLiteral(
+               "QListWidget#SummaryVersions::item:hover { background: %1; }")
+               .arg(rgba(row_hover_background()));
+  sheet += QStringLiteral(
+               "QListWidget#SummaryVersions::item:selected { background: %1; color: %2; }")
+               .arg(rgba(row_selected_background()), theme().colors.text.name());
+
   return sheet;
 }
 
@@ -347,6 +361,21 @@ QWidget* SessionEditor::build_general_tab() {
 
     form->addRow(field_label(content, trs("Title")), title_);
     form->addRow(field_label(content, trs("Reasoning")), reasoning_);
+
+    // The assistant-memory position is bookkeeping, kept here on the General page
+    // next to the other session-level fields rather than with the summarization
+    // versions.
+    assistant_watermark_ = new SpinBox(content);
+    assistant_watermark_->setRange(0, 2'000'000'000);
+    assistant_watermark_->setToolTip(
+        trs(
+            "Assistant memory position for this session: the highest message id "
+            "already merged into the shared assistant memory."
+        )
+    );
+    form->addRow(
+        field_label(content, trs("Assistant watermark")), assistant_watermark_
+    );
     layout->addLayout(form);
   }
 
@@ -442,19 +471,48 @@ QWidget* SessionEditor::build_summary_tab() {
   );
   layout->addWidget(include_in_assistant_memory_);
 
-  summary_ = new PlainTextEdit(content);
-  summary_->setTabChangesFocus(true);
-  summary_->setMinimumHeight(140);
-  summary_->setPlaceholderText(
-      trs(
-          "Automatically maintained record of older turns. Edit to correct it, "
-          "or clear it to rebuild it from the whole transcript."
-      )
-  );
-  layout->addWidget(summary_);
-
-  // The watermark sits under the summary: the highest message id already merged.
+  // The version list sits to the left of the summary box. Selecting a version
+  // shows its content and watermark; right-clicking one removes it, which lets an
+  // older version become active again.
   {
+    auto* row = new QHBoxLayout();
+    row->setSpacing(8);
+
+    summary_versions_ = new QListWidget(content);
+    summary_versions_->setObjectName(QStringLiteral("SummaryVersions"));
+    summary_versions_->setMinimumWidth(150);
+    summary_versions_->setMaximumWidth(220);
+    summary_versions_->setFrameShape(QFrame::NoFrame);
+    summary_versions_->setSelectionMode(QAbstractItemView::SingleSelection);
+    summary_versions_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    summary_versions_->setContextMenuPolicy(Qt::CustomContextMenu);
+    summary_versions_->setFocusPolicy(Qt::NoFocus);
+    summary_versions_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    show_parent_background(summary_versions_);
+    install_scroll_bars(summary_versions_, ScrollBarTrack::Window);
+    summary_versions_->setToolTip(
+        trs(
+            "Stored summary versions, newest first. Select one to view its summary "
+            "and watermark; right-click one to remove it."
+        )
+    );
+    row->addWidget(summary_versions_);
+
+    auto* column = new QVBoxLayout();
+    column->setSpacing(8);
+
+    summary_ = new PlainTextEdit(content);
+    summary_->setTabChangesFocus(true);
+    summary_->setMinimumHeight(140);
+    summary_->setPlaceholderText(
+        trs(
+            "Automatically maintained record of older turns. Edit to correct it, "
+            "or clear it to rebuild it from the whole transcript."
+        )
+    );
+    column->addWidget(summary_, 1);
+
+    // The watermark sits under the summary: the highest message id already merged.
     auto* form = form_layout(content);
 
     watermark_ = new SpinBox(content);
@@ -467,21 +525,41 @@ QWidget* SessionEditor::build_summary_tab() {
         )
     );
 
-    assistant_watermark_ = new SpinBox(content);
-    assistant_watermark_->setRange(0, 2'000'000'000);
-    assistant_watermark_->setToolTip(
-        trs(
-            "Assistant memory position for this session: the highest message id "
-            "already merged into the shared assistant memory."
-        )
-    );
-
     form->addRow(field_label(content, trs("Summarization watermark")), watermark_);
-    form->addRow(
-        field_label(content, trs("Assistant watermark")), assistant_watermark_
-    );
-    layout->addLayout(form);
+    column->addLayout(form);
+
+    row->addLayout(column, 1);
+    layout->addLayout(row);
   }
+
+  connect(
+      summary_versions_, &QListWidget::currentRowChanged, this,
+      [this](int row) { show_summary_version(row); }
+  );
+  connect(
+      summary_versions_, &QListWidget::customContextMenuRequested, this,
+      [this](const QPoint& pos) {
+        auto* item = summary_versions_->itemAt(pos);
+
+        if (item == nullptr) {
+          return;
+        }
+
+        const auto id = item->data(Qt::UserRole).toUInt();
+
+        if (id == 0) {
+          return;
+        }
+
+        QMenu menu(summary_versions_);
+        QAction* remove = menu.addAction(trs("Remove summary version"));
+        QAction* chosen = menu.exec(summary_versions_->viewport()->mapToGlobal(pos));
+
+        if (chosen == remove) {
+          remove_summary_version(id);
+        }
+      }
+  );
 
   layout->addWidget(h_separator(content));
 
@@ -771,6 +849,9 @@ void SessionEditor::load_session() {
   watermark_->setValue(static_cast<int>(session_.summary_watermark_));
   assistant_watermark_->setValue(static_cast<int>(session_.assistant_memory_watermark_));
 
+  // Show the stored summary versions; the active one fills the box.
+  reload_summary_versions();
+
   summary_keep_->setValue(static_cast<int>(session_.summary_keep_tokens_));
   summary_trigger_->setValue(static_cast<int>(session_.summary_trigger_tokens_));
   summary_budget_->setValue(static_cast<int>(session_.summary_token_budget_));
@@ -814,6 +895,100 @@ void SessionEditor::populate_reasoning(
   combo->setCurrentIndex(selected);
 }
 
+void SessionEditor::reload_summary_versions() {
+  if (summary_versions_ == nullptr) {
+    return;
+  }
+
+  summary_versions_->clear();
+
+  const std::vector<lnb::core::Summary> versions = session_id_ == 0
+      ? std::vector<lnb::core::Summary>{}
+      : api_.summaries(session_id_);
+
+  // Newest first: the active summary is the one with the greatest watermark, so
+  // the first row is the live one and the rest are fallbacks.
+  bool active = true;
+
+  for (auto it = versions.rbegin(); it != versions.rend(); ++it) {
+    QString label = trs("Message %1").arg(it->watermark_);
+
+    if (active) {
+      label += QStringLiteral(" · ") + trs("Active");
+    }
+
+    auto* item = new QListWidgetItem(label, summary_versions_);
+    item->setData(Qt::UserRole, it->id_);
+    item->setData(Qt::UserRole + 1, it->watermark_);
+    item->setData(Qt::UserRole + 2, to_qstring(it->content_));
+    item->setData(Qt::UserRole + 3, to_qstring(it->made_at_));
+    item->setData(Qt::UserRole + 4, active);
+    item->setToolTip(
+        trs("Merged up to message %1, made at %2.")
+            .arg(it->watermark_)
+            .arg(to_qstring(it->made_at_))
+    );
+    active = false;
+  }
+
+  if (summary_versions_->count() > 0) {
+    summary_versions_->setCurrentRow(0);
+  } else {
+    show_summary_version(-1);
+  }
+}
+
+void SessionEditor::show_summary_version(int row) {
+  if (row < 0 || row >= summary_versions_->count()) {
+    // Nothing to show: leave the box editable so a new summary can be written.
+    shown_summary_id_ = 0;
+    shown_summary_content_.clear();
+    shown_summary_watermark_ = 0;
+    shown_summary_active_ = true;
+    summary_->setReadOnly(false);
+    watermark_->setEnabled(true);
+    return;
+  }
+
+  auto* item = summary_versions_->item(row);
+  const auto id = item->data(Qt::UserRole).toUInt();
+  const auto watermark = item->data(Qt::UserRole + 1).toUInt();
+  const QString content = item->data(Qt::UserRole + 2).toString();
+  const bool active = item->data(Qt::UserRole + 4).toBool();
+
+  shown_summary_id_ = id;
+  shown_summary_content_ = content.toStdString();
+  shown_summary_watermark_ = watermark;
+  shown_summary_active_ = active;
+
+  summary_->setPlainText(content);
+  watermark_->setValue(static_cast<int>(watermark));
+
+  // Only the active version may be edited; an older one is shown read-only so a
+  // Save cannot silently revoke the newer versions.
+  summary_->setReadOnly(!active);
+  watermark_->setEnabled(active);
+}
+
+void SessionEditor::remove_summary_version(std::uint32_t summary_id) {
+  if (summary_id == 0) {
+    return;
+  }
+
+  if (!api_.delete_summary(summary_id)) {
+    return;
+  }
+
+  // The active summary may have been the one removed; re-read the projection so
+  // the box reflects whichever older version is now active again.
+  if (const auto stored = api_.session(session_id_); stored.has_value()) {
+    session_.summary_ = stored->summary_;
+    session_.summary_watermark_ = stored->summary_watermark_;
+  }
+
+  reload_summary_versions();
+}
+
 void SessionEditor::save_session() {
   // The summarisation must leave something between the watermark frontier and
   // the content boundary, so the content limit has to sit below the trigger.
@@ -836,7 +1011,15 @@ void SessionEditor::save_session() {
 
   session.title_ = title_->text().trimmed().toStdString();
   session.custom_instructions_ = instructions_->toPlainText().toStdString();
-  session.summary_ = summary_->toPlainText().toStdString();
+
+  // Only the active version is editable. When an older version is merely being
+  // inspected (shown read-only), keep the active summary and its watermark
+  // untouched so Save does not revoke the newer versions.
+  if (shown_summary_active_) {
+    session.summary_ = summary_->toPlainText().toStdString();
+  } else {
+    session.summary_ = session_.summary_;
+  }
 
   session.shared_directories_.clear();
 
@@ -855,7 +1038,9 @@ void SessionEditor::save_session() {
   // Clearing the summary re-admits the whole transcript.
   session.summary_watermark_ = session.summary_.empty()
       ? 0
-      : static_cast<std::uint32_t>(watermark_->value());
+      : (shown_summary_active_
+             ? static_cast<std::uint32_t>(watermark_->value())
+             : session_.summary_watermark_);
   session.assistant_memory_watermark_ =
       static_cast<std::uint32_t>(assistant_watermark_->value());
 
@@ -987,6 +1172,9 @@ void SessionEditor::summarize_now() {
   session_.summary_ = updated->summary_;
   session_.summary_watermark_ = updated->summary_watermark_;
   watermark_->setValue(static_cast<int>(updated->summary_watermark_));
+
+  // The summariser stored a new version; show it (now the active one).
+  reload_summary_versions();
 
   if (summary.isEmpty() || summary == previous) {
     QMessageBox::information(
