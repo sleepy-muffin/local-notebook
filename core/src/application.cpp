@@ -218,6 +218,16 @@ void lnb::core::application::delete_session(std::uint32_t session_id) {
   mark_assistant_summary_stale();
 }
 
+std::uint32_t lnb::core::application::branch_session(
+    std::uint32_t session_id, std::uint32_t message_id) {
+  if (assistant_state_ == nullptr)
+    return 0;
+  const auto id = assistant_state_->lock()->sessions_.branch(session_id, message_id);
+  if (id != 0)
+    mark_assistant_summary_stale();
+  return id;
+}
+
 void lnb::core::application::set_session_reasoning_effort(std::uint32_t session_id, std::string level) {
   if (assistant_state_ != nullptr) {
     assistant_state_->lock()->sessions_.set_reasoning_effort(session_id, level);

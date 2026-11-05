@@ -103,6 +103,12 @@ public:
   // title bar and the context readout.
   void set_on_changed(std::function<void()> handler) { on_changed_ = std::move(handler); }
 
+  // Called with the id of the newly created session after a branch, so the
+  // window can open it.
+  void set_on_branch(std::function<void(std::uint32_t)> handler) {
+    on_branch_ = std::move(handler);
+  }
+
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
   void showEvent(QShowEvent* event) override;
@@ -207,6 +213,7 @@ private:
   QString pending_warning_;
 
   std::function<void()> on_changed_;
+  std::function<void(std::uint32_t)> on_branch_;
 };
 
 } // namespace ui

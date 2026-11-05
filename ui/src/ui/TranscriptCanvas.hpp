@@ -68,6 +68,7 @@ public:
   void set_on_copy(std::function<void(std::uint32_t)> handler);
   void set_on_edit(std::function<void(std::uint32_t)> handler);
   void set_on_delete(std::function<void(std::uint32_t)> handler);
+  void set_on_branch(std::function<void(std::uint32_t)> handler);
 
 protected:
   void paintEvent(QPaintEvent* event) override;
@@ -84,6 +85,7 @@ private:
   std::function<void(std::uint32_t)> on_copy_;
   std::function<void(std::uint32_t)> on_edit_;
   std::function<void(std::uint32_t)> on_delete_;
+  std::function<void(std::uint32_t)> on_branch_;
 };
 
 } // namespace ui

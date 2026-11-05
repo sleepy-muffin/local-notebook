@@ -34,13 +34,23 @@ public:
   ) const;
 
   // Summarization bookkeeping: write a summarisation result and advance its
-  // watermark.
+  // watermark. Each result is stored as its own row in the summary table, so an
+  // older version survives underneath and becomes active again when a newer one
+  // is revoked.
   void set_session_summary(
     std::uint32_t session_id, const std::string& summary, std::uint32_t watermark
   );
   void set_assistant_memory_watermark(
     std::uint32_t session_id, std::uint32_t watermark
   );
+
+  // The stored summary versions of one session, oldest watermark first.
+  [[nodiscard]] std::vector<Summary> summaries(std::uint32_t session_id) const;
+  [[nodiscard]] std::uint32_t insert_summary(const Summary& summary);
+
+  // Deletes every summary version whose watermark is at or above `watermark`,
+  // because it was built on a message that no longer exists.
+  std::size_t remove_summaries_from(std::uint32_t session_id, std::uint32_t watermark);
 
   // The session's reasoning level, written on its own so the composer's selector
   // does not have to round-trip the whole row.
@@ -52,6 +62,18 @@ public:
   [[nodiscard]] std::uint32_t insert_message(const Message& message);
   void update_message(std::uint32_t message_id, const std::string& content);
   [[nodiscard]] bool remove_message(std::uint32_t message_id);
+
+  // Deletes the message and every later message of its session. Returns the
+  // number removed.
+  std::size_t remove_messages_from(
+    std::uint32_t session_id, std::uint32_t message_id
+  );
+
+  // The session a message belongs to, or nullopt when the id is unknown.
+  [[nodiscard]] std::optional<std::uint32_t> message_session(
+    std::uint32_t message_id
+  ) const;
+
   [[nodiscard]] std::vector<Message> messages(std::uint32_t session_id) const;
 
   // The unsummarised conversation: every message of the session whose id is

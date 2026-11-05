@@ -825,6 +825,13 @@ ConversationView* MainWindow::ensure_conversation_view(std::uint32_t session_id)
     update_header();
   });
 
+  // A branch creates a new session and switches to it, so the reader sees the
+  // fork immediately.
+  view->set_on_branch([this](std::uint32_t new_session_id) {
+    refresh_sessions();
+    open_conversation(new_session_id);
+  });
+
   // The failure notice points at the status bar's tasks icon; clicking it opens
   // the same window the icon does.
   view->set_failure_notice_handler([this]() { open_tasks_window(); });

@@ -39,9 +39,22 @@ public:
   [[nodiscard]] std::unordered_map<std::uint32_t, std::string> session_last_times() const;
   [[nodiscard]] std::optional<std::string> last_message_time(std::uint32_t id) const;
   void set_reasoning_effort(std::uint32_t id, const std::string& level);
+
+  // Deletes the message and every later message of its session (the transcript
+  // is a prefix). Any summary version built on a removed message is revoked too,
+  // so the next-newest version becomes active again. Returns false when the id
+  // is unknown.
   bool remove_message(std::uint32_t id);
+
   void update_message(std::uint32_t id, const std::string& content);
   [[nodiscard]] database& database_for_update();
+
+  // Copies the session's settings and its messages up to and including
+  // `message_id` (every message when it is 0) into a new session, and returns
+  // the new session's id. Summary versions built on the copied prefix come
+  // along, remapped to the new message ids; the assistant-memory watermark is
+  // remapped the same way. Returns 0 when the source session is unknown.
+  std::uint32_t branch(std::uint32_t session_id, std::uint32_t message_id);
 
   // Inserts `session` and returns its new id. `session.id_` is ignored.
   std::uint32_t create(const Session& session);

@@ -8,6 +8,7 @@ compile_commands.json
 .idea/
 .zed/
 .cache/
+.old/
 docs/plans/
 docs/deprecated/
 docs/

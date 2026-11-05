@@ -31,6 +31,19 @@ struct Message {
                                   // interleaved by time for assistant memory
 };
 
+// One stored version of a session's summary. A summary is paired with the
+// message it was folded up to (its watermark): the row with the greatest
+// watermark is the active one, and removing that message revokes it so an older
+// row becomes active again. Kept in its own table so the versions survive rather
+// than being overwritten in the session row.
+struct Summary {
+  std::uint32_t id_ = 0;
+  std::uint32_t session_id_ = 0;
+  std::uint32_t watermark_ = 0;  // highest message id folded into content_
+  std::string content_;
+  std::string made_at_;          // ISO-8601 UTC
+};
+
 class Session {
 public:
   std::uint32_t id_ = 0;
@@ -120,6 +133,12 @@ public:
   std::string model_;
   std::optional<std::string> proxy_;
   std::string memory_;  // generated cross-session memory
+
+  // Where web_search sends its queries: the base URL of a SearXNG-compatible
+  // service, e.g. "http://127.0.0.1:8873" for the bundled browser bridge
+  // (scripts/search_bridge.py). Empty means the user has not configured search;
+  // web_search then reports that to the model instead of failing.
+  std::string search_endpoint_;
 
   // Request windows, in seconds. A streaming turn may wait this long for the
   // next response byte before the request is abandoned; summarisation gets its

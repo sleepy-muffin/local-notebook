@@ -75,6 +75,11 @@ void interface::delete_session(std::uint32_t session_id) {
   application_->delete_session(session_id);
 }
 
+std::uint32_t interface::branch_session(
+    std::uint32_t session_id, std::uint32_t message_id) {
+  return application_->branch_session(session_id, message_id);
+}
+
 void interface::set_session_reasoning_effort(std::uint32_t session_id, std::string level) {
   application_->set_session_reasoning_effort(session_id, std::move(level));
 }

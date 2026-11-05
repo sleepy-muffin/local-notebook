@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include <boost/json.hpp>
+#include <shark/str.hpp>
 
 namespace lnb::core {
 
@@ -20,8 +21,11 @@ namespace {
 // version 9 dropped `summary_reasoning_headroom_tokens` (the summary budget is
 // now the summariser's completion cap), version 10 added
 // `session.summary_reasoning_effort`, and version 11 renamed the session-level
-// `memory` / `memory_watermark` columns to `summary` / `summary_watermark`; an
-// older file gains each column in the constructor.
+// `memory` / `memory_watermark` columns to `summary` / `summary_watermark`. Version
+// 12 moved the summary into its own `summary` table, one row per (session,
+// watermark) version; the legacy `summary` / `summary_watermark` columns are kept
+// only so an older file can still be read, and are cleared once their contents
+// have been copied across. An older file gains each column in the constructor.
 
 /**
  * Notes
@@ -32,7 +36,7 @@ namespace {
  * summary_token_budget: how many tokens can the summary have
  */
 constexpr std::string_view SCHEMA = R"sql(
-PRAGMA user_version = 11;
+PRAGMA user_version = 12;
 
 CREATE TABLE IF NOT EXISTS session (
   id                                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,10 +71,34 @@ CREATE TABLE IF NOT EXISTS message (
 
 CREATE INDEX IF NOT EXISTS idx_message_session ON message(session_id, id);
 CREATE INDEX IF NOT EXISTS idx_message_made_at ON message(made_at);
+
+-- One row per stored summary version. A summary is paired with the message it
+-- was folded up to (`watermark`); the row with the greatest watermark is the
+-- active summary. Deleting the watermarked message (or anything after it)
+-- removes the versions built on it, so an older one becomes active again.
+CREATE TABLE IF NOT EXISTS summary (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  watermark  INTEGER NOT NULL,
+  content    TEXT    NOT NULL,
+  made_at    TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_summary_session ON summary(session_id, watermark);
 )sql";
 
+// The legacy `summary` / `summary_watermark` columns are no longer read. The
+// active summary is projected from the `summary` table instead: the row with the
+// greatest watermark, breaking ties by the newest row. This keeps
+// `Session::summary_` / `summary_watermark_` a plain read-time view for every
+// caller (the prompt builder, the context readout, the assistant-memory fold and
+// the session editor), while the versions live in their own table.
 constexpr std::string_view SESSION_COLUMNS =
-  "id, title, custom_instructions, summary, summary_watermark, "
+  "id, title, custom_instructions, "
+  "COALESCE((SELECT content FROM summary WHERE summary.session_id = session.id "
+  "ORDER BY watermark DESC, id DESC LIMIT 1), ''), "
+  "COALESCE((SELECT watermark FROM summary WHERE summary.session_id = session.id "
+  "ORDER BY watermark DESC, id DESC LIMIT 1), 0), "
   "assistant_memory_watermark, shared_directories, pinned, summary_keep_tokens, "
   "summary_trigger_tokens, summary_token_budget, "
   "input_token_produced_midway, response_token_budget, "
@@ -296,6 +324,19 @@ database::database(std::string_view path) : connection_(path) {
       "ALTER TABLE session RENAME COLUMN memory_watermark TO summary_watermark"
     );
   }
+
+  // Version 12 moved the summary into its own table. Copy any existing summary
+  // across once, then clear the legacy columns: a summary that is later revoked
+  // must not be resurrected by the next open (the copy above is guarded by
+  // NOT EXISTS, but a non-empty legacy column would be enough on its own).
+  connection_.exec(
+    "INSERT INTO summary (session_id, watermark, content, made_at) "
+    "SELECT id, summary_watermark, summary, "
+    "strftime('%Y-%m-%dT%H:%M:%SZ', 'now') FROM session "
+    "WHERE summary <> '' "
+    "AND NOT EXISTS (SELECT 1 FROM summary WHERE summary.session_id = session.id)"
+  );
+  connection_.exec("UPDATE session SET summary = '', summary_watermark = 0");
 }
 
 std::uint32_t database::insert_session(const Session& session) {
@@ -309,8 +350,8 @@ std::uint32_t database::insert_session(const Session& session) {
     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   );
   stmt.bind(
-    session.title_, session.custom_instructions_, session.summary_,
-    session.summary_watermark_, session.assistant_memory_watermark_,
+    session.title_, session.custom_instructions_, std::string{}, std::uint32_t{0},
+    session.assistant_memory_watermark_,
     encode_shared_directories(session.shared_directories_), session.pinned_ ? 1 : 0,
     static_cast<int>(session.summary_keep_tokens_),
     static_cast<int>(session.summary_trigger_tokens_),
@@ -341,8 +382,8 @@ void database::update_session(const Session& session) {
     "WHERE id = ?"
   );
   stmt.bind(
-    session.title_, session.custom_instructions_, session.summary_,
-    session.summary_watermark_, session.assistant_memory_watermark_,
+    session.title_, session.custom_instructions_, std::string{}, std::uint32_t{0},
+    session.assistant_memory_watermark_,
     encode_shared_directories(session.shared_directories_), session.pinned_ ? 1 : 0,
     static_cast<int>(session.summary_keep_tokens_),
     static_cast<int>(session.summary_trigger_tokens_),
@@ -409,11 +450,23 @@ std::vector<Session> database::sessions_by_recent(
 void database::set_session_summary(
   std::uint32_t session_id, const std::string& summary, std::uint32_t watermark
 ) {
-  auto stmt = connection_.prepare(
-    "UPDATE session SET summary = ?, summary_watermark = ? WHERE id = ?"
-  );
-  stmt.bind(summary, watermark, session_id);
-  stmt.execute();
+  // A newer summary supersedes every version built on the same or newer
+  // messages; older versions are kept so a revoked watermark can fall back to
+  // them. The statement is scoped so its connection lock is released before the
+  // insert below prepares another statement.
+  {
+    auto del = connection_.prepare(
+      "DELETE FROM summary WHERE session_id = ? AND watermark >= ?"
+    );
+    del.bind(session_id, watermark);
+    del.execute();
+  }
+
+  Summary row;
+  row.session_id_ = session_id;
+  row.watermark_ = watermark;
+  row.content_ = summary;
+  (void)insert_summary(row);
 }
 
 void database::set_assistant_memory_watermark(
@@ -460,6 +513,75 @@ bool database::remove_message(std::uint32_t message_id) {
   return stmt.changes() > 0;
 }
 
+std::size_t database::remove_messages_from(
+  std::uint32_t session_id, std::uint32_t message_id
+) {
+  auto stmt = connection_.prepare(
+    "DELETE FROM message WHERE session_id = ? AND id >= ?"
+  );
+  stmt.bind(session_id, message_id);
+  stmt.execute();
+  return static_cast<std::size_t>(stmt.changes());
+}
+
+std::optional<std::uint32_t> database::message_session(
+  std::uint32_t message_id
+) const {
+  auto stmt = connection_.prepare("SELECT session_id FROM message WHERE id = ?");
+  stmt.bind(message_id);
+
+  if (stmt.step()) {
+    return stmt.column_uint32(0);
+  }
+
+  return std::nullopt;
+}
+
+std::uint32_t database::insert_summary(const Summary& summary) {
+  auto stmt = connection_.prepare(
+    "INSERT INTO summary (session_id, watermark, content, made_at) "
+    "VALUES (?, ?, ?, ?)"
+  );
+  const std::string made_at = summary.made_at_.empty()
+      ? shark::str::now_iso8601_utc()
+      : summary.made_at_;
+  stmt.bind(summary.session_id_, summary.watermark_, summary.content_, made_at);
+  return stmt.execute_with_last_row_id();
+}
+
+std::vector<Summary> database::summaries(std::uint32_t session_id) const {
+  auto stmt = connection_.prepare(
+    "SELECT id, session_id, watermark, content, made_at FROM summary "
+    "WHERE session_id = ? ORDER BY watermark ASC, id ASC"
+  );
+  stmt.bind(session_id);
+
+  std::vector<Summary> rows;
+
+  while (stmt.step()) {
+    Summary row;
+    row.id_ = stmt.column_uint32(0);
+    row.session_id_ = stmt.column_uint32(1);
+    row.watermark_ = stmt.column_uint32(2);
+    row.content_ = stmt.column_text(3);
+    row.made_at_ = stmt.column_text(4);
+    rows.push_back(std::move(row));
+  }
+
+  return rows;
+}
+
+std::size_t database::remove_summaries_from(
+  std::uint32_t session_id, std::uint32_t watermark
+) {
+  auto stmt = connection_.prepare(
+    "DELETE FROM summary WHERE session_id = ? AND watermark >= ?"
+  );
+  stmt.bind(session_id, watermark);
+  stmt.execute();
+  return static_cast<std::size_t>(stmt.changes());
+}
+
 std::vector<Message> database::messages(std::uint32_t session_id) const {
   auto stmt = connection_.prepare(
     "SELECT " + std::string(MESSAGE_COLUMNS) +
@@ -480,7 +602,8 @@ std::vector<Message> database::messages_after_summary_watermark(
   auto stmt = connection_.prepare(
     "SELECT " + std::string(MESSAGE_COLUMNS) +
     " FROM message WHERE session_id = ? AND id > "
-    "(SELECT summary_watermark FROM session WHERE id = ?) ORDER BY id ASC"
+    "COALESCE((SELECT MAX(watermark) FROM summary WHERE session_id = ?), 0) "
+    "ORDER BY id ASC"
   );
   stmt.bind(session_id, session_id);
 

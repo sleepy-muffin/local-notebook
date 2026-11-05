@@ -50,6 +50,7 @@ int main() {
   assistant.turn_timeout_seconds_ = 240;
   assistant.summary_timeout_seconds_ = 600;
   assistant.summary_reasoning_effort_ = "high";
+  assistant.search_endpoint_ = "http://127.0.0.1:8873";
 
   store.save_assistant("test-uuid", assistant);
 
@@ -57,6 +58,10 @@ int main() {
   expect_equal(loaded.turn_timeout_seconds_, 240, "turn timeout round-trips");
   expect_equal(loaded.summary_timeout_seconds_, 600, "summary timeout round-trips");
   expect(loaded.summary_reasoning_effort_ == "high", "summary reasoning level round-trips");
+  expect(
+      loaded.search_endpoint_ == "http://127.0.0.1:8873",
+      "search endpoint round-trips"
+  );
 
   // A settings file from before these fields existed: both must read as the
   // shipped defaults (three minutes for a turn, seven for summarisation).
@@ -74,6 +79,7 @@ int main() {
   // A file without the key reads as the shipped default, not the empty "model
   // default" the other reasoning key uses.
   expect(legacy.summary_reasoning_effort_ == "none", "legacy summary reasoning default");
+  expect(legacy.search_endpoint_.empty(), "legacy search endpoint default is empty");
 
   std::filesystem::remove_all(root, ignored);
 

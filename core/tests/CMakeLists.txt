@@ -199,3 +199,23 @@ target_link_libraries(
 )
 
 add_test(NAME message-coverage COMMAND message-coverage-test)
+
+add_executable(
+  branch-summary-test
+  branch_summary_test.cpp
+)
+
+target_include_directories(
+  branch-summary-test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+target_link_libraries(
+  branch-summary-test
+  PRIVATE
+    local-notebook-core
+    shark::sqlite3
+)
+
+add_test(NAME branch-summary COMMAND branch-summary-test)

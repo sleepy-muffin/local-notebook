@@ -164,7 +164,7 @@ int main(int argc, char** argv) {
   api.get_store().save_assistant(
       "a1b2c3d4-0000-0000-0000-000000000001", make_assistant()
   );
-  api.open_assistant("a1b2c3d4-0000-0000-0000-000000000001");
+  auto _ = api.open_assistant("a1b2c3d4-0000-0000-0000-000000000001");
 
   // Background sessions, so the sidebar reads like a real notebook.
   const std::uint32_t rust = add_session(

@@ -248,13 +248,17 @@ std::string tool_status(const ToolCall& call) {
 }
 
 // The session's stored switches, plus whether it has anywhere to read or write.
-ToolPermissions tool_permissions_for(const Session& session) {
+// The search endpoint is assistant-wide, not per session.
+ToolPermissions tool_permissions_for(
+    const Assistant& assistant, const Session& session
+) {
   ToolPermissions permissions;
   permissions.enabled = session.tools_enabled_;
   permissions.filesystem = !session.shared_directories_.empty();
   permissions.read = session.read_tools_enabled_;
   permissions.write = session.write_tools_enabled_;
   permissions.online = session.online_tools_enabled_;
+  permissions.search.endpoint = assistant.search_endpoint_;
   return permissions;
 }
 
@@ -906,7 +910,7 @@ Request build_session_request(
   Request request;
   request.model = assistant.model_;
   request.instructions = system_prompt;
-  request.tool_permissions = tool_permissions_for(session);
+  request.tool_permissions = tool_permissions_for(assistant, session);
   request.include_tools = request.tool_permissions.any();
   request.max_output_tokens = static_cast<int>(session.response_token_budget_);
   // The level is resolved here so an unsupported one fails the turn with a
@@ -1166,7 +1170,10 @@ std::expected<ChatCompletionResult, FailedResult> generate_reply(
   // The smallest completion worth spending the last of a budget on.
   constexpr std::size_t kMinOutputTokens = 64;
 
-  const ToolPermissions permissions = tool_permissions_for(session);
+  // The request already carries the permissions derived from the assistant and
+  // the session, so reuse them instead of recomputing (which would need the
+  // assistant here).
+  const ToolPermissions permissions = request.tool_permissions;
 
   // Tool results are input the model reads back. The whole turn may add at most
   // this many such tokens, and 0 disables the bound.

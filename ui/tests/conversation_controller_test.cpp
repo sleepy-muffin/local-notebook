@@ -164,7 +164,7 @@ int main() {
   assistant.model_ = "test-model";
   assistant.protocol_ = lnb::core::ApiProtocol::ChatCompletions;
   api.get_store().save_assistant("controller-test", assistant);
-  api.open_assistant("controller-test");
+  auto _ = api.open_assistant("controller-test");
 
   lnb::core::Session session;
   session.title_ = "Controller";

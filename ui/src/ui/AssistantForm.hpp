@@ -53,6 +53,7 @@ private:
   QLineEdit* api_url_ = nullptr;
   QLineEdit* token_ = nullptr;
   QLineEdit* proxy_ = nullptr;
+  QLineEdit* search_endpoint_ = nullptr;
   QSpinBox* turn_timeout_ = nullptr;
   QSpinBox* summary_timeout_ = nullptr;
   PlainTextEdit* instructions_ = nullptr;

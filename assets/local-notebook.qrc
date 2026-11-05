@@ -12,6 +12,7 @@
     <file alias="new-session.png">icons/new-session.png</file>
     <file alias="copy.png">icons/copy.png</file>
     <file alias="edit.png">icons/edit.png</file>
+    <file alias="branch.png">icons/branch.png</file>
     <file alias="delete.png">icons/delete.png</file>
     <file alias="settings.png">icons/settings.png</file>
     <file alias="pin.png">icons/pin.png</file>

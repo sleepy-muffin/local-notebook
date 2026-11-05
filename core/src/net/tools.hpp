@@ -29,12 +29,27 @@ struct ToolCall {
 // offered. Reading is the filesystem read/search tools, writing is
 // create/overwrite/edit/delete in the shared directories, and online is
 // web_search and fetch_url. Writing defaults to off.
+// Where web_search sends its queries. Search engines answer a plain HTTP client
+// with a bot challenge, so the query goes to a service that speaks SearXNG's
+// JSON API: either a self-hosted SearXNG or the bundled browser bridge
+// (scripts/search_bridge.py), which drives a real browser and answers in the
+// same shape. That is why one parser covers both.
+struct SearchSettings {
+  // The base URL of the SearXNG-compatible service, e.g.
+  // "http://127.0.0.1:8873". Empty means the user has not configured search, so
+  // web_search reports that instead of guessing an endpoint.
+  std::string endpoint;
+};
+
 struct ToolPermissions {
   bool enabled = true;
   bool filesystem = false;
   bool read = true;
   bool write = false;
   bool online = true;
+
+  // How the online tools reach the web.
+  SearchSettings search;
 
   [[nodiscard]] bool any() const {
     return enabled && (online || (filesystem && (read || write)));
@@ -65,13 +80,18 @@ std::string fetch_url(
     const std::string& url, const std::optional<std::string>& proxy
 );
 
-// Searches the web and returns the top results as "Title / URL / snippet"
-// blocks. Best-effort: it scrapes DuckDuckGo's HTML endpoint, falls back to
-// Bing's RSS feed, then to Brave when the earlier sources are blocked. An empty
-// or changed result page yields a clear message rather than an exception. All
-// requests go through `proxy` when one is configured.
+// Searches the web through the SearXNG-compatible service at
+// `settings.endpoint` and returns the top results as "Title / URL / snippet"
+// blocks. An empty endpoint yields a message explaining that search is not
+// configured, rather than an exception, so the model can tell the user. A result
+// served from the bridge's cache is prefixed with a note saying it may be
+// outdated, which is what lets repeated questions converge instead of flapping
+// with the network. An empty result page yields a clear message rather than an
+// exception. Requests go through `proxy` when one is configured, except for a
+// loopback endpoint (the local bridge), which must never be sent to the proxy.
 std::string web_search(
-    const std::string& query, const std::optional<std::string>& proxy
+    const std::string& query, const std::optional<std::string>& proxy,
+    const SearchSettings& settings = {}
 );
 
 // The JSON tool schemas offered to the model. Read tools are included only when

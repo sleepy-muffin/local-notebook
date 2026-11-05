@@ -70,6 +70,10 @@ public:
   std::uint32_t create_session(const Session &session);
   void save_session(const Session &session);
   void delete_session(std::uint32_t session_id);
+
+  // Copies the session up to and including `message_id` into a new session with
+  // the same settings, and returns the new session's id (0 on failure).
+  std::uint32_t branch_session(std::uint32_t session_id, std::uint32_t message_id);
   void set_session_reasoning_effort(std::uint32_t session_id, std::string level);
   void append_message(std::uint32_t session_id, Role role, std::string content);
   void delete_message(std::uint32_t message_id);

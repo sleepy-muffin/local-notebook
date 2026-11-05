@@ -1,10 +1,11 @@
-// Regression tests for the web-search HTML parsers.
+// Regression tests for the web-search result parser.
 //
-// DuckDuckGo answers automated traffic with a bot-challenge page (HTTP 202), so
-// `web_search` needs to tell that page apart from a result page and fall back to
-// Brave. These tests pin the parsers against captured markup shapes, without
-// touching the network.
+// Search engines answer a plain HTTP client with a bot challenge, so `web_search`
+// asks a SearXNG-shaped JSON API instead of scraping HTML. Both a self-hosted
+// SearXNG and the local browser bridge return that shape, so one parser covers
+// them. These tests pin the parser, without touching the network.
 #include "net/search_results.hpp"
+#include "net/tools.hpp"
 
 #include <iostream>
 #include <string>
@@ -36,197 +37,90 @@ void expect_equal(
             << expected << "\")\n";
 }
 
-void test_ddg_results() {
-  const std::string html =
-      "<html><body>"
-      "<div class=\"result results_links\">"
-      "<a rel=\"nofollow\" class=\"result__a\" "
-      "href=\"//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.nasa.gov%2Fnews%2F\">"
-      "All NASA News - NASA</a>"
-      "<a class=\"result__snippet\" href=\"//duckduckgo.com/l/?uddg=x\">"
-      "NASA will preview upcoming missions.</a>"
-      "</div>"
-      "<div class=\"result results_links\">"
-      "<a rel=\"nofollow\" class=\"result__a\" "
-      "href=\"https://www.space.com/news\">Space News</a>"
-      "<a class=\"result__snippet\" href=\"https://www.space.com/news\">"
-      "The latest space headlines.</a>"
-      "</div>"
-      "</body></html>";
+void test_searxng_results() {
+  const std::string json = R"json({
+    "query": "nasa news",
+    "number_of_results": 2,
+    "results": [
+      {
+        "title": "All NASA News - NASA",
+        "url": "https://www.nasa.gov/news/",
+        "content": "NASA will preview upcoming missions.",
+        "engine": "brave"
+      },
+      {
+        "title": "Space News",
+        "url": "https://www.space.com/news",
+        "content": "The latest space headlines.",
+        "engines": ["ddg", "bing"]
+      }
+    ],
+    "answers": [],
+    "unresponsive_engines": []
+  })json";
 
-  const auto results = lnb::core::parse_ddg_results(html);
+  const auto results = lnb::core::parse_searxng_results(json);
 
-  expect(results.size() == 2, "DDG parses both results");
-
-  if (results.size() != 2) {
-    return;
-  }
-
-  expect_equal(results[0].title, "All NASA News - NASA", "DDG title 0");
-  expect_equal(
-      results[0].url, "https://www.nasa.gov/news/", "DDG redirect decoded"
-  );
-  expect_equal(
-      results[0].snippet, "NASA will preview upcoming missions.", "DDG snippet 0"
-  );
-  expect_equal(results[1].title, "Space News", "DDG title 1");
-  expect_equal(results[1].url, "https://www.space.com/news", "DDG direct url");
-  expect_equal(
-      results[1].snippet, "The latest space headlines.", "DDG snippet 1"
-  );
-}
-
-void test_ddg_challenge() {
-  expect(
-      lnb::core::is_ddg_challenge(
-          "<html><body><div id=\"anomaly-modal\">Are you a robot?</div>"
-          "</body></html>"
-      ),
-      "DDG anomaly modal is a challenge"
-  );
-  expect(
-      lnb::core::is_ddg_challenge(
-          "<p>Select all squares containing a duck</p>"
-      ),
-      "DDG image challenge is a challenge"
-  );
-  expect(
-      !lnb::core::is_ddg_challenge(
-          "<p>We detected an anomaly in the data set.</p>"
-      ),
-      "ordinary text mentioning anomaly is not a challenge"
-  );
-  expect(
-      !lnb::core::is_ddg_challenge(
-          "<a class=\"result__a\" href=\"https://example.com\">Example</a>"
-      ),
-      "result page is not a challenge"
-  );
-}
-
-void test_brave_results() {
-  const std::string html =
-      "<html><body><main>"
-      "<a href=\"https://www.nasa.gov/news/recently-published/\">"
-      "<div class=\"title search-snippet-title line-clamp-1 svelte-abc\" "
-      "title=\"All NASA News - NASA\">All NASA News - NASA</div>"
-      "</a>"
-      "<div class=\"generic-snippet svelte-def\">"
-      "<div class=\"content desktop-default-regular t-primary\">"
-      "June 17, 2025 - NASA will preview upcoming missions."
-      "</div></div>"
-      "<a href=\"https://www.space.com/astronomy\">"
-      "<div class=\"title search-snippet-title svelte-abc\" "
-      "title=\"Space &amp; Astronomy\">Space &amp; Astronomy</div>"
-      "</a>"
-      "<div class=\"generic-snippet svelte-def\">"
-      "<div class=\"content desktop-default-regular t-primary\">"
-      "Astronomy news today."
-      "</div></div>"
-      "<a href=\"https://search.brave.com/search?q=more\">"
-      "<div class=\"title search-snippet-title\">More results</div>"
-      "</a>"
-      "</main></body></html>";
-
-  const auto results = lnb::core::parse_brave_results(html);
-
-  expect(results.size() == 2, "Brave skips its own internal result");
+  expect(results.size() == 2, "SearXNG parses both results");
 
   if (results.size() != 2) {
     return;
   }
 
-  expect_equal(results[0].title, "All NASA News - NASA", "Brave title 0");
+  expect_equal(results[0].title, "All NASA News - NASA", "SearXNG title 0");
+  expect_equal(results[0].url, "https://www.nasa.gov/news/", "SearXNG url 0");
   expect_equal(
-      results[0].url, "https://www.nasa.gov/news/recently-published/",
-      "Brave url 0"
+      results[0].snippet, "NASA will preview upcoming missions.",
+      "SearXNG content becomes the snippet"
   );
-  expect_equal(
-      results[0].snippet,
-      "June 17, 2025 - NASA will preview upcoming missions.", "Brave snippet 0"
-  );
-  expect_equal(
-      results[1].title, "Space & Astronomy", "Brave title decodes entities"
-  );
-  expect_equal(
-      results[1].url, "https://www.space.com/astronomy", "Brave url 1"
-  );
-  expect_equal(
-      results[1].snippet, "Astronomy news today.", "Brave snippet 1"
-  );
+  expect_equal(results[1].title, "Space News", "SearXNG title 1");
+  expect_equal(results[1].url, "https://www.space.com/news", "SearXNG url 1");
 }
 
-void test_bing_rss() {
-  const std::string xml =
-      "<rss version=\"2.0\"><channel>"
-      "<title>Bing: latest NASA news</title>"
-      "<link>http://www.bing.com:80/search?q=latest+NASA+news</link>"
-      "<item>"
-      "<title>All NASA News - NASA</title>"
-      "<link>https://www.nasa.gov/news/recently-published/</link>"
-      "<description>NASA will preview upcoming missions.</description>"
-      "</item>"
-      "<item>"
-      "<title><![CDATA[Space &amp; Astronomy]]></title>"
-      "<link><![CDATA[https://www.space.com/astronomy?a=1&amp;b=2]]></link>"
-      "<description><![CDATA[<b>Astronomy</b> news today.]]></description>"
-      "</item>"
-      "<item>"
-      "<title>Bing navigation</title>"
-      "<link>https://www.bing.com/search?q=more</link>"
-      "<description>Internal link</description>"
-      "</item>"
-      "</channel></rss>";
+void test_searxng_skips_incomplete_results() {
+  const std::string json = R"json({
+    "results": [
+      {"title": "", "url": "https://example.com", "content": "no title"},
+      {"title": "No URL", "url": "", "content": "no url"},
+      {"title": "Good", "url": "https://example.com/good", "content": ""}
+    ]
+  })json";
 
-  const auto results = lnb::core::parse_bing_rss(xml);
+  const auto results = lnb::core::parse_searxng_results(json);
 
-  expect(results.size() == 2, "Bing skips its own navigation item");
+  expect(results.size() == 1, "SearXNG skips results without a title or URL");
 
-  if (results.size() != 2) {
-    return;
+  if (results.size() == 1) {
+    expect_equal(results[0].url, "https://example.com/good", "kept the good one");
+    expect(results[0].snippet.empty(), "an empty content stays an empty snippet");
   }
-
-  expect_equal(results[0].title, "All NASA News - NASA", "Bing title 0");
-  expect_equal(
-      results[0].url, "https://www.nasa.gov/news/recently-published/",
-      "Bing url 0"
-  );
-  expect_equal(
-      results[0].snippet, "NASA will preview upcoming missions.", "Bing snippet 0"
-  );
-  expect_equal(
-      results[1].title, "Space & Astronomy", "Bing CDATA title is decoded"
-  );
-  expect_equal(
-      results[1].url, "https://www.space.com/astronomy?a=1&b=2",
-      "Bing CDATA url is decoded"
-  );
-  expect_equal(
-      results[1].snippet, "Astronomy news today.", "Bing CDATA snippet is text"
-  );
 }
 
-void test_brave_without_results() {
-  const std::string html = "<html><body><p>No results found.</p></body></html>";
-
+void test_malformed_documents() {
   expect(
-      lnb::core::parse_brave_results(html).empty(),
-      "Brave page without result markup yields nothing"
+      lnb::core::parse_searxng_results("not json").empty(),
+      "malformed JSON yields nothing"
   );
   expect(
-      lnb::core::parse_ddg_results(html).empty(),
-      "DDG page without result markup yields nothing"
+      lnb::core::parse_searxng_results(R"json({"results": "nope"})json").empty(),
+      "a non-array results field yields nothing"
+  );
+  expect(
+      lnb::core::parse_searxng_results(R"json({"answers": []})json").empty(),
+      "a document without results yields nothing"
+  );
+  expect(
+      lnb::core::parse_searxng_results(R"json({"results": []})json").empty(),
+      "an empty results array yields nothing"
   );
 }
 
 } // namespace
 
 int main() {
-  test_ddg_results();
-  test_ddg_challenge();
-  test_brave_results();
-  test_bing_rss();
-  test_brave_without_results();
+  test_searxng_results();
+  test_searxng_skips_incomplete_results();
+  test_malformed_documents();
 
   if (failures != 0) {
     std::cerr << failures << " search parse check(s) failed\n";

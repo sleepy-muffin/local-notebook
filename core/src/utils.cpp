@@ -30,6 +30,7 @@ boost::json::object to_json(const lnb::core::Assistant& assistant) {
   object["proxy"] = assistant.proxy_.has_value()
       ? boost::json::value(*assistant.proxy_)
       : boost::json::value(nullptr);
+  object["search_endpoint"] = assistant.search_endpoint_;
   object["memory"] = assistant.memory_;
 
   object["turn_timeout_seconds"] =
@@ -93,6 +94,7 @@ lnb::core::Assistant from_json(const boost::json::object& object) {
   }
 
   assistant.memory_ = string_or(object, "memory");
+  assistant.search_endpoint_ = string_or(object, "search_endpoint");
 
   assistant.turn_timeout_seconds_ = size_or(
       object, "turn_timeout_seconds", assistant.turn_timeout_seconds_

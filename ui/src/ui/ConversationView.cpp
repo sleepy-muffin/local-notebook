@@ -13,6 +13,7 @@
 #include <QInputDialog>
 #include <QKeyEvent>
 #include <QMenu>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPlainTextEdit>
@@ -307,8 +308,30 @@ ConversationView::ConversationView(
     }
   });
 
-  transcript_->set_on_delete(
-      [this](std::uint32_t message_id) { controller_.delete_message(message_id); });
+  transcript_->set_on_delete([this](std::uint32_t message_id) {
+    const QMessageBox::StandardButton answer = QMessageBox::warning(
+        this, trs("Delete Message"),
+        trs(
+            "Are you sure you want to delete this message? It and every message "
+            "after it will be removed. This cannot be undone."
+        ),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No
+    );
+
+    if (answer != QMessageBox::Yes) {
+      return;
+    }
+
+    controller_.delete_message(message_id);
+  });
+
+  transcript_->set_on_branch([this](std::uint32_t message_id) {
+    const std::uint32_t new_id = api_.branch_session(session_id_, message_id);
+
+    if (new_id != 0 && on_branch_) {
+      on_branch_(new_id);
+    }
+  });
 
   layout->addWidget(transcript_, 1);
 

@@ -157,6 +157,18 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
     proxy_ = new QLineEdit(this);
     proxy_->setPlaceholderText(trs("Optional"));
 
+    // Web search is assistant-wide: one endpoint, shared by every session. It
+    // points at a SearXNG-compatible service, most often the bundled browser
+    // bridge (scripts/search_bridge.py). Empty disables web search.
+    search_endpoint_ = new QLineEdit(this);
+    search_endpoint_->setObjectName(QStringLiteral("AssistantSearchEndpoint"));
+    search_endpoint_->setPlaceholderText(QStringLiteral("http://127.0.0.1:8873"));
+    search_endpoint_->setToolTip(
+        trs("Base URL of a SearXNG-compatible search service, e.g. the local "
+            "browser bridge at http://127.0.0.1:8873. Leave empty to disable "
+            "web search.")
+    );
+
     // Request windows live with the connection because they describe how long a
     // silent socket is tolerated, not how much context is sent. A turn and a
     // memory update legitimately need different windows.
@@ -182,6 +194,7 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
     form->addRow(field_label(this, trs("API URL")), api_url_);
     form->addRow(field_label(this, trs("Token")), token_);
     form->addRow(field_label(this, trs("Proxy")), proxy_);
+    form->addRow(field_label(this, trs("Search endpoint")), search_endpoint_);
     form->addRow(field_label(this, trs("Turn timeout")), turn_timeout_);
     form->addRow(
         field_label(this, trs("Memory update timeout")), summary_timeout_
@@ -314,6 +327,7 @@ void AssistantForm::set_assistant(const lnb::core::Assistant& assistant) {
   proxy_->setText(
       assistant.proxy_.has_value() ? to_qstring(*assistant.proxy_) : QString()
   );
+  search_endpoint_->setText(to_qstring(assistant.search_endpoint_));
   turn_timeout_->setValue(static_cast<int>(assistant.turn_timeout_seconds_));
   summary_timeout_->setValue(
       static_cast<int>(assistant.summary_timeout_seconds_)
@@ -356,6 +370,8 @@ void AssistantForm::write_into(lnb::core::Assistant& assistant) const {
   assistant.proxy_ = proxy.isEmpty()
       ? std::nullopt
       : std::optional<std::string>(proxy.toStdString());
+
+  assistant.search_endpoint_ = search_endpoint_->text().trimmed().toStdString();
 
   assistant.turn_timeout_seconds_ =
       static_cast<std::size_t>(turn_timeout_->value());

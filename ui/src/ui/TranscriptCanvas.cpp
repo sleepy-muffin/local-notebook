@@ -543,6 +543,10 @@ public:
     on_delete_ = std::move(handler);
   }
 
+  void set_on_branch(std::function<void(std::uint32_t)> handler) {
+    on_branch_ = std::move(handler);
+  }
+
 private:
   QToolButton*
   make_button(const QString& icon, QStyle::StandardPixmap fallback, const QString& tip);
@@ -556,6 +560,7 @@ private:
   QBoxLayout* outer_ = nullptr;
   QToolButton* copy_ = nullptr;
   QToolButton* edit_ = nullptr;
+  QToolButton* branch_ = nullptr;
   QToolButton* remove_ = nullptr;
 
   std::uint32_t message_id_ = 0;
@@ -567,6 +572,7 @@ private:
   std::function<void(std::uint32_t)> on_copy_;
   std::function<void(std::uint32_t)> on_edit_;
   std::function<void(std::uint32_t)> on_delete_;
+  std::function<void(std::uint32_t)> on_branch_;
 };
 
 MessageActionsBar::MessageActionsBar(QWidget* parent) : QWidget(parent) {
@@ -591,9 +597,11 @@ MessageActionsBar::MessageActionsBar(QWidget* parent) : QWidget(parent) {
   tokens_ = new QLabel(row_);
   status_ = new QLabel(row_);
 
-  copy_ = make_button(QStringLiteral("copy"), QStyle::SP_DialogSaveButton, tr("Copy message"));
-  edit_ = make_button(QStringLiteral("edit"), QStyle::SP_FileIcon, tr("Edit message"));
-  remove_ = make_button(QStringLiteral("delete"), QStyle::SP_TrashIcon, tr("Delete message"));
+  copy_ = make_button(QStringLiteral("copy"), QStyle::SP_DialogSaveButton, trs("Copy message"));
+  edit_ = make_button(QStringLiteral("edit"), QStyle::SP_FileIcon, trs("Edit message"));
+  branch_ = make_button(
+      QStringLiteral("branch"), QStyle::SP_ArrowForward, trs("Branch conversation"));
+  remove_ = make_button(QStringLiteral("delete"), QStyle::SP_TrashIcon, trs("Delete message"));
 
   row->addWidget(id_);
   row->addWidget(time_);
@@ -601,6 +609,7 @@ MessageActionsBar::MessageActionsBar(QWidget* parent) : QWidget(parent) {
   row->addWidget(status_);
   row->addWidget(copy_);
   row->addWidget(edit_);
+  row->addWidget(branch_);
   row->addWidget(remove_);
 
   // A stretch on either side lets the same widget mirror the old behaviour:
@@ -618,6 +627,12 @@ MessageActionsBar::MessageActionsBar(QWidget* parent) : QWidget(parent) {
   connect(edit_, &QToolButton::clicked, this, [this]() {
     if (on_edit_) {
       on_edit_(message_id_);
+    }
+  });
+
+  connect(branch_, &QToolButton::clicked, this, [this]() {
+    if (on_branch_) {
+      on_branch_(message_id_);
     }
   });
 
@@ -686,6 +701,7 @@ void MessageActionsBar::apply_style() {
 
   apply_icon(copy_, QStringLiteral("copy"), QStyle::SP_DialogSaveButton);
   apply_icon(edit_, QStringLiteral("edit"), QStyle::SP_FileIcon);
+  apply_icon(branch_, QStringLiteral("branch"), QStyle::SP_ArrowForward);
   apply_icon(remove_, QStringLiteral("delete"), QStyle::SP_TrashIcon);
 }
 
@@ -715,6 +731,8 @@ void MessageActionsBar::set_message(const render::MessageMeta& meta) {
 
   copy_->setVisible(meta.role == render::Role::Assistant);
   edit_->setVisible(meta.editable);
+  // A branch needs a stored message to copy; a streaming reply has no id yet.
+  branch_->setVisible(meta.id != 0 && !meta.streaming);
   remove_->setVisible(true);
 
   const bool right_aligned = meta.role == render::Role::User;
@@ -1201,6 +1219,12 @@ TranscriptCanvas::TranscriptCanvas(QWidget* parent)
     }
   });
 
+  d_->actions->set_on_branch([this](std::uint32_t id) {
+    if (on_branch_) {
+      on_branch_(id);
+    }
+  });
+
   d_->drag_timer = new QTimer(this);
   d_->drag_timer->setInterval(30);
 
@@ -1366,6 +1390,10 @@ void TranscriptCanvas::set_on_edit(std::function<void(std::uint32_t)> handler) {
 
 void TranscriptCanvas::set_on_delete(std::function<void(std::uint32_t)> handler) {
   on_delete_ = std::move(handler);
+}
+
+void TranscriptCanvas::set_on_branch(std::function<void(std::uint32_t)> handler) {
+  on_branch_ = std::move(handler);
 }
 
 void TranscriptCanvas::paintEvent(QPaintEvent* event) {
