@@ -532,6 +532,12 @@ void AssistantPicker::create_new() {
   api_.get_store().save_assistant(uuid, assistant);
   shark::log::info("created assistant {}", uuid);
 
+  // The list is rebuilt from disk, so the new assistant only appears here
+  // after a refresh. Select it so the row actions act on it right away.
+  refresh();
+  select_uuid(to_qstring(uuid));
+  update_actions();
+
   /*
    * Do not open the just created one automatically.
    */
