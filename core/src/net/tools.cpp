@@ -359,6 +359,47 @@ std::string decode_entities(const std::string& input) {
   return decoded;
 }
 
+// Trims every line and collapses runs of blank lines into a single one. Pages
+// are full of markup-only lines that leave nothing but whitespace behind once
+// the tags are stripped, so without this the fetched text arrives as a sparse
+// column of empty rows.
+std::string tidy_lines(const std::string& text) {
+  std::string out;
+  out.reserve(text.size());
+
+  // Set when a blank line was seen, so it is written back only if another line
+  // of text follows. This also drops blank lines at the end.
+  bool blank_pending = false;
+
+  for (std::size_t begin = 0; begin < text.size();) {
+    std::size_t end = text.find('\n', begin);
+
+    if (end == std::string::npos) {
+      end = text.size();
+    }
+
+    const std::string line = trim(std::string_view(text).substr(begin, end - begin));
+
+    if (line.empty()) {
+      blank_pending = !out.empty();
+    } else {
+      if (blank_pending) {
+        out.push_back('\n');
+        blank_pending = false;
+      }
+
+      out += line;
+      out.push_back('\n');
+    }
+
+    begin = end + 1;
+  }
+
+  // The loop leaves a trailing newline; `trim` removes it along with any other
+  // leading or trailing whitespace.
+  return trim(out);
+}
+
 // Reduces an HTML fragment to readable text: drops script/style bodies, strips
 // the remaining tags and decodes entities.
 std::string html_to_text(const std::string& html) {
@@ -385,7 +426,7 @@ std::string html_to_text(const std::string& html) {
   text = boost::regex_replace(text, tag, " ");
   text = boost::regex_replace(text, space_run, " ");
 
-  return trim(decode_entities(text));
+  return tidy_lines(decode_entities(text));
 }
 
 } // namespace

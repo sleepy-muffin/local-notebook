@@ -332,6 +332,44 @@ void test_incremental_tail() {
       "the last message stays inside the content");
 }
 
+void test_table_cell_line_break() {
+  FakeBackend backend;
+  render::Layout layout;
+  layout.set_backend(&backend);
+  layout.set_theme(test_theme());
+  layout.set_options(render::LayoutOptions{300.0f, 10.0f, 10.0f, 0.0f, 0.0f, 0.0f});
+
+  render::MessageMeta meta;
+  meta.role = render::Role::Assistant;
+  meta.id = 10;
+
+  render::Block header;
+  header.kind = render::BlockKind::Paragraph;
+  header.table_columns = 2;
+  header.text = u"A  |  B";
+  header.table_cells = {{0, 1}, {6, 1}};
+
+  // "x<U+2028>y" is one cell with an explicit break, as produced from a <br>
+  // inside a Markdown table cell. The row must grow to two lines and the second
+  // line must stay in the first column.
+  render::Block row;
+  row.kind = render::BlockKind::Paragraph;
+  row.table_columns = 2;
+  row.text = u"x\u2028y  |  z";
+  row.table_cells = {{0, 3}, {8, 1}};
+  row.last_in_message = true;
+
+  layout.set_document(render::Document{{meta}, {header, row}});
+
+  const auto& lines = layout.lines();
+  check(lines.size() == 5, "a broken table cell produces a second line");
+  if (lines.size() == 5) {
+    check(lines[2].x == lines[3].x, "a broken cell keeps its column");
+    check(lines[3].y > lines[2].y, "the second line of a broken cell drops below the first");
+  }
+  check(layout.block_geometry()[1].rect.height >= 40.0f, "a broken cell makes its row two lines tall");
+}
+
 } // namespace
 
 int main() {
@@ -339,6 +377,7 @@ int main() {
   test_message_index_by_id();
   test_incremental_tail();
   test_table_column_alignment();
+  test_table_cell_line_break();
 
   if (failures != 0) {
     std::fprintf(stderr, "%d check(s) failed\n", failures);

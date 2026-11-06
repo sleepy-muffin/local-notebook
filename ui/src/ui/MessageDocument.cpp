@@ -1,7 +1,9 @@
 #include "ui/MessageDocument.hpp"
 
+#include <QChar>
 #include <QFont>
 #include <QString>
+#include <QStringView>
 #include <QTextBlock>
 #include <QTextBlockFormat>
 #include <QTextCharFormat>
@@ -169,6 +171,143 @@ std::vector<render::Span> spans_from_block(const QTextBlock& block) {
   return normalize_spans(spans, static_cast<std::uint32_t>(text.size()));
 }
 
+// Qt's Markdown importer hands raw HTML to an HTML block parser that, for a tag
+// it cannot close, silently drops the rest of the document. Assistant replies
+// routinely carry <br> in table cells, so one unclosed tag used to truncate the
+// whole reply. HTML is disabled for the parse (MarkdownNoHTML) so no raw tag can
+// ever swallow the text; the one tag with a useful meaning is turned into the
+// line separator the layout engine already understands. Fenced and inline code
+// are copied untouched, because a literal <br> in a listing must stay literal.
+QString convert_hard_breaks_in_line(const QString& line) {
+  QString out;
+  out.reserve(line.size());
+
+  qsizetype i = 0;
+  while (i < line.size()) {
+    const QChar ch = line[i];
+
+    if (ch == u'`') {
+      qsizetype run = 1;
+      while (i + run < line.size() && line[i + run] == u'`') {
+        ++run;
+      }
+
+      // A code span ends at a backtick run of the same length; without one the
+      // backticks are ordinary text.
+      qsizetype close = i + run;
+      qsizetype end = -1;
+      while (close < line.size()) {
+        if (line[close] != u'`') {
+          ++close;
+          continue;
+        }
+
+        qsizetype closing_run = 1;
+        while (close + closing_run < line.size() && line[close + closing_run] == u'`') {
+          ++closing_run;
+        }
+
+        if (closing_run == run) {
+          end = close + closing_run;
+          break;
+        }
+
+        close += closing_run;
+      }
+
+      const qsizetype stop = end >= 0 ? end : i + run;
+      out += line.mid(i, stop - i);
+      i = stop;
+      continue;
+    }
+
+    if (ch == u'<') {
+      const QStringView rest = QStringView(line).mid(i);
+      if (rest.size() >= 3 && rest[1].toLower() == u'b' && rest[2].toLower() == u'r') {
+        qsizetype j = 3;
+        while (j < rest.size() && (rest[j] == u' ' || rest[j] == u'\t')) {
+          ++j;
+        }
+        if (j < rest.size() && rest[j] == u'/') {
+          ++j;
+        }
+        if (j < rest.size() && rest[j] == u'>') {
+          out += QChar(0x2028);
+          i += j + 1;
+          continue;
+        }
+      }
+    }
+
+    out += ch;
+    ++i;
+  }
+
+  return out;
+}
+
+QString normalize_hard_breaks(const QString& source) {
+  QString out;
+  out.reserve(source.size());
+
+  bool in_fence = false;
+  QChar fence_char;
+  qsizetype fence_length = 0;
+
+  qsizetype start = 0;
+  while (start <= source.size()) {
+    qsizetype end = source.indexOf(u'\n', start);
+    const bool has_newline = end >= 0;
+    if (!has_newline) {
+      end = source.size();
+    }
+
+    const QString line = source.mid(start, end - start);
+
+    // A fence opener is up to three spaces of indentation followed by three or
+    // more backticks or tildes; the closer must use the same character and be at
+    // least as long.
+    qsizetype probe = 0;
+    int indent = 0;
+    while (probe < line.size() && indent < 3 && line[probe] == u' ') {
+      ++probe;
+      ++indent;
+    }
+
+    QChar marker;
+    qsizetype run = 0;
+    if (probe < line.size() && (line[probe] == u'`' || line[probe] == u'~')) {
+      marker = line[probe];
+      while (probe + run < line.size() && line[probe + run] == marker) {
+        ++run;
+      }
+    }
+
+    if (!in_fence && run >= 3) {
+      in_fence = true;
+      fence_char = marker;
+      fence_length = run;
+      out += line;
+    } else if (in_fence && run >= 3 && marker == fence_char && run >= fence_length) {
+      in_fence = false;
+      out += line;
+    } else if (in_fence) {
+      out += line;
+    } else {
+      out += convert_hard_breaks_in_line(line);
+    }
+
+    if (!has_newline) {
+      break;
+    }
+
+    out += u'\n';
+    start = end + 1;
+  }
+
+  return out;
+}
+
 render::Block table_row_from_qtext(const QTextTable& table, int row) {
   render::Block out;
   out.kind = render::BlockKind::Paragraph;
@@ -277,7 +416,12 @@ std::vector<render::Block> make_markdown_blocks(std::string_view utf8) {
   const QString source = QString::fromUtf8(utf8.data(), static_cast<qsizetype>(utf8.size()));
 
   QTextDocument document;
-  document.setMarkdown(source);
+  // Raw HTML is parsed literally (MarkdownNoHTML): the HTML block importer
+  // truncates the document at any tag it cannot close, and replies contain such
+  // tags. See normalize_hard_breaks for the <br> rewrite.
+  QTextDocument::MarkdownFeatures features = QTextDocument::MarkdownDialectGitHub;
+  features |= QTextDocument::MarkdownNoHTML;
+  document.setMarkdown(normalize_hard_breaks(source), features);
 
   std::vector<render::Block> blocks;
   QTextBlock block = document.begin();
