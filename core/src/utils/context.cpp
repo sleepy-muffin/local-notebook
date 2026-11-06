@@ -1,5 +1,7 @@
 #include "local_notebook/core/context.hpp"
 
+#include "utils/utf8.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -136,15 +138,13 @@ std::string  lnb::core::clamp_tokens(const std::string& text, std::size_t max_to
 
   // Roughly four ASCII characters per token; the loop below then shrinks the
   // result until the estimate (which is conservative for multibyte text) fits.
-  std::string result = text.substr(0, max_tokens * 4);
+  // Every cut goes through truncate_utf8() so it lands on a code-point boundary:
+  // a byte-wise cut can leave a half-written sequence behind (or, worse, a lone
+  // lead byte), which makes the request body invalid UTF-8.
+  std::string result = truncate_utf8(text, max_tokens * 4);
 
   while (!result.empty() && estimate_tokens(result) > max_tokens) {
-    result.resize(result.size() * 9 / 10);
-  }
-
-  // Do not leave a half-written UTF-8 sequence at the cut.
-  while (!result.empty() && (static_cast<unsigned char>(result.back()) & 0xC0) == 0x80) {
-    result.pop_back();
+    result = truncate_utf8(result, result.size() * 9 / 10);
   }
 
   result += "\n\n[tool output truncated to fit the context budget]";

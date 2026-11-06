@@ -4,6 +4,7 @@
 #include "shark/net/http.hpp"
 #include "shark/file/search.hpp"
 #include "net/search_results.hpp"
+#include "utils/utf8.hpp"
 
 #include <boost/json/parse.hpp>
 #include <boost/json/value.hpp>
@@ -431,14 +432,20 @@ std::string fetch_url(
     throw std::runtime_error("A URL is required");
   }
 
-  const std::string text = html_to_text(http_get(trimmed_url, proxy, kFetchBodyLimit));
+  // A page is bytes, not text: one served as GBK (or any other encoding) would
+  // otherwise carry sequences that are not valid UTF-8 into the request body,
+  // which a strict JSON server rejects outright. The same applies to the cut
+  // below, which must land on a code-point boundary rather than in the middle
+  // of a multi-byte character.
+  const std::string text =
+      sanitize_utf8(html_to_text(http_get(trimmed_url, proxy, kFetchBodyLimit)));
 
   if (text.empty()) {
     return "The page returned no readable text.";
   }
 
   if (text.size() > static_cast<std::size_t>(kFetchTextLimit)) {
-    return text.substr(0, kFetchTextLimit) +
+    return truncate_utf8(text, kFetchTextLimit) +
         "\n\n[Page truncated; only the first part is shown.]";
   }
 

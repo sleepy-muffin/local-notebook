@@ -5,6 +5,7 @@
 #include "local_notebook/core/context.hpp"
 #include "shark/net/http.hpp"
 #include "store/database.hpp"
+#include "utils/utf8.hpp"
 
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
@@ -963,7 +964,13 @@ std::expected<ChatCompletionResult, FailedResult> send_message_once(
   // Record the exact request body: these are byte-for-byte the bytes posted, so
   // a surprising reply (or a failed summary) can always be traced back to what
   // the model was actually sent.
-  const std::string body = boost::json::serialize(payload);
+  //
+  // The body must be valid UTF-8. Tool results, stored messages and instructions
+  // can all carry bytes from another encoding (a fetched page, a file read), and
+  // a strict JSON server rejects the whole request when they do. Sanitising the
+  // serialized body covers every source at once: structural JSON bytes are pure
+  // ASCII, so only the string payload can ever be touched.
+  const std::string body = sanitize_utf8(boost::json::serialize(payload));
   shark::log::info("request {}: {}", kind, body);
 
   // Publish the request's projected input cost at once, so the Tasks window

@@ -82,6 +82,7 @@ public:
   void cancel();
 
   void delete_message(std::uint32_t message_id);
+  void delete_message_only(std::uint32_t message_id);
   void edit_message(std::uint32_t message_id, std::string content);
 
   void set_on_changed(std::function<void()> handler) {

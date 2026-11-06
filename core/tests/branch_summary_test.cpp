@@ -176,6 +176,54 @@ void test_branch_and_cascade(const fs::path& path) {
   }
 }
 
+void test_remove_single_message(const fs::path& path) {
+  lnb::core::database db(path.string());
+  lnb::core::SessionManager sessions(db);
+
+  lnb::core::Session session;
+  session.title_ = "single";
+  const std::uint32_t session_id = sessions.create(session);
+  expect(session_id != 0, "create_session failed");
+
+  auto messages = sessions.get_messages(session_id);
+  expect(messages.has_value(), "get_messages failed");
+
+  if (!messages.has_value()) {
+    return;
+  }
+
+  const std::uint32_t first = messages->append(lnb::core::Role::User, "one");
+  const std::uint32_t second = messages->append(lnb::core::Role::Assistant, "two");
+  const std::uint32_t third = messages->append(lnb::core::Role::User, "three");
+
+  db.set_session_summary(session_id, "summary one", first);
+  db.set_session_summary(session_id, "summary two", second);
+
+  // Removing a single message must leave its neighbours in place.
+  expect(
+      sessions.remove_single_message(second),
+      "remove_single_message reports a removal"
+  );
+
+  const auto remaining = db.messages(session_id);
+  expect(remaining.size() == 2, "only the requested message is removed");
+  expect(
+      remaining.size() == 2 && remaining[0].id_ == first && remaining[1].id_ == third,
+      "the neighbouring messages survive in order"
+  );
+
+  // The version folded up to the removed message can no longer be rebuilt, so it
+  // is revoked and the older one becomes active again.
+  const auto summaries = db.summaries(session_id);
+  expect(summaries.size() == 1, "the summary built on the removed message is revoked");
+  expect(
+      summaries.size() == 1 && summaries[0].watermark_ == first,
+      "the older summary version remains"
+  );
+
+  expect(!sessions.remove_single_message(999999), "an unknown message id is refused");
+}
+
 } // namespace
 
 int main() {
@@ -185,6 +233,7 @@ int main() {
   fs::create_directories(base);
 
   test_branch_and_cascade(base / "branch.db");
+  test_remove_single_message(base / "single.db");
 
   fs::remove_all(base, error);
 

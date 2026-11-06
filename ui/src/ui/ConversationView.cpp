@@ -17,6 +17,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPlainTextEdit>
+#include <QPushButton>
 #include <QShowEvent>
 #include <QSizePolicy>
 #include <QStyle>
@@ -309,20 +310,29 @@ ConversationView::ConversationView(
   });
 
   transcript_->set_on_delete([this](std::uint32_t message_id) {
-    const QMessageBox::StandardButton answer = QMessageBox::warning(
-        this, trs("Delete Message"),
-        trs(
-            "Are you sure you want to delete this message? It and every message "
-            "after it will be removed. This cannot be undone."
-        ),
-        QMessageBox::Yes | QMessageBox::No, QMessageBox::No
+    QMessageBox dialog(
+        QMessageBox::Warning, trs("Delete Message"),
+        trs("Are you sure you want to delete this message?"), QMessageBox::NoButton,
+        this
     );
+    dialog.setInformativeText(trs(
+        "Delete This Message removes only it. Delete This and Following removes it "
+        "and every message after it. This cannot be undone."
+    ));
 
-    if (answer != QMessageBox::Yes) {
-      return;
+    QAbstractButton* only =
+        dialog.addButton(trs("Delete This Message"), QMessageBox::DestructiveRole);
+    QAbstractButton* following = dialog.addButton(
+        trs("Delete This and Following"), QMessageBox::DestructiveRole);
+    QPushButton* cancel = dialog.addButton(QMessageBox::Cancel);
+    dialog.setDefaultButton(cancel);
+    dialog.exec();
+
+    if (dialog.clickedButton() == only) {
+      controller_.delete_message_only(message_id);
+    } else if (dialog.clickedButton() == following) {
+      controller_.delete_message(message_id);
     }
-
-    controller_.delete_message(message_id);
   });
 
   transcript_->set_on_branch([this](std::uint32_t message_id) {

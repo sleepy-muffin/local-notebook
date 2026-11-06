@@ -266,6 +266,13 @@ void lnb::core::application::delete_message(std::uint32_t message_id) {
   }
 }
 
+void lnb::core::application::delete_message_only(std::uint32_t message_id) {
+  if (assistant_state_ != nullptr) {
+    (void) assistant_state_->lock()->sessions_.remove_single_message(message_id);
+    mark_assistant_summary_stale();
+  }
+}
+
 void lnb::core::application::edit_message(std::uint32_t message_id, std::string content) {
   if (assistant_state_ != nullptr) {
     assistant_state_->lock()->sessions_.update_message(message_id, content);

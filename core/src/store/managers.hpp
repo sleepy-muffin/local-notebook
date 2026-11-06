@@ -46,6 +46,11 @@ public:
   // is unknown.
   bool remove_message(std::uint32_t id);
 
+  // Deletes only the message, leaving its neighbours in place. Summary versions
+  // built on it are revoked, because they can no longer be reproduced. Returns
+  // false when the id is unknown.
+  bool remove_single_message(std::uint32_t id);
+
   void update_message(std::uint32_t id, const std::string& content);
   [[nodiscard]] database& database_for_update();
 

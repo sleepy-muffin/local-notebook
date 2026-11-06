@@ -57,6 +57,7 @@ add_library(${PROJECT_NAME}
         src/utils.cpp
 
         src/utils/context.cpp
+        src/utils/utf8.cpp
 
         src/store/database.cpp
         src/store/managers.cpp

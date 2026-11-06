@@ -156,6 +156,14 @@ void ConversationController::delete_message(std::uint32_t message_id) {
   }
 }
 
+void ConversationController::delete_message_only(std::uint32_t message_id) {
+  api_.delete_message_only(message_id);
+
+  if (on_changed_) {
+    on_changed_();
+  }
+}
+
 void ConversationController::edit_message(
     std::uint32_t message_id, std::string content
 ) {

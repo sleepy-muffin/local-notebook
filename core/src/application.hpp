@@ -82,6 +82,7 @@ public:
   void set_session_reasoning_effort(std::uint32_t session_id, std::string level);
   void append_message(std::uint32_t session_id, Role role, std::string content);
   void delete_message(std::uint32_t message_id);
+  void delete_message_only(std::uint32_t message_id);
   void edit_message(std::uint32_t message_id, std::string content);
   [[nodiscard]] std::size_t message_tokens(const Message &message) const;
   [[nodiscard]] std::string default_reasoning_effort() const;

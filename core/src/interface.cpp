@@ -100,6 +100,10 @@ void interface::delete_message(std::uint32_t message_id) {
   application_->delete_message(message_id);
 }
 
+void interface::delete_message_only(std::uint32_t message_id) {
+  application_->delete_message_only(message_id);
+}
+
 void interface::edit_message(std::uint32_t message_id, std::string content) {
   application_->edit_message(message_id, std::move(content));
 }

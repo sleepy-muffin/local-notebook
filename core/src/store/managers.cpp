@@ -95,6 +95,23 @@ bool SessionManager::remove_message(std::uint32_t id) {
   return true;
 }
 
+bool SessionManager::remove_single_message(std::uint32_t id) {
+  const auto session_id = db_.message_session(id);
+
+  if (!session_id.has_value()) {
+    return false;
+  }
+
+  if (!db_.remove_message(id)) {
+    return false;
+  }
+
+  // A summary folded across this message can no longer be rebuilt from the
+  // transcript, so the versions built on it are revoked as well.
+  db_.remove_summaries_from(*session_id, id);
+  return true;
+}
+
 std::uint32_t SessionManager::branch(
     std::uint32_t session_id, std::uint32_t message_id) {
   const auto source = db_.session(session_id);

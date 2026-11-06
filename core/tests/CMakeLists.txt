@@ -219,3 +219,22 @@ target_link_libraries(
 )
 
 add_test(NAME branch-summary COMMAND branch-summary-test)
+
+add_executable(
+  utf8-test
+  utf8_test.cpp
+)
+
+target_include_directories(
+  utf8-test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+target_link_libraries(
+  utf8-test
+  PRIVATE
+    local-notebook-core
+)
+
+add_test(NAME utf8 COMMAND utf8-test)
